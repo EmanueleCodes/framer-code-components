@@ -1,0 +1,28 @@
+{
+  "name": "react-three-fiber-bundle",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "React Three Fiber bundle for Framer - includes Canvas, useFrame, useThree, and extend",
+  "main": "index.js",
+  "scripts": {
+    "build": "rollup -c",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["react-three-fiber", "three.js", "framer", "bundle"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.23.3",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "rollup": "^4.12.0",
+    "@rollup/plugin-terser": "^0.4.4"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^8.15.19",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
