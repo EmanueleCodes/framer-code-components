@@ -1,31 +1,47 @@
-import resolve from '@rollup/plugin-node-resolve';
-import commonjs from '@rollup/plugin-commonjs';
-import babel from '@rollup/plugin-babel';
-import terser from '@rollup/plugin-terser';
+import resolve from "@rollup/plugin-node-resolve";
+import commonjs from "@rollup/plugin-commonjs";
+import { babel } from "@rollup/plugin-babel";
+import { terser } from "rollup-plugin-terser";
 
 export default {
-  input: 'src/index.js',
+  input: "src/index.js",
   output: {
-    file: 'dist/bundle.js',
-    format: 'es',
+    file: "dist/bundle.js",
+    format: "es",
     inlineDynamicImports: true,
   },
   plugins: [
     resolve({
-      dedupe: ['@react-three/fiber']
+      browser: true,
+      preferBuiltins: false,
+      mainFields: ["browser", "module", "main"],
+      extensions: [".js", ".jsx", ".ts", ".tsx", ".mjs"],
+      dedupe: ["three", "@react-three/fiber", "@react-three/drei"],
     }),
-    commonjs(),
+    commonjs({
+      include: /node_modules/,
+      transformMixedEsModules: true,
+    }),
     babel({
-      presets: ['@babel/preset-react'],
-      babelHelpers: 'bundled',
+      babelHelpers: "bundled",
+      presets: ["@babel/preset-react"],
+      exclude: "node_modules/**",
+      extensions: [".js", ".jsx", ".ts", ".tsx"],
     }),
-    terser(),
+    terser({
+      format: {
+        comments: false,
+      },
+      compress: {
+        drop_console: true,
+      },
+    }),
   ],
   external: [
-    'react',
-    'react-dom',
-    'react/jsx-runtime',
-    'framer-motion',
-    /^@framer\/.*/
+    "react",
+    "react-dom",
+    "react/jsx-runtime",
+    "framer-motion",
+    /^@framer\/.*/,
   ],
 }; 

@@ -1,5 +1,5 @@
 {
-  "name": "react-three-fiber-bundle",
+  "name": "3d-scan-complete-bundle",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -8,8 +8,9 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@react-three/fiber": "^8.15.16",
-    "three": "^0.174.0"
+    "three": "^0.174.0",
+    "@react-three/fiber": "^8.15.19",
+    "@react-three/drei": "^9.102.6"
   },
   "devDependencies": {
     "@babel/preset-react": "^7.27.1",

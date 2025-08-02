@@ -1,8 +1,5 @@
-// Import React Three Drei utilities
+// Import @react-three/drei functions
 import { useAspect, useTexture } from '@react-three/drei';
 
-// Export React Three Drei utilities
-export {
-  useAspect,
-  useTexture,
-}; 
+// Export the functions for use in Framer
+export { useAspect, useTexture }; 

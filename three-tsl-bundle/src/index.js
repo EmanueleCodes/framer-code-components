@@ -1,8 +1,4 @@
-// Import Three.js TSL (Three.js Shader Language) utilities
-import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
-import { pass } from 'three/tsl';
-
-// Import TSL functions
+// Import TSL shader functions
 import {
   abs,
   blendScreen,
@@ -23,13 +19,8 @@ import {
   vec3,
 } from 'three/tsl';
 
-// Export TSL utilities and functions
+// Export all TSL functions for use in Framer
 export {
-  // Bloom effects
-  bloom,
-  pass,
-  
-  // TSL functions
   abs,
   blendScreen,
   float,

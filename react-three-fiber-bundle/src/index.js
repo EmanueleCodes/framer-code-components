@@ -1,10 +1,5 @@
-// Import React Three Fiber components and hooks
+// Import @react-three/fiber functions
 import { useFrame, Canvas, useThree, extend } from '@react-three/fiber';
 
-// Export React Three Fiber components and hooks
-export {
-  useFrame,
-  Canvas,
-  useThree,
-  extend,
-}; 
+// Export the functions for use in Framer
+export { useFrame, Canvas, useThree, extend }; 

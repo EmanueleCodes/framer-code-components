@@ -1,16 +1,5 @@
-// Import Three.js WebGPU renderer and core functionality
-import * as THREE from 'three/webgpu';
+// Import THREE core library
+import * as THREE from 'three';
 
-// Export Three.js as namespace for easy access
-export { THREE };
-
-// Also export commonly used Three.js classes for convenience
-export const {
-  WebGPURenderer,
-  MeshBasicNodeMaterial,
-  PostProcessing,
-  Vector2,
-  Vector3,
-  SRGBColorSpace,
-  // Add other commonly used classes as needed
-} = THREE; 
+// Export THREE for use in Framer
+export { THREE }; 

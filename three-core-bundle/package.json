@@ -1,26 +1,21 @@
 {
   "name": "three-core-bundle",
   "version": "1.0.0",
-  "type": "module",
-  "description": "Three.js Core bundle for Framer - includes WebGPU renderer and core Three.js functionality",
   "main": "index.js",
   "scripts": {
-    "build": "rollup -c",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": ["three.js", "webgpu", "framer", "bundle"],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@babel/core": "^7.24.0",
-    "@babel/preset-react": "^7.23.3",
-    "@rollup/plugin-babel": "^6.0.4",
-    "@rollup/plugin-commonjs": "^25.0.7",
-    "@rollup/plugin-node-resolve": "^15.2.3",
-    "rollup": "^4.12.0",
-    "@rollup/plugin-terser": "^0.4.4"
+    "build": "rollup -c"
   },
   "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "three": "^0.174.0"
+  },
+  "devDependencies": {
+    "@babel/preset-react": "^7.27.1",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "rollup": "^2.79.2",
+    "rollup-plugin-terser": "^7.0.2"
   }
-}
+} 

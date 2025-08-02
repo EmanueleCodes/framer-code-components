@@ -1,5 +1,5 @@
 {
-  "name": "react-three-fiber-bundle",
+  "name": "three-examples-bundle",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -8,7 +8,6 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@react-three/fiber": "^8.15.16",
     "three": "^0.174.0"
   },
   "devDependencies": {
