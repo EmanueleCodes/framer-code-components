@@ -16,7 +16,7 @@ export default {
       preferBuiltins: false,
       mainFields: ["browser", "module", "main"],
       extensions: [".js", ".jsx", ".ts", ".tsx", ".mjs"],
-      dedupe: ["three", "@react-three/fiber", "@react-three/drei"],
+      dedupe: ["three"],
     }),
     commonjs({
       include: /node_modules/,
@@ -35,9 +35,6 @@ export default {
       compress: {
         drop_console: true,
       },
-      mangle: {
-        reserved: ['AdditiveBlending', 'CanvasTexture', 'Texture', 'TextureLoader', 'SRGBColorSpace', 'Vector2', 'MeshBasicMaterial', 'MeshBasicNodeMaterial', 'WebGPURenderer', 'ThreePostProcessing', 'useAspect', 'useTexture', 'useFrame', 'Canvas', 'useThree', 'extend', 'bloom', 'pass', 'abs', 'blendScreen', 'float', 'Fn', 'max', 'mod', 'mx_cell_noise_float', 'oneMinus', 'select', 'ShaderNode', 'smoothstep', 'sub', 'texture', 'uniform', 'uv', 'vec2', 'vec3']
-      },
     }),
   ],
   external: [
@@ -47,4 +44,4 @@ export default {
     "framer-motion",
     /^@framer\/.*/,
   ],
-}; 
+};
