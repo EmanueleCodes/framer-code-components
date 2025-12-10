@@ -357,6 +357,41 @@ useEffect(() => {
 - Use camelCase for file names
 - Be descriptive but concise
 
+## PROPERTIES.txt Documentation
+
+**Every code component must include a `PROPERTIES.txt` file in the same folder as the component.**
+
+This file documents all property controls in a user-friendly format, explaining what each control does and how it affects the component.
+
+### File Location
+```
+next-dev/app/component-name/
+  ├── component-name.tsx
+  └── PROPERTIES.txt
+```
+
+### Format
+The file should follow this structure:
+
+```
+ComponentName - Property Controls
+
+Property Title
+Description of what this property does and how it affects the component.
+
+Another Property
+Description of the second property.
+```
+
+### Example
+See `next-dev/app/sparkles/PROPERTIES.md` or `next-dev/app/broken-glass/PROPERTIES.txt` for a reference implementation.
+
+**Key Points:**
+- Use clear, concise descriptions
+- Explain the effect of each property on the component
+- List properties in the same order as they appear in the property controls
+- Use simple language that non-technical users can understand
+
 ## Code Organization
 
 ### 1. Order of Sections

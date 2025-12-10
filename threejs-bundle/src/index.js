@@ -1,16 +1,43 @@
-// Re-export a minimal, stable surface of Three.js for Framer
-export {
-  Scene,
-  PerspectiveCamera,
-  WebGLRenderer,
-  PlaneGeometry,
+import {
+  ClampToEdgeWrapping,
+  Color,
+  DataTexture,
+  LinearFilter,
+  MathUtils,
   Mesh,
+  OrthographicCamera,
+  PlaneGeometry,
+  RGBAFormat,
+  SRGBColorSpace,
+  Scene,
   ShaderMaterial,
+  Texture,
   TextureLoader,
   Vector2,
-  LinearFilter,
-  SRGBColorSpace,
+  Vector3,
+  Vector4,
+  WebGLRenderer,
+} from "three";
+
+export {
   ClampToEdgeWrapping,
-} from "three"
+  Color,
+  DataTexture,
+  LinearFilter,
+  MathUtils,
+  Mesh,
+  OrthographicCamera,
+  PlaneGeometry,
+  RGBAFormat,
+  SRGBColorSpace,
+  Scene,
+  ShaderMaterial,
+  Texture,
+  TextureLoader,
+  Vector2,
+  Vector3,
+  Vector4,
+  WebGLRenderer,
+};
 
 
