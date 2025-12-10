@@ -8,7 +8,7 @@ export default {
   output: {
     file: "dist/bundle.js",
     format: "es",
-    inlineDynamicImports: true
+    inlineDynamicImports: true,
   },
   plugins: [
     resolve({
@@ -16,21 +16,25 @@ export default {
       preferBuiltins: false,
       mainFields: ["browser", "module", "main"],
       extensions: [".js", ".jsx", ".ts", ".tsx", ".mjs"],
-      dedupe: ["three"]
+      dedupe: ["three"],
     }),
     commonjs({
       include: /node_modules/,
-      transformMixedEsModules: true
+      transformMixedEsModules: true,
     }),
     babel({
       babelHelpers: "bundled",
       presets: ["@babel/preset-react"],
       exclude: "node_modules/**",
-      extensions: [".js", ".jsx", ".ts", ".tsx"]
+      extensions: [".js", ".jsx", ".ts", ".tsx"],
     }),
     terser({
-      format: { comments: false },
-      compress: { drop_console: true }
+      format: {
+        comments: false,
+      },
+      compress: {
+        drop_console: true,
+      },
     }),
   ],
   external: [
@@ -38,7 +42,7 @@ export default {
     "react-dom",
     "react/jsx-runtime",
     "framer-motion",
-    /^@framer\/.*/
+    /^@framer\/.*/,
   ],
-
 };
+
