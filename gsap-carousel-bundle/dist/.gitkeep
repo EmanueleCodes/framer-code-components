@@ -1,2 +1,0 @@
-# This file ensures the dist directory is created
-# The bundle.js file will be generated here after running npm run build
