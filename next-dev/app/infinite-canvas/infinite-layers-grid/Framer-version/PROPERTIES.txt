@@ -1,0 +1,26 @@
+Infinite Canvas - Property Controls
+
+Enable Drag
+When enabled, allows users to drag the canvas to navigate. When disabled, the canvas can only be navigated using scroll.
+
+Drag Speed
+Controls how fast the canvas moves when dragging. Higher values make dragging more responsive. Lower values create smoother, slower movement. Only visible when Enable Drag is on.
+
+Scroll Speed
+Controls how fast the canvas moves when scrolling with the mouse wheel or trackpad. Higher values create faster scrolling. Lower values create slower, more controlled scrolling.
+
+Snappy
+Controls the smoothness of movement animations. Lower values create smoother, more fluid motion. Higher values create snappier, more immediate movement.
+
+Parallax
+A group of settings that control the parallax effect, which creates depth by moving elements at different speeds based on their position and mouse movement.
+
+Enabled
+Turns the parallax effect on or off. When enabled, elements move at different speeds to create a sense of depth.
+
+General
+Controls the overall intensity of the parallax effect on all elements. Higher values create more pronounced depth and movement. Lower values create subtle depth effects.
+
+Child
+Controls the parallax effect intensity on inner elements when they are hovered or active. Higher values create more dramatic movement of child elements. Lower values create subtle inner element movement.
+

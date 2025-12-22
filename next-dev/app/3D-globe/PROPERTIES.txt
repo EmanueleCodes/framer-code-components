@@ -1,0 +1,65 @@
+3D Globe - Property Controls
+
+Preview
+When enabled, shows the globe animation in the Framer canvas. When disabled, displays a static globe without rotation.
+
+Rotation
+Controls the direction of auto-rotation. "Clockwise" rotates the globe to the right. "Anticlockwise" rotates the globe to the left.
+
+Speed
+Controls the auto-rotation speed. Higher values create faster rotation. Set to 0 to disable auto-rotation.
+
+Smoothing
+Controls the smoothness of rotation transitions and drag interactions. Higher values create smoother, more fluid motion with momentum. Lower values create more direct, immediate rotation.
+
+Drag Speed
+Controls the sensitivity of drag interactions. Higher values make the globe more responsive to mouse movements. Lower values require more movement to rotate the globe.
+
+Scale
+Controls the globe size and zoom level. Higher values create a larger, more zoomed-in globe. Lower values create a smaller, more zoomed-out view.
+
+On Hover
+Controls whether the globe pauses rotation when hovering over it. "Stop" pauses rotation on hover. "Rotate" continues rotation even when hovering.
+
+Latitude
+Controls the starting latitude position of the globe. Values range from -90 (South Pole) to 90 (North Pole). This determines the initial vertical rotation of the globe.
+
+Longitude
+Controls the starting longitude position of the globe. Values range from -180 to 180. This determines the initial horizontal rotation of the globe.
+
+Density
+Controls the density of land dots displayed on the globe. Higher values create more dots, showing more detailed land coverage. Lower values create fewer dots for a sparser appearance.
+
+Detail
+Controls the level of detail for continent outlines. Higher values show more detailed, smoother outlines with more points. Lower values show simplified outlines with fewer points for better performance.
+
+Dot Size
+Controls the size of land dots displayed on the globe. Higher values create larger, more visible dots. Lower values create smaller, more subtle dots.
+
+Markers - Markers
+An array of location markers to display on the globe. Each marker has a latitude and longitude coordinate. Click the "+" button to add new markers.
+
+Markers - Color
+Controls the color of all markers on the globe.
+
+Markers - Size
+Controls the size of all markers on the globe. Higher values create larger markers. Lower values create smaller markers.
+
+Dots
+Controls the color of land dots displayed on the globe.
+
+Outline
+Controls the color of continent outlines. Leave empty to hide outlines.
+
+Width (under Outline)
+Controls the thickness of continent outlines. Only visible when Outline color is set.
+
+Grid
+Controls the color of latitude and longitude grid lines. Leave empty to hide the grid.
+
+Width (under Grid)
+Controls the thickness of grid lines. Only visible when Grid color is set.
+
+Ocean
+Controls the color of the ocean/background sphere. Leave empty for a transparent background.
+
