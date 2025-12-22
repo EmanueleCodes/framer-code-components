@@ -325,6 +325,7 @@ export default function Globe({
     // Ref to store animation frame ID for preview effect to restart animation
     const animationFrameRef = useRef<number | null>(null)
     const animateFnRef = useRef<(() => void) | null>(null)
+    const startAnimationRef = useRef<(() => void) | null>(null)
     
     // Update previewRef ONLY when in canvas mode
     // Use a stable value when not in canvas to prevent React from tracking preview changes
@@ -959,13 +960,37 @@ export default function Globe({
         let isHovering = false
         let lastMouseX = 0
         let lastMouseY = 0
+        let lastDragTime = 0 // Timestamp for time-normalized velocity capture
         let animationFrameId: number | null = null
         
-        // Frame rate limiting: cap at 60 FPS (16.67ms per frame)
-        // Only prevents renders that are too fast, doesn't skip when browser is slow
-        const targetFPS = 60
-        const frameInterval = 1000 / targetFPS // 16.67ms
-        let lastRenderTime = 0 // Start at 0 so first frame always renders
+        // Delta time tracking for frame-rate independent animation
+        // All time-based calculations use deltaTime to ensure consistent behavior
+        // regardless of display refresh rate (60Hz, 120Hz, etc.)
+        let lastFrameTime = performance.now()
+        const targetDeltaTime = 1000 / 60 // Reference delta time (60 FPS = 16.67ms)
+        
+        // FPS counter tracking
+        let fpsFrameCount = 0
+        let fpsLastUpdate = performance.now()
+        const fpsUpdateInterval = 500 // Update FPS display every 500ms
+        let currentFPS = 0
+        
+        // Create FPS counter UI element
+        const fpsPanel = document.createElement("div")
+        fpsPanel.style.position = "absolute"
+        fpsPanel.style.top = "12px"
+        fpsPanel.style.right = "12px"
+        fpsPanel.style.backgroundColor = "rgba(0, 0, 0, 0.75)"
+        fpsPanel.style.color = "#ffffff"
+        fpsPanel.style.fontFamily = "Monaco, 'Courier New', monospace"
+        fpsPanel.style.fontSize = "12px"
+        fpsPanel.style.padding = "6px 10px"
+        fpsPanel.style.borderRadius = "4px"
+        fpsPanel.style.pointerEvents = "none"
+        fpsPanel.style.zIndex = "1000"
+        fpsPanel.style.userSelect = "none"
+        fpsPanel.textContent = "FPS: --"
+        container.appendChild(fpsPanel)
 
         // Lerp factor: smoothing 0 = instant (factor=1), smoothing 1 = very smooth (factor=0.03)
         const lerpFactor =
@@ -1003,36 +1028,57 @@ export default function Globe({
             animateCore()
         }
 
-        // Core animation logic
+        // Core animation logic - uses delta time for frame-rate independent animation
         const animateCore = () => {
             const now = performance.now()
+            
+            // Calculate delta time and normalize it relative to 60 FPS
+            // deltaFactor = 1.0 at 60 FPS, 0.5 at 120 FPS, 2.0 at 30 FPS
+            const deltaTime = now - lastFrameTime
+            lastFrameTime = now
+            const deltaFactor = deltaTime / targetDeltaTime
+            
+            // FPS counter: increment frame count and update display periodically
+            fpsFrameCount++
+            const timeSinceLastFpsUpdate = now - fpsLastUpdate
+            if (timeSinceLastFpsUpdate >= fpsUpdateInterval) {
+                currentFPS = Math.round((fpsFrameCount * 1000) / timeSinceLastFpsUpdate)
+                fpsFrameCount = 0
+                fpsLastUpdate = now
+                fpsPanel.textContent = `FPS: ${currentFPS}`
+            }
             
             let needsRender = false
             const threshold = 0.01
 
             // Auto-rotation: add to target when not dragging and not hovering
+            // Multiply by deltaFactor for frame-rate independent speed
             if (
                 !isDragging &&
                 rotationSpeed !== 0 &&
                 (!stopOnHover || !isHovering)
             ) {
-                targetRotation.x += rotationSpeed * 0.01
+                targetRotation.x += rotationSpeed * 0.01 * deltaFactor
             }
 
             // Apply throw velocity when not dragging
+            // Velocity and decay are also time-scaled
             if (!isDragging && smoothing > 0) {
                 if (
                     Math.abs(velocity.x) > threshold ||
                     Math.abs(velocity.y) > threshold
                 ) {
-                    targetRotation.x += velocity.x
-                    targetRotation.y += velocity.y
+                    targetRotation.x += velocity.x * deltaFactor
+                    targetRotation.y += velocity.y * deltaFactor
                     targetRotation.y = Math.max(
                         -Math.PI / 2,
                         Math.min(Math.PI / 2, targetRotation.y)
                     )
-                    velocity.x *= velocityDecay
-                    velocity.y *= velocityDecay
+                    // Time-based decay: use pow to make decay frame-rate independent
+                    // decay^deltaFactor ensures same decay over same real time
+                    const decayFactor = Math.pow(velocityDecay, deltaFactor)
+                    velocity.x *= decayFactor
+                    velocity.y *= decayFactor
                 } else {
                     velocity.x = 0
                     velocity.y = 0
@@ -1040,6 +1086,7 @@ export default function Globe({
             }
 
             // Lerp current rotation toward target
+            // Time-based lerp: use 1 - (1 - factor)^deltaFactor for smooth interpolation
             const dx = targetRotation.x - rotation.x
             const dy = targetRotation.y - rotation.y
 
@@ -1049,8 +1096,10 @@ export default function Globe({
                 rotationSpeed !== 0 ||
                 isDragging
             ) {
-                rotation.x += dx * lerpFactor
-                rotation.y += dy * lerpFactor
+                // Frame-rate independent lerp
+                const timeLerpFactor = 1 - Math.pow(1 - lerpFactor, deltaFactor)
+                rotation.x += dx * timeLerpFactor
+                rotation.y += dy * timeLerpFactor
                 rotation.y = Math.max(
                     -Math.PI / 2,
                     Math.min(Math.PI / 2, rotation.y)
@@ -1058,20 +1107,14 @@ export default function Globe({
                 needsRender = true
             }
 
-            // Frame rate limiting: only prevent renders that are too fast (60 FPS cap)
-            // Always render when browser is slow - limiter only caps maximum rate
-            const timeSinceLastRender = now - lastRenderTime
-            const shouldRender = timeSinceLastRender >= frameInterval || lastRenderTime === 0
-
-            // Render if enough time has passed (60 FPS cap) and there's something to render
-            // If browser is slow, we still render every frame it gives us
-            if (shouldRender && (needsRender || rotationSpeed !== 0 || isDragging)) {
+            // Render every frame - no frame limiting needed with delta time
+            // The animation is now smooth at any refresh rate
+            if (needsRender || rotationSpeed !== 0 || isDragging) {
                 // Apply rotation: y-axis for horizontal rotation, x-axis for vertical rotation
                 globeGroup.rotation.y = rotation.x
                 globeGroup.rotation.x = rotation.y
 
                 renderer.render(scene, camera)
-                lastRenderTime = now
             }
 
             // Continue loop if animation is needed
@@ -1095,13 +1138,18 @@ export default function Globe({
         // Store animate function in ref for preview effect to use
         animateFnRef.current = animate
 
-        // Start animation loop
+        // Start animation loop - resets lastFrameTime to prevent delta jump
         const startAnimation = () => {
             if (animationFrameId === null) {
+                // Reset frame time to prevent huge delta after pause
+                lastFrameTime = performance.now()
                 animationFrameId = requestAnimationFrame(animate)
                 animationFrameRef.current = animationFrameId
             }
         }
+        
+        // Store startAnimation in ref for preview effect to use
+        startAnimationRef.current = startAnimation
 
         // Initial start if auto-rotation is enabled
         if (rotationSpeed !== 0) {
@@ -1116,9 +1164,13 @@ export default function Globe({
             velocity.y = 0
             lastMouseX = event.clientX
             lastMouseY = event.clientY
+            lastDragTime = performance.now() // Initialize drag timestamp
             startAnimation()
 
             const handleMouseMove = (moveEvent: MouseEvent) => {
+                const currentTime = performance.now()
+                const timeSinceLastMove = currentTime - lastDragTime
+                
                 // Use proper spherical coordinate rotation
                 // Horizontal drag rotates around Y-axis (longitude)
                 // Vertical drag rotates around X-axis (latitude)
@@ -1138,12 +1190,19 @@ export default function Globe({
                     Math.min(Math.PI / 2, targetRotation.y)
                 )
 
-                // Track velocity for throw (in radians per frame)
-                velocity.x = dx * sensitivity * 0.3
-                velocity.y = dy * sensitivity * 0.3
+                // Track velocity for throw - TIME NORMALIZED
+                // Normalize velocity to "radians per reference frame (16.67ms)"
+                // This ensures consistent throw behavior regardless of frame rate
+                if (timeSinceLastMove > 0) {
+                    // Scale velocity to what it would be at 60 FPS (16.67ms per frame)
+                    const timeNormalization = targetDeltaTime / timeSinceLastMove
+                    velocity.x = dx * sensitivity * 0.3 * timeNormalization
+                    velocity.y = dy * sensitivity * 0.3 * timeNormalization
+                }
 
                 lastMouseX = moveEvent.clientX
                 lastMouseY = moveEvent.clientY
+                lastDragTime = currentTime
             }
 
             const handleMouseUp = () => {
@@ -1219,6 +1278,10 @@ export default function Globe({
             resizeObserver.disconnect()
             renderer.dispose()
             container.removeChild(canvas)
+            // Remove FPS panel
+            if (fpsPanel.parentNode) {
+                fpsPanel.parentNode.removeChild(fpsPanel)
+            }
         }
     }, [
         // Note: preview is intentionally NOT in dependencies to prevent re-initialization
@@ -1260,8 +1323,9 @@ export default function Globe({
         if (!isCanvas) return
 
         // Canvas mode only: If preview turned ON and animation is stopped, restart it
-        if (preview && animateFnRef.current && animationFrameRef.current === null) {
-            animationFrameRef.current = requestAnimationFrame(animateFnRef.current)
+        // Use startAnimationRef to properly reset frame time and prevent delta jump
+        if (preview && startAnimationRef.current && animationFrameRef.current === null) {
+            startAnimationRef.current()
         }
     }, [previewForAnimation, isCanvas])
 

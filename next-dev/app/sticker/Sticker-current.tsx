@@ -616,19 +616,10 @@ export default function Sticker({
         meshRef.current = mesh
         scene.add(group)
 
-        // Don't rotate the group - we'll rotate the bone chain via the root bone
+        // Apply curl direction rotation (Z axis rotates the curl direction)
         group.rotation.x = 0
         group.rotation.y = 0
-        group.rotation.z = 0
-        
-        // Rotate the root bone to orient the bone chain (this rotates the curl direction)
-        // The mesh position stays fixed because bones are relative to the mesh
-        if (bones.length > 0) {
-            bones[0].rotation.z = curlRotation * (Math.PI / 180)
-        }
-        
-        // Counter-rotate the mesh to keep the image texture fixed
-        mesh.rotation.z = -curlRotation * (Math.PI / 180)
+        group.rotation.z = curlRotation * (Math.PI / 180)
 
         // Add lighting if shadows are enabled
         if (enableShadows) {
@@ -971,18 +962,10 @@ export default function Sticker({
 
             group.add(mesh)
 
-            // Don't rotate the group - we'll rotate the bone chain via the root bone
+            // Apply curl direction rotation (Z axis rotates the curl direction)
             group.rotation.x = 0
             group.rotation.y = 0
-            group.rotation.z = 0
-            
-            // Rotate the root bone to orient the bone chain (this rotates the curl direction)
-            if (bones.length > 0) {
-                bones[0].rotation.z = curlRotation * (Math.PI / 180)
-            }
-            
-            // Counter-rotate the mesh to keep the image texture fixed
-            mesh.rotation.z = -curlRotation * (Math.PI / 180)
+            group.rotation.z = curlRotation * (Math.PI / 180)
 
             meshRef.current = mesh
 
@@ -1140,21 +1123,14 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Update bones after mesh is recreated
+                // Update bones and rotation after mesh is recreated
                 setTimeout(() => {
                     if (meshRef.current && groupRef.current) {
-                        // Don't rotate the group - we'll rotate the bone chain via the root bone
+                        // Apply curl direction rotation
                         groupRef.current.rotation.x = 0
                         groupRef.current.rotation.y = 0
-                        groupRef.current.rotation.z = 0
-                        
-                        // Rotate the root bone to orient the bone chain (this rotates the curl direction)
-                        if (bonesRef.current.length > 0) {
-                            bonesRef.current[0].rotation.z = curlRotation * (Math.PI / 180)
-                        }
-                        
-                        // Counter-rotate the mesh to keep the image texture fixed
-                        meshRef.current.rotation.z = -curlRotation * (Math.PI / 180)
+                        groupRef.current.rotation.z =
+                            curlRotation * (Math.PI / 180)
 
                         if (bonesRef.current.length > 0) {
                             updateBones()
@@ -1331,16 +1307,10 @@ export default function Sticker({
 
                 if (t < curlStart || t >= curlEnd) {
                     // Flat sections: no rotation
-                    bone.rotation.x = 0
                     bone.rotation.y = 0
-                    bone.rotation.z = 0
                 } else {
                     // Curved section: uniform rotation per bone = perfect circle
-                    // The bone chain is already rotated by curlRotation via the group,
-                    // so we just need to rotate around Y axis (which is now oriented correctly)
-                    bone.rotation.x = 0
                     bone.rotation.y = -perBoneRotation
-                    bone.rotation.z = 0
                 }
             }
         } else {
@@ -1414,9 +1384,7 @@ export default function Sticker({
 
                 if (t < curlStart) {
                     // Flat section: no rotation
-                    bone.rotation.x = 0
                     bone.rotation.y = 0
-                    bone.rotation.z = 0
                 } else {
                     // Find which semicircle this bone belongs to
                     let found = false
@@ -1430,15 +1398,10 @@ export default function Sticker({
                             // Rotation = cumulative rotation from previous semicircles + progress through current one
                             const rotationInSemicircle =
                                 localT * semicircle.rotationAmount
-                            const totalRotation =
+                            bone.rotation.y = -(
                                 semicircle.cumulativeRotationStart +
                                 rotationInSemicircle
-                            
-                            // The bone chain is already rotated by curlRotation via the group,
-                            // so we just need to rotate around Y axis (which is now oriented correctly)
-                            bone.rotation.x = 0
-                            bone.rotation.y = -totalRotation
-                            bone.rotation.z = 0
+                            )
                             found = true
                             break
                         }
@@ -1448,12 +1411,10 @@ export default function Sticker({
                         // Past all semicircles: use final cumulative rotation
                         const lastSemicircle =
                             semicircleData[semicircleData.length - 1]
-                        const totalRotation =
+                        bone.rotation.y = -(
                             lastSemicircle.cumulativeRotationStart +
                             lastSemicircle.rotationAmount
-                        bone.rotation.x = 0
-                        bone.rotation.y = -totalRotation
-                        bone.rotation.z = 0
+                        )
                     }
                 }
             }
@@ -1464,7 +1425,7 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [curlStart, curlMode, renderFrame, curlAmount, curlRotation])
+    }, [curlStart, curlMode, renderFrame, curlAmount])
 
     // ========================================================================
     // HOVER ANIMATION WITH GSAP
@@ -1757,20 +1718,12 @@ export default function Sticker({
         updateBones()
     }, [curlStart, curlMode, updateBones])
 
-    // Update curl direction when curlRotation changes
+    // Update curl direction rotation when curlRotation changes
     useEffect(() => {
-        if (!meshRef.current || !bonesRef.current.length) return
-        
-        // Rotate the root bone to orient the bone chain (this rotates the curl direction)
-        // The mesh position stays fixed because bones are relative to the mesh
-        bonesRef.current[0].rotation.z = curlRotation * (Math.PI / 180)
-        
-        // Counter-rotate the mesh to keep the image texture fixed
-        meshRef.current.rotation.z = -curlRotation * (Math.PI / 180)
-        
-        updateBones()
+        if (!groupRef.current) return
+        groupRef.current.rotation.z = curlRotation * (Math.PI / 180)
         renderFrame()
-    }, [curlRotation, updateBones, renderFrame])
+    }, [curlRotation, renderFrame])
 
     // Update back color - recreate back texture when backColor changes
     useEffect(() => {
