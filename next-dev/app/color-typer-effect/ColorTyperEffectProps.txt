@@ -1,0 +1,51 @@
+Color Typer - Property Controls
+
+Mode
+Animation trigger mode:
+- Appear: Animation plays automatically when component loads
+- Layer in View: Animation triggers when the component enters the viewport
+- Toggle: Animation controlled by the Enabled property
+
+Enabled
+Enable or disable the animation. Only visible when Mode is set to "Toggle".
+
+Start At
+Alignment point for triggering the animation in "Layer in View" mode. Determines when the component is considered "in view" (Top, Center, or Bottom).
+
+Replay
+When enabled, the animation will replay when scrolling back into view. Only visible when Mode is set to "Layer in View".
+
+Text
+The text content to animate. Each word or character will animate based on the Split Per setting.
+
+Color 1
+The initial color that appears when each element animates in (appear color).
+
+Color 2
+The final color that each element transitions to after the appear color (final color).
+
+Font
+Font settings including size, weight, family, and other typography properties.
+
+Tag
+HTML tag to use for the text element (h1, h2, h3, h4, h5, h6, p, div, or span).
+
+Split Per
+How to split the text for animation:
+- Words: Each word animates individually
+- Characters: Each character animates individually
+
+Direction
+Animation direction:
+- Left to Right: Animation progresses from left to right
+- Right to Left: Animation progresses from right to left
+
+Delay
+Initial delay before the animation starts (in seconds).
+
+Color Time
+Delay between when an element appears and when it transitions to the final color (in seconds).
+
+Stagger
+Delay between each element's animation start (in seconds). Creates a cascading effect.
+

@@ -1,0 +1,59 @@
+**PROPERTY CONTROLS**
+
+**Preview**
+Toggle animations on or off. When enabled, the laser will animate; when disabled, it shows a still frame.
+
+**Fade In**
+Controls how long it takes (in seconds) for the laser to fully appear when the component loads. Set to 0 for instant appearance.
+
+**Color**
+Sets the color of the laser beam. You can use hex colors (like #FF79C6), RGB/RGBA values, or Framer's color tokens.
+
+**Background**
+Adds a color behind the laser. Leave this empty for a transparent background, or choose a color to fill the area behind the beam.
+
+**Beam X**
+Moves the laser horizontally (left or right) within the component.
+
+**Beam Y**
+Moves the laser vertically (up or down) within the component.
+
+**Height**
+Controls the vertical size of the laser - make it taller or shorter.
+
+**Width**
+Controls the horizontal size of the laser - make it wider or narrower.
+
+**Dynamics**
+Controls the movement and flow characteristics of the laser.
+
+  **Speed**
+  How fast the light travels upward along the beam.
+
+  **Strength**
+  Controls how much the light intensity varies along the beam - higher values create more dramatic variations.
+
+**Fog**
+Adds a smoky, atmospheric effect around the laser.
+
+  **Intensity**
+  How bright and visible the fog appears. Higher values make the fog more prominent.
+
+  **Scale**
+  Controls the size of the fog patterns. Smaller values create finer details, larger values create broader patterns.
+
+  **Fall**
+  How fast the fog moves downward, creating a sense of gravity or wind.
+
+**Wisps**
+Adds glowing particles that move along the laser beam.
+
+  **Density**
+  Controls how many particles appear along the beam. 0 = none, 2 = maximum density.
+
+  **Speed**
+  How fast the particles move upward along the laser.
+
+  **Intensity**
+  Controls how bright the particles are. Higher values make them shine brighter.
+

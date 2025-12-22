@@ -1,0 +1,40 @@
+Text Wall - Property Controls
+
+Preview
+Toggle animation on/off in the Framer canvas. Turn on to see the animation effect while editing.
+
+Loop
+When enabled, the animation continuously cycles - revealing, holding, hiding, and regenerating new random layouts.
+
+Words
+Array of words that will be randomly positioned across the text wall. These words appear scattered among random characters, creating a hacker-terminal aesthetic.
+
+Empty
+Percentage (0-50%) of lines with no words at the top and bottom of the text wall. Controls the vertical distribution of words.
+
+Text Color
+Color of the random characters that fill the space between words.
+
+Words
+Color of the highlighted words that appear in the text wall.
+
+Background
+Background color of the component. Optional - defaults to transparent.
+
+Font
+Font settings including size, family, letter spacing, and other typography properties.
+
+Line Gap
+Vertical spacing between lines in pixels.
+
+Padding
+Padding around the component. Can be set as a single value or individual values for each side.
+
+Duration
+How long the reveal animation takes for each line (in seconds).
+
+Stagger
+Delay between each line's animation start (in seconds). Creates a cascading reveal effect.
+
+Pause
+Time to pause between animation cycles when looping (in seconds).

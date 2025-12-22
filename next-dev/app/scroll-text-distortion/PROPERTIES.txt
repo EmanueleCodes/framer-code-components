@@ -1,0 +1,20 @@
+Scroll Text Distortion - Property Controls
+
+Preview
+When enabled, shows a continuous animation preview in the Framer canvas. When disabled, the text displays without distortion.
+
+Text
+The text content to display with the scroll distortion effect.
+
+Font
+Controls the typography settings for the text, including font family, size, weight, and other text styling options.
+
+Sensitivity
+Controls how sensitive the distortion effect is to scroll movement. Higher values make the effect respond to smaller scroll movements, creating more pronounced distortion. Lower values require more scrolling to trigger the effect.
+
+Effect
+Selects the type of distortion effect to apply. Options include Liquid (organic, flowing distortion), Wave (horizontal wave motion), Prism (RGB channel separation), Ripple (circular ripple effect), and Shake (random shaking motion).
+
+Color
+Sets the color of the text. The distortion effect will be applied to text in this color.
+

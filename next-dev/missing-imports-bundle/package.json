@@ -1,0 +1,31 @@
+{
+  "name": "missing-imports-bundle",
+  "version": "1.0.0",
+  "description": "Bundle for missing TSL functions",
+  "main": "dist/bundle.js",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "dependencies": {
+    "@types/three": "^0.178.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@babel/preset-react": "^7.27.1",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "rollup": "^2.79.2",
+    "rollup-plugin-terser": "^7.0.2"
+  },
+  "keywords": [
+    "three.js",
+    "tsl",
+    "shaders",
+    "framer"
+  ],
+  "author": "Emanuele Burratti",
+  "license": "MIT"
+}

@@ -1,0 +1,32 @@
+Blob Image Reveal - Property Controls
+
+Preview
+When enabled, shows the blob reveal animation in the Framer canvas. When disabled, displays the fully revealed image without animation.
+
+Image
+The image to reveal using the organic blob effect. Click to select an image from your assets or upload a new one.
+
+Blob Count
+Controls how many blob shapes appear during the reveal animation. Higher values create more complex, multi-blob reveals. Lower values create simpler, single-blob reveals.
+
+Radius
+Sets the border radius of the component container, measured in pixels. Use this to round the corners of the image container.
+
+Animation
+A group of settings that control when and how the reveal animation plays.
+
+Trigger
+Controls when the animation starts. "Appear" mode triggers the animation immediately when the component loads. "Layer in View" mode triggers the animation when the component enters the viewport.
+
+Start At
+Controls which part of the element triggers the animation when using "Layer in View" mode. "Top" starts when the top of the element reaches the bottom of the viewport. "Center" starts when the center of the element reaches the bottom of the viewport. "Bottom" starts when the bottom of the element reaches the bottom of the viewport. Only visible when Trigger is set to "Layer in View".
+
+Duration
+Controls how long the reveal animation takes to complete, measured in seconds. Higher values create slower, more gradual reveals. Lower values create faster, snappier reveals.
+
+Delay
+Adds a delay before the animation starts when using "Appear" mode, measured in seconds. Only visible when Trigger is set to "Appear".
+
+Replay
+When enabled, the animation will reset and replay when the element goes completely out of view and comes back into view. When disabled, the animation plays once and stays revealed. Only visible when Trigger is set to "Layer in View".
+

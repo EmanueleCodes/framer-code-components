@@ -1,0 +1,47 @@
+**PROPERTY CONTROLS**
+
+**Preview**
+Toggle animations on or off. When enabled, the lines will animate; when disabled, they show a still frame.
+
+**Speed**
+Controls how fast the animated lines move. Higher values create faster motion.
+
+**Band Width**
+Controls the thickness of each vertical band. Higher values make the bands wider, lower values make them thinner.
+
+**Flow**
+Controls the direction of the animation.
+
+  **In → Out**: Lines flow from the center outward
+
+  **Out → In**: Lines flow from the edges inward
+
+**Color Mode**
+Choose between a single color or a spectrum of colors.
+
+  **Single Color**: All lines use one color
+
+  **Spectrum**: Lines use a combination of three colors
+
+**Color**
+The main color used when Color Mode is set to Single Color. Only visible when Single Color mode is selected.
+
+**Color 1**
+First color in the spectrum. Only visible when Spectrum mode is selected.
+
+**Color 2**
+Second color in the spectrum. Only visible when Spectrum mode is selected.
+
+**Color 3**
+Third color in the spectrum. Only visible when Spectrum mode is selected.
+
+**Background**
+Sets the background color behind the lines. Note: Transparent backgrounds only work when Blend Mode is set to Alpha.
+
+**Blend Mode**
+Controls how the lines mix with the background.
+
+  **Alpha**: Clean transparency with proper opacity blending
+
+  **Additive**: Rainbow effect that adds light on top of the background
+

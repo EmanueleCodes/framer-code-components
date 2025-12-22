@@ -1,0 +1,17 @@
+Broken Glass - Property Controls
+
+Preview
+When enabled, shows the broken glass effect in the Framer canvas. When disabled, displays the plain image without the effect.
+
+Image
+The image to apply the broken glass effect to. Click to select an image from your assets or upload a new one.
+
+Break
+Controls how the glass breaking behavior works. When set to "Toggle", you can click to break the glass and click again to restore it. When set to "Once", the glass can only be broken once and stays broken permanently.
+
+Distance
+Controls the intensity of the glass shard displacement effect. Higher values create more dramatic separation between glass fragments. Lower values create a more subtle effect.
+
+Edge
+Controls the thickness of the crack lines and glass fragment edges. Higher values create thicker, more visible cracks. Lower values create thinner, more delicate fracture lines.
+

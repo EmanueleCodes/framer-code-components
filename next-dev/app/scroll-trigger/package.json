@@ -1,0 +1,23 @@
+{
+  "name": "scroll-trigger-component",
+  "version": "1.0.0",
+  "description": "A Framer code component that uses GSAP ScrollTrigger for scroll-based animations",
+  "main": "component.tsx",
+  "dependencies": {
+    "gsap": "^3.12.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "framer": "^2.0.0"
+  },
+  "keywords": [
+    "framer",
+    "gsap",
+    "scrolltrigger",
+    "animation",
+    "scroll",
+    "component"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

@@ -1,0 +1,40 @@
+$fontSize: 3vw;
+$height: 18vw;
+
+// @keyframes rotate-loop {
+//   0% {
+//     transform: rotate(0deg);
+//   }
+//   100% {
+//     transform: rotate(360deg);
+//   }
+// }
+
+.text {
+  transition: transform 1.2s var(--ease-out-bounce) 0.1s;
+  width: 100%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 100%;
+  transform: translate(-50%, -50%) scale(0.2);
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+
+  .is-visible & {
+    transform: translate(-50%, -50%);
+  }
+}
+
+.text__words {
+  font-size: $fontSize;
+  text-align: center;
+  width: 100%;
+
+  @include respond-to(smartphone) {
+    font-size: 28px;
+  }
+}

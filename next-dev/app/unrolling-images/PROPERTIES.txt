@@ -1,0 +1,32 @@
+Unrolling Image - Property Controls
+
+Preview
+When enabled, shows the unrolling animation in the Framer canvas. When disabled, displays the fully unrolled image without animation.
+
+Image
+The image to apply the unrolling effect to. Click to select an image from your assets or upload a new one.
+
+Angle
+Controls the angle at which the image unrolls. Higher values create a more diagonal unroll effect. Lower values create a more horizontal unroll.
+
+Rolls
+Controls the number of complete rolls in the paper effect. Higher values create more tightly wound rolls with more spiral turns. Lower values create looser, fewer rolls.
+
+Roll Radius
+Controls the size of the roll radius. Higher values create thicker, more pronounced rolls. Lower values create thinner, more subtle rolls.
+
+Animation - Trigger
+Controls when the animation starts. "Appear" triggers the animation when the component first appears on screen. "Layer in View" triggers the animation when the component enters the viewport during scroll.
+
+Animation - Start At
+Controls the alignment point for scroll-based triggers. Determines which part of the component (top, center, or bottom) must enter the viewport to start the animation. Only visible when Trigger is set to "Layer in View".
+
+Animation - Duration
+Controls how long the unrolling animation takes to complete. Higher values create slower, more dramatic unrolls. Lower values create faster, snappier animations.
+
+Animation - Delay
+Controls the delay before the animation starts. Only visible when Trigger is set to "Appear".
+
+Animation - Replay
+When enabled, the animation will replay when scrolling back into view. When disabled, the animation plays only once. Only visible when Trigger is set to "Layer in View".
+
