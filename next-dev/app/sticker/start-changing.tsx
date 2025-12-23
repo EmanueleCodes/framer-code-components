@@ -104,8 +104,8 @@ const CAMERA_FAR = 2000
 // Sticker geometry - same as Reference for smoothness
 const STICKER_DEPTH = 0.003
 
-// Canvas overscan - much larger for curl to extend beyond bounds
-const CANVAS_SCALE = 2.5 // Large transparent space around sticker
+// Canvas scale - small padding for shadows while staying responsive
+const CANVAS_SCALE = 1.2 // 20% extra space for shadows
 
 // 2D Bone Grid settings
 const BONE_GRID_X =60 // Performance-safe bone count for hardware skinning
@@ -329,6 +329,7 @@ export default function Sticker({
     const internalRadiusRef = useRef(mapInteralRadiusToUIValue(curlRadius))
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
+    const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
@@ -429,13 +430,20 @@ export default function Sticker({
     // ========================================================================
 
     const setupScene = useCallback(() => {
-        if (!canvasRef.current || !containerRef.current) return null
+        if (!canvasRef.current || !containerRef.current) {
+            return null
+        }
 
         const container = containerRef.current
         const containerWidth =
             container.clientWidth || container.offsetWidth || 1
         const containerHeight =
             container.clientHeight || container.offsetHeight || 1
+        
+        // Ensure we have valid dimensions (at least 1px)
+        if (containerWidth <= 0 || containerHeight <= 0) {
+            return null
+        }
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
 
         // Calculate contained dimensions (maintains image aspect ratio)
@@ -447,6 +455,7 @@ export default function Sticker({
         const width = contained.width
         const height = contained.height
 
+        // Canvas with small padding for shadows
         const canvasWidth = containerWidth * CANVAS_SCALE
         const canvasHeight = containerHeight * CANVAS_SCALE
 
@@ -496,16 +505,18 @@ export default function Sticker({
 
         // Create 2D bone grid
         // Bones are independent (not parented) - each bone controls a region of the sticker
+        // Position bones relative to geometry size (baseSize), not contained dimensions
+        // When mesh is scaled, bones will scale with it through the skeleton system
         const bones: any[] = []
-        const boneSpacingX = width / (BONE_GRID_X - 1)
-        const boneSpacingY = height / (BONE_GRID_Y - 1)
+        const boneSpacingX = baseSize / (BONE_GRID_X - 1)
+        const boneSpacingY = baseSize / (BONE_GRID_Y - 1)
 
         for (let y = 0; y < BONE_GRID_Y; y++) {
             for (let x = 0; x < BONE_GRID_X; x++) {
                 const bone = new Bone()
-                // Position bones in a grid, centered at origin
-                bone.position.x = -width / 2 + x * boneSpacingX
-                bone.position.y = -height / 2 + y * boneSpacingY
+                // Position bones in a grid, centered at origin (relative to geometry size)
+                bone.position.x = -baseSize / 2 + x * boneSpacingX
+                bone.position.y = -baseSize / 2 + y * boneSpacingY
                 bone.position.z = 0
                 bones.push(bone)
             }
@@ -650,6 +661,10 @@ export default function Sticker({
 
         group.add(mesh)
         meshRef.current = mesh
+        
+        // Initialize last mesh dimensions
+        lastMeshDimensionsRef.current = { width: baseSize, height: baseSize }
+        
         scene.add(group)
 
         // No group rotation - curlRotation is handled by rotating the fold line axis in updateBones()
@@ -844,14 +859,29 @@ export default function Sticker({
                 aspectRatio
             )
 
-            // Remove old mesh if it exists
+            // Preserve textures before disposing materials
+            let preservedTextures: { front?: any; back?: any; side?: any } = {}
             if (meshRef.current) {
+                const oldMaterials = meshRef.current.material as any[]
+                if (Array.isArray(oldMaterials)) {
+                    // Preserve textures before disposal
+                    if (oldMaterials[4]?.map) preservedTextures.front = oldMaterials[4].map
+                    if (oldMaterials[5]?.map) preservedTextures.back = oldMaterials[5].map
+                    if (oldMaterials[0]?.map) preservedTextures.side = oldMaterials[0].map
+                }
+                
                 sceneRef.current.remove(meshRef.current)
                 meshRef.current.geometry.dispose()
                 if (Array.isArray(meshRef.current.material)) {
-                    meshRef.current.material.forEach((mat: any) =>
+                    meshRef.current.material.forEach((mat: any) => {
+                        // Don't dispose textures - they're preserved
+                        if (mat.map && mat.map !== preservedTextures.front && 
+                            mat.map !== preservedTextures.back && 
+                            mat.map !== preservedTextures.side) {
+                            mat.map.dispose()
+                        }
                         mat.dispose()
-                    )
+                    })
                 } else {
                     meshRef.current.material.dispose()
                 }
@@ -1003,24 +1033,35 @@ export default function Sticker({
             // No group rotation - curlRotation is handled by bone rotation axis in updateBones()
 
             meshRef.current = mesh
+            
+            // Update last mesh dimensions
+            lastMeshDimensionsRef.current = { width: contained.width, height: contained.height }
 
             // Apply textures if they're already loaded
+            // Reuse preserved textures if available, otherwise create new ones
             if (loadedImageRef.current) {
                 const img = loadedImageRef.current
-                const texture = new Texture(img)
-                texture.needsUpdate = true
-                texture.minFilter = LinearFilter
-                texture.colorSpace = SRGBColorSpace
-                texture.format = RGBAFormat
+                // Reuse preserved texture if available, otherwise create new one
+                const texture = preservedTextures.front || new Texture(img)
+                if (!preservedTextures.front) {
+                    texture.needsUpdate = true
+                    texture.minFilter = LinearFilter
+                    texture.colorSpace = SRGBColorSpace
+                    texture.format = RGBAFormat
+                }
 
                 // Create back texture: blend backColor with front image
                 // If backColor is fully transparent (0% opacity), use front texture directly
                 const resolvedBackColor = resolveTokenColor(backColor)
                 const backColorRgba = parseColorToRgba(resolvedBackColor)
-                const rawBackTexture =
-                    backColorRgba.a <= 0
-                        ? texture
-                        : createBackTexture(img, backColor)
+                // Reuse preserved back texture if available and backColor hasn't changed
+                let rawBackTexture = preservedTextures.back
+                if (!rawBackTexture) {
+                    rawBackTexture =
+                        backColorRgba.a <= 0
+                            ? texture
+                            : createBackTexture(img, backColor)
+                }
                 const backTexture = makeBackTextureViewConsistent(
                     rawBackTexture,
                     texture
@@ -1091,10 +1132,12 @@ export default function Sticker({
                         meshMaterials[5].needsUpdate = true
                     }
                     // Side faces (border): use front face texture - blends with front image, not background
+                    // Reuse preserved side texture if available
+                    const sideTexture = preservedTextures.side || texture
                     for (let i = 0; i < 4; i++) {
-                        if (meshMaterials[i] && texture) {
+                        if (meshMaterials[i] && sideTexture) {
                             // Use front face texture so border blends with front image
-                            meshMaterials[i].map = texture
+                            meshMaterials[i].map = sideTexture
                             meshMaterials[i].transparent = true
                             meshMaterials[i].alphaTest = 0.01
                             // Match front material properties if using MeshStandardMaterial
@@ -1104,7 +1147,7 @@ export default function Sticker({
                                 meshMaterials[4]?.emissiveIntensity !==
                                     undefined
                             ) {
-                                meshMaterials[i].emissiveMap = texture
+                                meshMaterials[i].emissiveMap = sideTexture
                                 meshMaterials[i].emissive =
                                     meshMaterials[4].emissive ||
                                     new Color(0xffffff)
@@ -1656,6 +1699,7 @@ export default function Sticker({
                 return
 
             const dpr = Math.min(window.devicePixelRatio || 1, 2)
+            // Canvas with small padding for shadows
             const canvasWidth = containerWidth * CANVAS_SCALE
             const canvasHeight = containerHeight * CANVAS_SCALE
 
@@ -1686,26 +1730,46 @@ export default function Sticker({
             canvasRef.current.style.width = `${canvasWidth}px`
             canvasRef.current.style.height = `${canvasHeight}px`
 
-            // If we have an image aspect ratio, recreate mesh with correct geometry
-            // Otherwise, scale the existing mesh uniformly
-            if (imageAspectRatioRef.current && meshRef.current) {
-                // Recreate mesh with correct aspect ratio geometry
-                recreateMeshWithAspectRatio(imageAspectRatioRef.current)
-                // Restore curl after mesh recreation
-                setTimeout(() => {
-                    if (meshRef.current && bonesRef.current.length > 0) {
-                        updateBones()
-                        renderFrame()
-                    }
-                }, 0)
-            } else if (meshRef.current) {
-                // No image aspect ratio yet - scale uniformly based on container
-                const baseSize = meshRef.current.geometry.parameters.width
-                const uniformScale =
-                    Math.min(containerWidth, containerHeight) / baseSize
-                meshRef.current.scale.set(uniformScale, uniformScale, 1)
-                // Mesh stays centered at origin (no position offset with 2D grid)
-                meshRef.current.position.set(0, 0, 0)
+            // Always scale the mesh to fit contained dimensions
+            // Only recreate if aspect ratio changed significantly (to avoid unnecessary recreation)
+            if (meshRef.current) {
+                const geometry = meshRef.current.geometry
+                const baseWidth = geometry.parameters.width
+                const baseHeight = geometry.parameters.height
+                
+                // Check if aspect ratio changed significantly (needs recreation)
+                const aspectRatioChanged = imageAspectRatioRef.current && 
+                    lastMeshDimensionsRef.current &&
+                    Math.abs((lastMeshDimensionsRef.current.width / lastMeshDimensionsRef.current.height) - (width / height)) > 0.01
+                
+                if (aspectRatioChanged && imageAspectRatioRef.current) {
+                    // Recreate mesh with new aspect ratio
+                    recreateMeshWithAspectRatio(imageAspectRatioRef.current)
+                    lastMeshDimensionsRef.current = { width, height }
+                    // Restore curl after mesh recreation
+                    setTimeout(() => {
+                        if (meshRef.current && bonesRef.current.length > 0) {
+                            updateBones()
+                            renderFrame()
+                        }
+                    }, 0)
+                } else {
+                    // Scale existing mesh to fit contained dimensions
+                    // This preserves textures and is much faster
+                    const scaleX = width / baseWidth
+                    const scaleY = height / baseHeight
+                    
+                    meshRef.current.scale.set(scaleX, scaleY, 1)
+                    // Mesh stays centered at origin (no position offset with 2D grid)
+                    meshRef.current.position.set(0, 0, 0)
+                    
+                    // Update last dimensions
+                    lastMeshDimensionsRef.current = { width, height }
+                    
+                    // Update bones to reflect new scale
+                    updateBones()
+                    renderFrame()
+                }
             }
 
             // Update shadow camera if shadows are enabled
@@ -1754,11 +1818,27 @@ export default function Sticker({
             return
         }
 
-        setupScene()
+        const sceneSetup = setupScene()
+        
+        if (!sceneSetup) {
+            // If setupScene returns null (container not ready), try again after a short delay
+            const retryTimeout = setTimeout(() => {
+                const retrySetup = setupScene()
+                if (retrySetup) {
+                    setTimeout(() => {
+                        updateBones()
+                        loadTexture()
+                        renderFrame()
+                    }, 0)
+                }
+            }, 100)
+            return () => clearTimeout(retryTimeout)
+        }
 
         setTimeout(() => {
             updateBones()
             loadTexture()
+            renderFrame() // Ensure initial render
         }, 0)
 
         return () => {
@@ -1990,22 +2070,46 @@ export default function Sticker({
         if (!container) return
 
         const handleResize = () => {
+            // Only handle resize if scene is initialized
+            if (!rendererRef.current || !sceneRef.current || !cameraRef.current) {
+                return
+            }
+            
             const width = container.clientWidth || container.offsetWidth || 1
             const height = container.clientHeight || container.offsetHeight || 1
-            const last = lastSizeRef.current
-            const sizeChanged =
-                Math.abs(width - last.width) > 1 ||
-                Math.abs(height - last.height) > 1
-            if (sizeChanged) {
-                last.width = width
-                last.height = height
-                updateSize(width, height)
-                renderFrame()
+            
+            // Always update if dimensions are valid (even if only slightly changed)
+            // This ensures responsiveness works correctly
+            if (width > 0 && height > 0) {
+                const last = lastSizeRef.current
+                const sizeChanged =
+                    Math.abs(width - last.width) > 0.5 ||
+                    Math.abs(height - last.height) > 0.5
+                if (sizeChanged) {
+                    last.width = width
+                    last.height = height
+                    updateSize(width, height)
+                    renderFrame()
+                }
             }
         }
 
-        // Initial resize
-        handleResize()
+        // Initial resize - delay to ensure scene is set up
+        // In preview mode, the scene might not be ready immediately
+        // Use multiple attempts to catch when container gets dimensions
+        let attemptCount = 0
+        const maxAttempts = 10
+        const attemptResize = () => {
+            if (attemptCount < maxAttempts) {
+                attemptCount++
+                handleResize()
+                // If scene isn't ready yet, try again
+                if (!rendererRef.current || !sceneRef.current) {
+                    setTimeout(attemptResize, isCanvas ? 50 : 100)
+                }
+            }
+        }
+        const initialResizeTimeout = setTimeout(attemptResize, isCanvas ? 0 : 50)
 
         // Use requestAnimationFrame-based monitoring for canvas mode (like interactive-thermal3.tsx)
         const resizeCleanup = isCanvas
@@ -2067,7 +2171,10 @@ export default function Sticker({
                   }
               })()
 
-        return resizeCleanup
+        return () => {
+            clearTimeout(initialResizeTimeout)
+            resizeCleanup()
+        }
     }, [updateSize, renderFrame, isCanvas])
 
     // ========================================================================
@@ -2090,9 +2197,13 @@ export default function Sticker({
         )
     }
 
+    // Show canvas when mesh exists (texture can load later)
+    // In preview mode, we want to show the mesh even if texture is still loading
+    const isReady = meshRef.current !== null
+    
+    // Calculate offset to center the larger canvas within the container
+    // This gives extra space for shadows while keeping the sticker centered
     const offsetPercent = ((CANVAS_SCALE - 1) / 2) * 100
-    // Hide canvas until texture is loaded to avoid visual jump
-    const isReady = textureLoaded && meshRef.current !== null
 
     return (
         <div
