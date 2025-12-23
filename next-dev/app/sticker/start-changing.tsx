@@ -64,6 +64,7 @@ interface StickerProps {
     // Main content
     image?: ResponsiveImageSource
     // Sticker settings
+    unrollMode: "change-curl" | "move-start" | "hybrid"
     curlAmount: number
     curlRadius: number
     curlStart: number
@@ -107,8 +108,8 @@ const STICKER_DEPTH = 0.003
 const CANVAS_SCALE = 2.5 // Large transparent space around sticker
 
 // 2D Bone Grid settings
-const BONE_GRID_X = 30 // Performance-safe bone count for hardware skinning
-const BONE_GRID_Y = 30
+const BONE_GRID_X =60 // Performance-safe bone count for hardware skinning
+const BONE_GRID_Y = 60
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -288,6 +289,7 @@ export default function Sticker({
     curlStart = 0.45,
     curlRotation = 0, // 0° = curl from left, 90° = from bottom, 180° = from right, 270° = from top
     curlMode = "spiral",
+    unrollMode = "change-curl",
     backColor = "rgba(255, 255, 255, 1)",
     enableShadows = true,
     animationDuration = 0.6,
@@ -2035,6 +2037,15 @@ addPropertyControls(Sticker, {
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
+    },
+    unrollMode:{
+        type:ControlType.Enum,
+        title:"Unroll Mode",
+        options:["change-curl","move-start","hybrid"],
+        optionTitles:["Change Curl","Move Start","Hybrid"],
+        defaultValue:"change-curl",
+        displaySegmentedControl:true,
+        segmentedControlDirection:"vertical",
     },
     curlAmount: {
         type: ControlType.Number,
