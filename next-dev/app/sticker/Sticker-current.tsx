@@ -31,6 +31,9 @@ import {
     Group,
     ShadowMaterial,
     PCFSoftShadowMap,
+    Line,
+    LineBasicMaterial,
+    BufferGeometry,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
 // GSAP import from CDN
@@ -316,6 +319,7 @@ export default function Sticker({
     const backgroundPlaneRef = useRef<any>(null)
     const internalRadiusRef = useRef(mapInteralRadiusToUIValue(curlRadius))
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
+    const debugLineRef = useRef<any>(null) // Debug line showing curlStart boundary
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
@@ -391,6 +395,73 @@ export default function Sticker({
         },
         []
     )
+
+    // ========================================================================
+    // RENDERING
+    // ========================================================================
+
+    const renderFrame = useCallback(() => {
+        if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
+            return
+        rendererRef.current.render(sceneRef.current, cameraRef.current)
+    }, [])
+
+    // ========================================================================
+    // DEBUG LINE - SHOW curlStart BOUNDARY
+    // ========================================================================
+
+    const updateDebugLine = useCallback(() => {
+        if (!meshRef.current || !groupRef.current || !sceneRef.current) return
+
+        // Get sticker dimensions from mesh
+        const mesh = meshRef.current
+        const geometry = mesh.geometry
+        const width = geometry.parameters.width * mesh.scale.x
+        const height = geometry.parameters.height * mesh.scale.y
+
+        // Calculate X position where curlStart occurs
+        // curlStart is normalized (0-1), mesh is centered at origin
+        // Mesh position is at -width/2, so curlStart position is:
+        const xPosition = -width / 2 + curlStart * width
+
+        // Create or update the debug line
+        if (!debugLineRef.current) {
+            // Create line geometry - vertical line spanning full height
+            const points = [
+                new Vector3(xPosition, -height / 2, 0.1),
+                new Vector3(xPosition, height / 2, 0.1),
+            ]
+            const geometry = new BufferGeometry().setFromPoints(points)
+
+            // Create blue material
+            const material = new LineBasicMaterial({
+                color: 0x0000ff, // Blue
+                linewidth: 2,
+            })
+
+            // Create line
+            const line = new Line(geometry, material)
+            debugLineRef.current = line
+            groupRef.current.add(line)
+        } else {
+            // Update existing line - dispose old geometry and create new one for reliability
+            const line = debugLineRef.current
+            const oldGeometry = line.geometry
+            
+            // Create new points
+            const points = [
+                new Vector3(xPosition, -height / 2, 0.1),
+                new Vector3(xPosition, height / 2, 0.1),
+            ]
+            const newGeometry = new BufferGeometry().setFromPoints(points)
+            
+            // Replace geometry
+            line.geometry = newGeometry
+            oldGeometry.dispose()
+        }
+
+        renderFrame()
+    }, [curlStart, renderFrame])
 
     // ========================================================================
     // SCENE SETUP
@@ -621,6 +692,11 @@ export default function Sticker({
         group.rotation.y = 0
         group.rotation.z = curlRotation * (Math.PI / 180)
 
+        // Create debug line showing curlStart boundary
+        setTimeout(() => {
+            updateDebugLine()
+        }, 0)
+
         // Add lighting if shadows are enabled
         if (enableShadows) {
             // Calculate initial light intensities based on shadowIntensity
@@ -696,17 +772,8 @@ export default function Sticker({
         castShadowOpacity,
         boneSegments,
         curlRotation,
+        updateDebugLine,
     ])
-
-    // ========================================================================
-    // RENDERING
-    // ========================================================================
-
-    const renderFrame = useCallback(() => {
-        if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
-            return
-        rendererRef.current.render(sceneRef.current, cameraRef.current)
-    }, [])
 
     // ========================================================================
     // BACK TEXTURE CREATION
@@ -1082,6 +1149,11 @@ export default function Sticker({
                 }
             }
 
+            // Update debug line after mesh is recreated
+            setTimeout(() => {
+                updateDebugLine()
+            }, 0)
+
             renderFrame()
         },
         [
@@ -1092,6 +1164,7 @@ export default function Sticker({
             createBackTexture,
             renderFrame,
             curlRotation,
+            updateDebugLine,
         ]
     )
 
@@ -1637,6 +1710,11 @@ export default function Sticker({
                 lightRef.current.shadow.camera.bottom = -containerHeight * 2
                 lightRef.current.shadow.camera.updateProjectionMatrix()
             }
+
+            // Update debug line when size changes
+            setTimeout(() => {
+                updateDebugLine()
+            }, 0)
         },
         [
             boneSegments,
@@ -1644,6 +1722,7 @@ export default function Sticker({
             recreateMeshWithAspectRatio,
             updateBones,
             renderFrame,
+            updateDebugLine,
         ]
     )
 
@@ -1698,6 +1777,13 @@ export default function Sticker({
             lightRef.current = null
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
+            // Clean up debug line
+            if (debugLineRef.current && groupRef.current) {
+                groupRef.current.remove(debugLineRef.current)
+                debugLineRef.current.geometry.dispose()
+                debugLineRef.current.material.dispose()
+                debugLineRef.current = null
+            }
         }
     }, [hasContent, setupScene, loadTexture, recreateMeshWithAspectRatio])
 
@@ -1717,6 +1803,11 @@ export default function Sticker({
     useEffect(() => {
         updateBones()
     }, [curlStart, curlMode, updateBones])
+    
+    // Update debug line when curlStart changes (separate effect to match working pattern)
+    useEffect(() => {
+        updateDebugLine()
+    }, [curlStart, updateDebugLine])
 
     // Update curl direction rotation when curlRotation changes
     useEffect(() => {
