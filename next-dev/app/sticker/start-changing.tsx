@@ -625,8 +625,9 @@ export default function Sticker({
         mesh.bind(skeleton)
         mesh.frustumCulled = false
         
-        // Update skeleton to initialize bone matrices before first render
+        // Force computation of world matrices for all bones BEFORE skeleton update
         // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        mesh.updateMatrixWorld(true)
         skeleton.update()
 
         // Enable shadows if configured
@@ -757,9 +758,13 @@ export default function Sticker({
         if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
             return
         
-        // Ensure skeleton is updated before rendering to prevent matrixWorld errors
-        if (meshRef.current?.skeleton) {
-            meshRef.current.skeleton.update()
+        // Ensure world matrices and skeleton are updated before rendering
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        if (meshRef.current) {
+            meshRef.current.updateMatrixWorld(true)
+            if (meshRef.current.skeleton) {
+                meshRef.current.skeleton.update()
+            }
         }
         
         rendererRef.current.render(sceneRef.current, cameraRef.current)
@@ -1014,8 +1019,9 @@ export default function Sticker({
             mesh.bind(skeleton)
             mesh.frustumCulled = false
             
-            // Update skeleton to initialize bone matrices before first render
+            // Force computation of world matrices for all bones BEFORE skeleton update
             // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+            mesh.updateMatrixWorld(true)
             skeleton.update()
 
             if (enableShadows) {
@@ -1367,6 +1373,14 @@ export default function Sticker({
 
     const updateBones = useCallback(() => {
         if (!bonesRef.current.length || !meshRef.current || !bonesInitialPositionsRef.current.length) return
+        
+        // Force computation of world matrices BEFORE modifying bones
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        // especially when curlRotation != 0 and bones have quaternion rotations
+        meshRef.current.updateMatrixWorld(true)
+        if (meshRef.current.skeleton) {
+            meshRef.current.skeleton.update()
+        }
 
         const bones = bonesRef.current
         const initialPositions = bonesInitialPositionsRef.current
@@ -2100,26 +2114,26 @@ export default function Sticker({
         if (!container) return
 
         const handleResize = () => {
-            // Only handle resize if scene is initialized
-            if (!rendererRef.current || !sceneRef.current || !cameraRef.current) {
-                return
-            }
-            
             const width = container.clientWidth || container.offsetWidth || 1
             const height = container.clientHeight || container.offsetHeight || 1
             
-            // Always update if dimensions are valid (even if only slightly changed)
-            // This ensures responsiveness works correctly
+            // For preview/live mode, always update if dimensions are valid
+            // For canvas mode, only update if scene is initialized
             if (width > 0 && height > 0) {
                 const last = lastSizeRef.current
                 const sizeChanged =
                     Math.abs(width - last.width) > 0.5 ||
                     Math.abs(height - last.height) > 0.5
+                
                 if (sizeChanged) {
-                    last.width = width
-                    last.height = height
-                    updateSize(width, height)
-                    renderFrame()
+                    // In preview/live mode, update immediately
+                    // In canvas mode, only update if scene is ready
+                    if (!isCanvas || (rendererRef.current && cameraRef.current && meshRef.current)) {
+                        last.width = width
+                        last.height = height
+                        updateSize(width, height)
+                        renderFrame()
+                    }
                 }
             }
         }
@@ -2174,15 +2188,18 @@ export default function Sticker({
                           Math.abs(ch - lastSizeRef.current.height) > 1
 
                       if (timeOk && (aspectChanged || sizeChanged)) {
-                          lastSizeRef.current = {
-                              width: cw,
-                              height: ch,
-                              aspect,
-                              zoom,
-                              ts: now || performance.now(),
+                          // Only update lastSizeRef if scene is ready (canvas mode requirement)
+                          if (rendererRef.current && cameraRef.current && meshRef.current) {
+                              lastSizeRef.current = {
+                                  width: cw,
+                                  height: ch,
+                                  aspect,
+                                  zoom,
+                                  ts: now || performance.now(),
+                              }
+                              updateSize(cw, ch)
+                              renderFrame()
                           }
-                          updateSize(cw, ch)
-                          renderFrame()
                       }
 
                       rafId = requestAnimationFrame(tick)
@@ -2267,6 +2284,12 @@ export default function Sticker({
                     position: "absolute",
                     top: `-${offsetPercent}%`,
                     left: `-${offsetPercent}%`,
+                    // In canvas mode, use explicit dimensions for better responsiveness
+                    // In preview/live mode, let JavaScript set dimensions
+                    ...(isCanvas ? {
+                        width: `${CANVAS_SCALE * 100}%`,
+                        height: `${CANVAS_SCALE * 100}%`,
+                    } : {}),
                     display: "block",
                     cursor: "pointer",
                     opacity: isReady ? 1 : 0,
