@@ -968,29 +968,6 @@ export default function Globe({
         // regardless of display refresh rate (60Hz, 120Hz, etc.)
         let lastFrameTime = performance.now()
         const targetDeltaTime = 1000 / 60 // Reference delta time (60 FPS = 16.67ms)
-        
-        // FPS counter tracking
-        let fpsFrameCount = 0
-        let fpsLastUpdate = performance.now()
-        const fpsUpdateInterval = 500 // Update FPS display every 500ms
-        let currentFPS = 0
-        
-        // Create FPS counter UI element
-        const fpsPanel = document.createElement("div")
-        fpsPanel.style.position = "absolute"
-        fpsPanel.style.top = "12px"
-        fpsPanel.style.right = "12px"
-        fpsPanel.style.backgroundColor = "rgba(0, 0, 0, 0.75)"
-        fpsPanel.style.color = "#ffffff"
-        fpsPanel.style.fontFamily = "Monaco, 'Courier New', monospace"
-        fpsPanel.style.fontSize = "12px"
-        fpsPanel.style.padding = "6px 10px"
-        fpsPanel.style.borderRadius = "4px"
-        fpsPanel.style.pointerEvents = "none"
-        fpsPanel.style.zIndex = "1000"
-        fpsPanel.style.userSelect = "none"
-        fpsPanel.textContent = "FPS: --"
-        container.appendChild(fpsPanel)
 
         // Lerp factor: smoothing 0 = instant (factor=1), smoothing 1 = very smooth (factor=0.03)
         const lerpFactor =
@@ -1037,16 +1014,6 @@ export default function Globe({
             const deltaTime = now - lastFrameTime
             lastFrameTime = now
             const deltaFactor = deltaTime / targetDeltaTime
-            
-            // FPS counter: increment frame count and update display periodically
-            fpsFrameCount++
-            const timeSinceLastFpsUpdate = now - fpsLastUpdate
-            if (timeSinceLastFpsUpdate >= fpsUpdateInterval) {
-                currentFPS = Math.round((fpsFrameCount * 1000) / timeSinceLastFpsUpdate)
-                fpsFrameCount = 0
-                fpsLastUpdate = now
-                fpsPanel.textContent = `FPS: ${currentFPS}`
-            }
             
             let needsRender = false
             const threshold = 0.01
@@ -1278,10 +1245,6 @@ export default function Globe({
             resizeObserver.disconnect()
             renderer.dispose()
             container.removeChild(canvas)
-            // Remove FPS panel
-            if (fpsPanel.parentNode) {
-                fpsPanel.parentNode.removeChild(fpsPanel)
-            }
         }
     }, [
         // Note: preview is intentionally NOT in dependencies to prevent re-initialization

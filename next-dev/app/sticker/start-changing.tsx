@@ -327,6 +327,7 @@ export default function Sticker({
     const ambientLightRef = useRef<any>(null)
     const backgroundPlaneRef = useRef<any>(null)
     const internalRadiusRef = useRef(mapInteralRadiusToUIValue(curlRadius))
+    const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
     const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
@@ -671,6 +672,9 @@ export default function Sticker({
         lastMeshDimensionsRef.current = { width: baseSize, height: baseSize }
         
         scene.add(group)
+        
+        // Ensure mesh is immediately visible (will show back color until texture loads)
+        // This prevents the "white plane only" issue
 
         // No group rotation - curlRotation is handled by rotating the fold line axis in updateBones()
 
@@ -746,6 +750,11 @@ export default function Sticker({
             scene.add(backgroundPlane)
         }
 
+        // Initial render to show mesh immediately (even without texture)
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera)
+        }
+        
         return { scene, camera, renderer, mesh, bones }
     }, [
         createStickerGeometry,
@@ -1187,6 +1196,7 @@ export default function Sticker({
                 }
             }
 
+            // Always render after mesh recreation to ensure it's visible
             renderFrame()
         },
         [
@@ -1226,20 +1236,18 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Update bones after mesh is recreated
-                setTimeout(() => {
-                    if (meshRef.current && groupRef.current) {
-                        // Ensure skeleton is initialized before updating bones
-                        if (meshRef.current.skeleton) {
-                            meshRef.current.skeleton.update()
-                        }
-                        // No group rotation - curlRotation is handled by bone rotation axis
-                        if (bonesRef.current.length > 0) {
-                            updateBones()
-                        }
-                        renderFrame()
+                // Update bones immediately after mesh is recreated (no setTimeout)
+                if (meshRef.current && groupRef.current) {
+                    // Ensure skeleton is initialized before updating bones
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.skeleton.update()
                     }
-                }, 10)
+                    // No group rotation - curlRotation is handled by bone rotation axis
+                    if (bonesRef.current.length > 0) {
+                        updateBones()
+                    }
+                    // Render will happen at end of loadTexture after textures are applied
+                }
             }
 
             // Create main texture for front face
@@ -1352,11 +1360,14 @@ export default function Sticker({
             }
 
             setTextureLoaded(true)
+            // Always render after textures are applied
             renderFrame()
         }
         img.onerror = () => {
             console.error("Texture loading error")
             setTextureLoaded(false)
+            // Still render even if texture fails (will show back color)
+            renderFrame()
         }
         img.src = resolvedImageUrl
     }, [
@@ -1400,7 +1411,8 @@ export default function Sticker({
         const diagonalLength = Math.sqrt(width * width + height * height)
         const maxDistFromCenter = diagonalLength / 2
 
-        const curlRotationRad = (curlRotation * Math.PI) / 180
+        // Use ref to always get current curlRotation value (avoids stale closure issues in Canvas mode)
+        const curlRotationRad = (curlRotationRef.current * Math.PI) / 180
         const dirX = Math.cos(curlRotationRad)
         const dirY = Math.sin(curlRotationRad)
         const axisX = -dirY
@@ -1497,7 +1509,7 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [curlMode, curlRotation, renderFrame])
+    }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
 
     // ========================================================================
     // HOVER ANIMATION WITH GSAP
@@ -1871,30 +1883,33 @@ export default function Sticker({
             // If setupScene returns null (container not ready), try again after a short delay
             const retryTimeout = setTimeout(() => {
                 const retrySetup = setupScene()
-                if (retrySetup) {
-                    setTimeout(() => {
-                        // Ensure skeleton is initialized before updating bones
-                        if (meshRef.current?.skeleton) {
-                            meshRef.current.skeleton.update()
-                        }
-                        updateBones()
-                        loadTexture()
-                        renderFrame()
-                    }, 10)
+                if (retrySetup && meshRef.current) {
+                    // Initialize skeleton and bones immediately
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.skeleton.update()
+                    }
+                    updateBones()
+                    // Render immediately to show mesh (even without texture)
+                    renderFrame()
+                    // Load texture asynchronously
+                    loadTexture()
                 }
             }, 100)
             return () => clearTimeout(retryTimeout)
         }
 
-        setTimeout(() => {
-            // Ensure skeleton is initialized before updating bones
-            if (meshRef.current?.skeleton) {
+        // Initialize immediately - no setTimeout delays
+        if (meshRef.current) {
+            // Initialize skeleton and bones
+            if (meshRef.current.skeleton) {
                 meshRef.current.skeleton.update()
             }
             updateBones()
+            // Render immediately to show mesh (even without texture - will show back color)
+            renderFrame()
+            // Load texture asynchronously - it will trigger another render when done
             loadTexture()
-            renderFrame() // Ensure initial render
-        }, 0)
+        }
 
         return () => {
             if (animationFrameRef.current) {
@@ -1912,7 +1927,7 @@ export default function Sticker({
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
         }
-    }, [hasContent, setupScene, loadTexture, recreateMeshWithAspectRatio])
+    }, [hasContent, setupScene, loadTexture, updateBones, renderFrame])
 
     // Sync animated curl ref with prop changes
     useEffect(() => {
@@ -1946,9 +1961,15 @@ export default function Sticker({
 
     // Update bones when curlRotation changes (fold line direction)
     useEffect(() => {
+        // Update ref immediately so updateBones always uses current value
+        curlRotationRef.current = curlRotation
         if (!meshRef.current || !bonesRef.current.length) return
         updateBones()
-    }, [curlRotation, updateBones])
+        // In Canvas mode, explicitly render to ensure the change is visible
+        if (isCanvas && rendererRef.current && sceneRef.current && cameraRef.current) {
+            renderFrame()
+        }
+    }, [curlRotation, updateBones, isCanvas, renderFrame])
 
     // Update back color - recreate back texture when backColor changes
     useEffect(() => {
@@ -2280,9 +2301,9 @@ export default function Sticker({
         )
     }
 
-    // Show canvas when mesh exists (texture can load later)
-    // In preview mode, we want to show the mesh even if texture is still loading
-    const isReady = meshRef.current !== null
+    // Show canvas when scene is initialized (mesh will be visible even before texture loads)
+    // The mesh will show with back color until texture loads
+    const isReady = sceneRef.current !== null && meshRef.current !== null
     
     // Calculate offset to center the larger canvas within the container
     // This gives extra space for shadows while keeping the sticker centered
