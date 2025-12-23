@@ -624,6 +624,10 @@ export default function Sticker({
         bones.forEach(bone => mesh.add(bone))
         mesh.bind(skeleton)
         mesh.frustumCulled = false
+        
+        // Update skeleton to initialize bone matrices before first render
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        skeleton.update()
 
         // Enable shadows if configured
         // According to Three.js forum: setting both castShadow and receiveShadow can cause acne
@@ -752,6 +756,12 @@ export default function Sticker({
     const renderFrame = useCallback(() => {
         if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
             return
+        
+        // Ensure skeleton is updated before rendering to prevent matrixWorld errors
+        if (meshRef.current?.skeleton) {
+            meshRef.current.skeleton.update()
+        }
+        
         rendererRef.current.render(sceneRef.current, cameraRef.current)
     }, [])
 
@@ -1003,6 +1013,10 @@ export default function Sticker({
             bones.forEach(bone => mesh.add(bone))
             mesh.bind(skeleton)
             mesh.frustumCulled = false
+            
+            // Update skeleton to initialize bone matrices before first render
+            // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+            skeleton.update()
 
             if (enableShadows) {
                 mesh.castShadow = true
@@ -1202,13 +1216,17 @@ export default function Sticker({
                 // Update bones after mesh is recreated
                 setTimeout(() => {
                     if (meshRef.current && groupRef.current) {
+                        // Ensure skeleton is initialized before updating bones
+                        if (meshRef.current.skeleton) {
+                            meshRef.current.skeleton.update()
+                        }
                         // No group rotation - curlRotation is handled by bone rotation axis
                         if (bonesRef.current.length > 0) {
                             updateBones()
                         }
                         renderFrame()
                     }
-                }, 0)
+                }, 10)
             }
 
             // Create main texture for front face
@@ -1749,10 +1767,14 @@ export default function Sticker({
                     // Restore curl after mesh recreation
                     setTimeout(() => {
                         if (meshRef.current && bonesRef.current.length > 0) {
+                            // Ensure skeleton is initialized before updating bones
+                            if (meshRef.current.skeleton) {
+                                meshRef.current.skeleton.update()
+                            }
                             updateBones()
                             renderFrame()
                         }
-                    }, 0)
+                    }, 10)
                 } else {
                     // Scale existing mesh to fit contained dimensions
                     // This preserves textures and is much faster
@@ -1826,16 +1848,24 @@ export default function Sticker({
                 const retrySetup = setupScene()
                 if (retrySetup) {
                     setTimeout(() => {
+                        // Ensure skeleton is initialized before updating bones
+                        if (meshRef.current?.skeleton) {
+                            meshRef.current.skeleton.update()
+                        }
                         updateBones()
                         loadTexture()
                         renderFrame()
-                    }, 0)
+                    }, 10)
                 }
             }, 100)
             return () => clearTimeout(retryTimeout)
         }
 
         setTimeout(() => {
+            // Ensure skeleton is initialized before updating bones
+            if (meshRef.current?.skeleton) {
+                meshRef.current.skeleton.update()
+            }
             updateBones()
             loadTexture()
             renderFrame() // Ensure initial render
