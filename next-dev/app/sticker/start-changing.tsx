@@ -321,6 +321,7 @@ export default function Sticker({
     const animationFrameRef = useRef<number | null>(null)
     const loadedImageRef = useRef<HTMLImageElement | null>(null)
     const animatedCurlRef = useRef({ amount: curlAmount }) // Animated curl value for GSAP
+    const animatedCurlStartRef = useRef({ start: curlStart }) // Animated curlStart value for GSAP
     const isHoveringRef = useRef(false) // Track if currently hovering over sticker
     const lightRef = useRef<any>(null)
     const ambientLightRef = useRef<any>(null)
@@ -1325,7 +1326,9 @@ export default function Sticker({
         const rotationAxis = new Vector3(axisX, axisY, 0).normalize()
 
         // foldOffset: position of the fold line along the 'dir' axis
-        const foldOffset = -maxDistFromCenter + curlStart * 2 * maxDistFromCenter
+        // Use animated curlStart value for smooth animations
+        const animatedStart = animatedCurlStartRef.current.start
+        const foldOffset = -maxDistFromCenter + animatedStart * 2 * maxDistFromCenter
         const radiusWorld = r * maxDistFromCenter
         
         // RPrime is the current bending radius. As f -> 0, RPrime -> infinity (flat)
@@ -1412,7 +1415,7 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [curlStart, curlMode, curlRotation, renderFrame, curlAmount])
+    }, [curlMode, curlRotation, renderFrame])
 
     // ========================================================================
     // HOVER ANIMATION WITH GSAP
@@ -1507,46 +1510,136 @@ export default function Sticker({
             const wasHovering = isHoveringRef.current
 
             if (isOverSticker && !wasHovering) {
-                // Entering sticker: animate to flat
+                // Entering sticker: animate to flat based on unrollMode
                 isHoveringRef.current = true
-                gsap.to(animatedCurlRef.current, {
-                    amount: 0,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
+                
+                if (unrollMode === "change-curl") {
+                    // Mode 1: Animate curl amount to 0
+                    gsap.to(animatedCurlRef.current, {
+                        amount: 0,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                } else if (unrollMode === "move-start") {
+                    // Mode 2: Animate curlStart to 1 (move fold line to edge)
+                    gsap.to(animatedCurlStartRef.current, {
+                        start: 1,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                } else if (unrollMode === "hybrid") {
+                    // Mode 3: Animate both curl amount to 0 AND curlStart to 1
+                    // Use a single onUpdate callback to avoid calling updateBones twice
+                    const timeline = gsap.timeline({
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                    timeline.to(animatedCurlRef.current, {
+                        amount: 0,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                    })
+                    timeline.to(animatedCurlStartRef.current, {
+                        start: 1,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                    }, 0) // Start both animations at the same time
+                }
             } else if (!isOverSticker && wasHovering) {
-                // Leaving sticker: animate back to original curl
+                // Leaving sticker: animate back to original values
                 isHoveringRef.current = false
-                gsap.to(animatedCurlRef.current, {
-                    amount: curlAmount,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
+                
+                if (unrollMode === "change-curl") {
+                    gsap.to(animatedCurlRef.current, {
+                        amount: curlAmount,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                } else if (unrollMode === "move-start") {
+                    gsap.to(animatedCurlStartRef.current, {
+                        start: curlStart,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                } else if (unrollMode === "hybrid") {
+                    // Use a single timeline to animate both values back
+                    const timeline = gsap.timeline({
+                        onUpdate: () => {
+                            updateBones()
+                        },
+                    })
+                    timeline.to(animatedCurlRef.current, {
+                        amount: curlAmount,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                    })
+                    timeline.to(animatedCurlStartRef.current, {
+                        start: curlStart,
+                        duration: animationDuration,
+                        ease: "power2.inOut",
+                    }, 0) // Start both animations at the same time
+                }
             }
         },
-        [checkMouseOverSticker, curlAmount, updateBones]
+        [checkMouseOverSticker, curlAmount, curlStart, unrollMode, animationDuration, updateBones]
     )
 
     // Mouse leave handler: always reset when leaving canvas
     const handleMouseLeave = useCallback(() => {
         if (isHoveringRef.current) {
             isHoveringRef.current = false
-            gsap.to(animatedCurlRef.current, {
-                amount: curlAmount,
-                duration: animationDuration,
-                ease: "power2.out",
-                onUpdate: () => {
-                    updateBones()
-                },
-            })
+            
+            if (unrollMode === "change-curl") {
+                gsap.to(animatedCurlRef.current, {
+                    amount: curlAmount,
+                    duration: animationDuration,
+                    ease: "power2.out",
+                    onUpdate: () => {
+                        updateBones()
+                    },
+                })
+            } else if (unrollMode === "move-start") {
+                gsap.to(animatedCurlStartRef.current, {
+                    start: curlStart,
+                    duration: animationDuration,
+                    ease: "power2.out",
+                    onUpdate: () => {
+                        updateBones()
+                    },
+                })
+            } else if (unrollMode === "hybrid") {
+                // Use a single timeline to animate both values back
+                const timeline = gsap.timeline({
+                    onUpdate: () => {
+                        updateBones()
+                    },
+                })
+                timeline.to(animatedCurlRef.current, {
+                    amount: curlAmount,
+                    duration: animationDuration,
+                    ease: "power2.out",
+                })
+                timeline.to(animatedCurlStartRef.current, {
+                    start: curlStart,
+                    duration: animationDuration,
+                    ease: "power2.out",
+                }, 0) // Start both animations at the same time
+            }
         }
-    }, [curlAmount, updateBones])
+    }, [curlAmount, curlStart, unrollMode, animationDuration, updateBones])
 
     // ========================================================================
     // RESIZE HANDLING
@@ -1688,8 +1781,21 @@ export default function Sticker({
 
     // Sync animated curl ref with prop changes
     useEffect(() => {
-        animatedCurlRef.current.amount = curlAmount
-    }, [curlAmount])
+        // Only update if not currently animating (not hovering)
+        if (!isHoveringRef.current) {
+            animatedCurlRef.current.amount = curlAmount
+            updateBones()
+        }
+    }, [curlAmount, updateBones])
+
+    // Sync animated curlStart ref with prop changes
+    useEffect(() => {
+        // Only update if not currently animating (not hovering)
+        if (!isHoveringRef.current) {
+            animatedCurlStartRef.current.start = curlStart
+            updateBones()
+        }
+    }, [curlStart, updateBones])
 
     // Update internalRadius when curlRadius prop changes
     useEffect(() => {
@@ -1697,11 +1803,11 @@ export default function Sticker({
         updateBones()
     }, [curlRadius, updateBones])
 
-    // Update bones when curlStart or curlMode changes
-    // Note: curlAmount is handled by GSAP animations via animatedCurlRef
+    // Update bones when curlMode changes
+    // Note: curlAmount and curlStart are handled by GSAP animations via animated refs
     useEffect(() => {
         updateBones()
-    }, [curlStart, curlMode, updateBones])
+    }, [curlMode, updateBones])
 
     // Update bones when curlRotation changes (fold line direction)
     useEffect(() => {
