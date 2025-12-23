@@ -107,8 +107,8 @@ const STICKER_DEPTH = 0.003
 const CANVAS_SCALE = 2.5 // Large transparent space around sticker
 
 // 2D Bone Grid settings
-const BONE_GRID_X = 150 // Number of bones along X axis
-const BONE_GRID_Y = 150 // Number of bones along Y axis
+const BONE_GRID_X = 30 // Performance-safe bone count for hardware skinning
+const BONE_GRID_Y = 30
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -341,10 +341,9 @@ export default function Sticker({
 
     const createStickerGeometry = useCallback(
         (width: number, height: number, gridX: number, gridY: number) => {
-            // Create box geometry with enough segments for smooth bending
-            // More segments = smoother deformation
-            const xSegments = Math.max(gridX * 3, 60)
-            const ySegments = Math.max(gridY * 3, 40)
+            // High resolution geometry for smooth curves, independent of bone count
+            const xSegments = 150 
+            const ySegments = 100
 
             const geometry = new BoxGeometry(
                 width,
@@ -1307,202 +1306,79 @@ export default function Sticker({
 
         const bones = bonesRef.current
         const initialPositions = bonesInitialPositionsRef.current
-        const curlFactor = animatedCurlRef.current.amount // 0 to 1, scales the curl
-        const r = internalRadiusRef.current // normalized radius
+        const curlFactor = Math.max(0.0001, animatedCurlRef.current.amount)
+        const r = internalRadiusRef.current
 
         const mesh = meshRef.current
         const width = mesh.geometry.parameters.width * mesh.scale.x
         const height = mesh.geometry.parameters.height * mesh.scale.y
-
-        // Calculate diagonal length for normalization
         const diagonalLength = Math.sqrt(width * width + height * height)
         const maxDistFromCenter = diagonalLength / 2
 
-        // curlRotation = 0°: Curl from left to right (fold line moves from left to right)
-        // curlRotation = 90°: Curl from bottom to top
         const curlRotationRad = (curlRotation * Math.PI) / 180
-        
-        // Direction of the curl movement (perpendicular to the fold line)
         const dirX = Math.cos(curlRotationRad)
         const dirY = Math.sin(curlRotationRad)
-        
-        // Fold line axis (direction along the fold line)
         const axisX = -dirY
         const axisY = dirX
         const rotationAxis = new Vector3(axisX, axisY, 0).normalize()
 
         // foldOffset: position of the fold line along the 'dir' axis
-        // curlStart=0: fold line at the starting edge (no curling)
-        // curlStart=1: fold line at the far edge (fully curled)
         const foldOffset = -maxDistFromCenter + curlStart * 2 * maxDistFromCenter
-
-        // Semicircle radius in world units
         const radiusWorld = r * maxDistFromCenter
+        
+        // RPrime is the current bending radius. As f -> 0, RPrime -> infinity (flat)
+        const RPrime = radiusWorld / curlFactor
+        const arcLimit = Math.PI * radiusWorld
 
-        if (curlMode === "semicircle") {
-            const arcLengthWorld = Math.PI * radiusWorld
+        for (let i = 0; i < bones.length; i++) {
+            const bone = bones[i]
+            const initialPos = initialPositions[i]
+            const distOnDir = initialPos.x * dirX + initialPos.y * dirY
+            const signedDist = distOnDir - foldOffset
 
-            for (let i = 0; i < bones.length; i++) {
-                const bone = bones[i]
-                const initialPos = initialPositions[i]
-
-                // Project initial position onto the curl direction
-                const distOnDir = initialPos.x * dirX + initialPos.y * dirY
+            if (signedDist > 0) {
+                let xRel, zRel, finalAngle
                 
-                // distance behind the fold line (positive = curled)
-                const signedDist = foldOffset - distOnDir
-
-                if (signedDist > 0) {
-                    // Bone is in the curled zone
-                    const angle = Math.min(signedDist / arcLengthWorld, 1) * Math.PI * curlFactor
-
-                    // Calculate new position using arc math
-                    // x' = how far the bone is from the fold line along the 'dir' axis
-                    // z' = height above plane
-                    const xPrime = radiusWorld * Math.sin(angle)
-                    const zPrime = radiusWorld * (1 - Math.cos(angle))
-
-                    // If angle has reached PI, the remaining distance stays flat on the "back"
-                    let dx = 0
-                    let dz = zPrime
-                    
-                    if (signedDist > arcLengthWorld) {
-                        const extraDist = signedDist - arcLengthWorld
-                        // Points past the semicircle are flat on top, but flipped
-                        // They move BACKWARDS along 'dir' from the end of the arc
-                        dx = -radiusWorld - extraDist - (-signedDist) // Wait.
-                        // Position relative to fold line:
-                        // Before fold: -signedDist along 'dir'
-                        // After fold: at angle PI, position is -radiusWorld along 'dir', Z is 2*radiusWorld
-                        // Past PI: position moves further -extraDist along 'dir'
-                        const posRelativeToFold = -extraDist
-                        dx = posRelativeToFold - (-signedDist)
-                        dz = 2 * radiusWorld
+                if (curlMode === "semicircle") {
+                    // Semicircle: follow arc of radius RPrime for arcLimit distance, then go straight
+                    const angle_s = signedDist * curlFactor / radiusWorld
+                    if (signedDist <= arcLimit) {
+                        xRel = RPrime * Math.sin(angle_s)
+                        zRel = RPrime * (1 - Math.cos(angle_s))
+                        finalAngle = angle_s
                     } else {
-                        // In the arc
-                        const posRelativeToFold = -xPrime
-                        dx = posRelativeToFold - (-signedDist)
+                        const Phi = Math.PI * curlFactor
+                        const xArcEnd = RPrime * Math.sin(Phi)
+                        const zArcEnd = RPrime * (1 - Math.cos(Phi))
+                        const extra = signedDist - arcLimit
+                        // Part past the arc is straight along the tangent at Phi
+                        xRel = xArcEnd + extra * Math.cos(Phi)
+                        zRel = zArcEnd + extra * Math.sin(Phi)
+                        finalAngle = Phi
                     }
-
-                    bone.position.x = initialPos.x + dx * dirX
-                    bone.position.y = initialPos.y + dx * dirY
-                    bone.position.z = initialPos.z + dz
-
-                    const quat = new Quaternion()
-                    quat.setFromAxisAngle(rotationAxis, angle)
-                    bone.quaternion.copy(quat)
                 } else {
-                    // Flat zone
-                    bone.position.copy(initialPos)
-                    bone.quaternion.identity()
-                }
-            }
-        } else {
-            // SPIRAL MODE
-            const semicircles: Array<{
-                startDist: number
-                endDist: number
-                radius: number
-                cumulativeAngle: number
-                angleAmount: number
-                cumulativeX: number
-                cumulativeZ: number
-            }> = []
-
-            // Build spiral segments
-            const radiusDecay = 0.75
-            const minRadius = 0.05 * maxDistFromCenter
-            let currentDist = 0
-            let currentRadius = radiusWorld
-            let currentCumulativeAngle = 0
-            let currentCumulativeX = 0 // Relative to fold line
-            let currentCumulativeZ = 0
-            const maxTotalDist = 2 * maxDistFromCenter
-
-            // First semicircle (respects curlFactor)
-            const firstArc = Math.PI * currentRadius
-            semicircles.push({
-                startDist: 0,
-                endDist: firstArc,
-                radius: currentRadius,
-                cumulativeAngle: 0,
-                angleAmount: Math.PI * curlFactor,
-                cumulativeX: 0,
-                cumulativeZ: 0
-            })
-            
-            currentCumulativeAngle = Math.PI * curlFactor
-            currentDist = firstArc
-            
-            // Note: For spiral, position math is complex. Let's simplify:
-            // For independent bones, we'll just use the cumulative rotation and a simple displacement
-            while (currentDist < maxTotalDist && currentRadius >= minRadius) {
-                currentRadius *= radiusDecay
-                const arcLen = Math.PI * currentRadius
-                semicircles.push({
-                    startDist: currentDist,
-                    endDist: currentDist + arcLen,
-                    radius: currentRadius,
-                    cumulativeAngle: currentCumulativeAngle,
-                    angleAmount: Math.PI,
-                    cumulativeX: 0, // not used in simplified math
-                    cumulativeZ: 0
-                })
-                currentCumulativeAngle += Math.PI
-                currentDist += arcLen
-            }
-
-            for (let i = 0; i < bones.length; i++) {
-                const bone = bones[i]
-                const initialPos = initialPositions[i]
-                const distOnDir = initialPos.x * dirX + initialPos.y * dirY
-                const signedDist = foldOffset - distOnDir
-
-                if (signedDist > 0) {
-                    let angle = 0
-                    let found = false
-                    let currentR = radiusWorld
-
-                    for (const semi of semicircles) {
-                        if (signedDist >= semi.startDist && signedDist < semi.endDist) {
-                            const localT = (signedDist - semi.startDist) / (semi.endDist - semi.startDist)
-                            angle = semi.cumulativeAngle + localT * semi.angleAmount
-                            currentR = semi.radius
-                            found = true
-                            break
-                        }
-                    }
-
-                    if (!found && semicircles.length > 0) {
-                        const lastSemi = semicircles[semicircles.length - 1]
-                        angle = lastSemi.cumulativeAngle + lastSemi.angleAmount
-                        currentR = lastSemi.radius
-                    }
-
-                    // Simplified position for spiral: follow a primary arc then stay at center
-                    const xPrime = currentR * Math.sin(Math.min(angle, Math.PI))
-                    const zPrime = currentR * (1 - Math.cos(Math.min(angle, Math.PI)))
+                    // Spiral mode: tighten the radius as we wrap
+                    const angle_sp = signedDist * curlFactor / radiusWorld
+                    const spiralDecay = 0.85
+                    const effectiveR = radiusWorld * Math.pow(spiralDecay, angle_sp / Math.PI)
+                    const effectiveRPrime = effectiveR / curlFactor
                     
-                    let dx = 0
-                    let dz = zPrime
-                    if (angle > Math.PI) {
-                        dx = -currentR - (-signedDist)
-                        dz = 2 * currentR
-                    } else {
-                        dx = -xPrime - (-signedDist)
-                    }
-
-                    bone.position.x = initialPos.x + dx * dirX
-                    bone.position.y = initialPos.y + dx * dirY
-                    bone.position.z = initialPos.z + dz
-
-                    const quat = new Quaternion()
-                    quat.setFromAxisAngle(rotationAxis, angle)
-                    bone.quaternion.copy(quat)
-                } else {
-                    bone.position.copy(initialPos)
-                    bone.quaternion.identity()
+                    xRel = effectiveRPrime * Math.sin(angle_sp)
+                    zRel = effectiveRPrime * (1 - Math.cos(angle_sp))
+                    finalAngle = angle_sp
                 }
+
+                const dx = xRel - signedDist
+                bone.position.x = initialPos.x + dx * dirX
+                bone.position.y = initialPos.y + dx * dirY
+                bone.position.z = initialPos.z + zRel
+
+                const quat = new Quaternion()
+                quat.setFromAxisAngle(rotationAxis, -finalAngle)
+                bone.quaternion.copy(quat)
+            } else {
+                bone.position.copy(initialPos)
+                bone.quaternion.identity()
             }
         }
 
@@ -1518,22 +1394,13 @@ export default function Sticker({
                 debugLineRef.current.material.dispose()
             }
 
-            // foldOffset is distance along 'dir' from center
             const centerX = foldOffset * dirX
             const centerY = foldOffset * dirY
 
             const lineHalfLen = maxDistFromCenter * 1.5
             const points = [
-                new Vector3(
-                    centerX - axisX * lineHalfLen,
-                    centerY - axisY * lineHalfLen,
-                    0.1
-                ),
-                new Vector3(
-                    centerX + axisX * lineHalfLen,
-                    centerY + axisY * lineHalfLen,
-                    0.1
-                ),
+                new Vector3(centerX - axisX * lineHalfLen, centerY - axisY * lineHalfLen, 0.1),
+                new Vector3(centerX + axisX * lineHalfLen, centerY + axisY * lineHalfLen, 0.1),
             ]
             const lineGeometry = new BufferGeometry().setFromPoints(points)
             const lineMaterial = new LineBasicMaterial({ color: 0x0000ff })
