@@ -13,6 +13,7 @@ import {
     MeshStandardMaterial,
     Texture,
     Vector3,
+    Quaternion,
     Bone,
     Skeleton,
     Float32BufferAttribute,
@@ -104,6 +105,10 @@ const STICKER_DEPTH = 0.003
 
 // Canvas overscan - much larger for curl to extend beyond bounds
 const CANVAS_SCALE = 2.5 // Large transparent space around sticker
+
+// 2D Bone Grid settings
+const BONE_GRID_X = 150 // Number of bones along X axis
+const BONE_GRID_Y = 150 // Number of bones along Y axis
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -302,6 +307,7 @@ export default function Sticker({
     const meshRef = useRef<any>(null)
     const groupRef = useRef<any>(null) // Group for rotation around center
     const bonesRef = useRef<any[]>([])
+    const bonesInitialPositionsRef = useRef<any[]>([])
     const zoomProbeRef = useRef<HTMLDivElement>(null)
     const lastSizeRef = useRef({
         width: 0,
@@ -329,53 +335,74 @@ export default function Sticker({
     const isCanvas = RenderTarget.current() === RenderTarget.canvas
     const hasContent = !!resolvedImageUrl
 
-    const boneSegments = 150
-
     // ========================================================================
-    // CREATE STICKER GEOMETRY WITH SKINNING (like Reference.tsx)
+    // CREATE STICKER GEOMETRY WITH 2D BILINEAR SKINNING
     // ========================================================================
 
     const createStickerGeometry = useCallback(
-        (width: number, height: number, segments: number) => {
-            // Create box geometry like the book page - segments along X for bending
-            // Scale Y segments with X segments for smoother lighting (ratio ~15:1 like Reference)
-            // More Y segments = smoother lighting but slightly slower
-            const ySegments = Math.max(2, Math.floor(segments / 5))
+        (width: number, height: number, gridX: number, gridY: number) => {
+            // Create box geometry with enough segments for smooth bending
+            // More segments = smoother deformation
+            const xSegments = Math.max(gridX * 3, 60)
+            const ySegments = Math.max(gridY * 3, 40)
 
             const geometry = new BoxGeometry(
                 width,
                 height,
                 STICKER_DEPTH,
-                segments, // X segments for bending
-                ySegments, // Y segments scaled for smooth lighting
+                xSegments,
+                ySegments,
                 1
             )
 
-            // Translate so left edge is at origin (like book page)
-            geometry.translate(width / 2, 0, 0)
+            // Geometry is centered at origin (no translation needed for 2D grid approach)
+            // This keeps the sticker centered and simplifies fold line calculations
 
-            // Add skinning attributes (same as Reference.tsx)
+            // Add 2D bilinear skinning attributes
             const position = geometry.attributes.position
             const vertex = new Vector3()
             const skinIndexes: number[] = []
             const skinWeights: number[] = []
-            const segmentWidth = width / segments
+
+            // Bone grid spacing
+            const boneSpacingX = width / (gridX - 1)
+            const boneSpacingY = height / (gridY - 1)
 
             for (let i = 0; i < position.count; i++) {
                 vertex.fromBufferAttribute(position, i)
-                const x = vertex.x
 
-                // Calculate bone index based on X position
-                const skinIndex = Math.max(0, Math.floor(x / segmentWidth))
-                let skinWeight = (x % segmentWidth) / segmentWidth
+                // Convert vertex position to grid coordinates (0 to gridX-1, 0 to gridY-1)
+                // Geometry is centered, so vertex.x ranges from -width/2 to width/2
+                const normalizedX = (vertex.x + width / 2) / width // 0 to 1
+                const normalizedY = (vertex.y + height / 2) / height // 0 to 1
 
-                skinIndexes.push(
-                    skinIndex,
-                    Math.min(skinIndex + 1, segments),
-                    0,
-                    0
-                )
-                skinWeights.push(1 - skinWeight, skinWeight, 0, 0)
+                // Find the 4 nearest bones (bilinear interpolation)
+                const gridXPos = normalizedX * (gridX - 1)
+                const gridYPos = normalizedY * (gridY - 1)
+
+                const x0 = Math.floor(gridXPos)
+                const y0 = Math.floor(gridYPos)
+                const x1 = Math.min(x0 + 1, gridX - 1)
+                const y1 = Math.min(y0 + 1, gridY - 1)
+
+                // Bilinear interpolation weights
+                const tx = gridXPos - x0
+                const ty = gridYPos - y0
+
+                // Four bone indices in the grid (row-major order)
+                const idx00 = y0 * gridX + x0 // bottom-left
+                const idx10 = y0 * gridX + x1 // bottom-right
+                const idx01 = y1 * gridX + x0 // top-left
+                const idx11 = y1 * gridX + x1 // top-right
+
+                // Bilinear weights
+                const w00 = (1 - tx) * (1 - ty)
+                const w10 = tx * (1 - ty)
+                const w01 = (1 - tx) * ty
+                const w11 = tx * ty
+
+                skinIndexes.push(idx00, idx10, idx01, idx11)
+                skinWeights.push(w00, w10, w01, w11)
             }
 
             geometry.setAttribute(
@@ -388,7 +415,6 @@ export default function Sticker({
             )
 
             // Compute smooth normals AFTER skinning attributes to eliminate striations
-            // This makes lighting interpolate smoothly across segments
             geometry.computeVertexNormals()
 
             return geometry
@@ -464,22 +490,27 @@ export default function Sticker({
         // Create geometry with base dimensions (1:1 or image aspect ratio if known)
         // We'll scale the mesh uniformly to fit the container while maintaining aspect ratio
         const baseSize = Math.min(containerWidth, containerHeight)
-        const geometry = createStickerGeometry(baseSize, baseSize, boneSegments)
+        const geometry = createStickerGeometry(baseSize, baseSize, BONE_GRID_X, BONE_GRID_Y)
 
-        // Create bones along X axis (like book page)
+        // Create 2D bone grid
+        // Bones are independent (not parented) - each bone controls a region of the sticker
         const bones: any[] = []
-        const segmentWidth = width / boneSegments
+        const boneSpacingX = width / (BONE_GRID_X - 1)
+        const boneSpacingY = height / (BONE_GRID_Y - 1)
 
-        for (let i = 0; i <= boneSegments; i++) {
-            const bone = new Bone()
-            bone.position.x = i === 0 ? 0 : segmentWidth
-            if (i > 0) {
-                bones[i - 1].add(bone)
+        for (let y = 0; y < BONE_GRID_Y; y++) {
+            for (let x = 0; x < BONE_GRID_X; x++) {
+                const bone = new Bone()
+                // Position bones in a grid, centered at origin
+                bone.position.x = -width / 2 + x * boneSpacingX
+                bone.position.y = -height / 2 + y * boneSpacingY
+                bone.position.z = 0
+                bones.push(bone)
             }
-            bones.push(bone)
         }
 
         bonesRef.current = bones
+        bonesInitialPositionsRef.current = bones.map(b => b.position.clone())
         const skeleton = new Skeleton(bones)
 
         // Create materials for front and back
@@ -576,7 +607,8 @@ export default function Sticker({
 
         // Create skinned mesh
         const mesh = new SkinnedMesh(geometry, materials)
-        mesh.add(bones[0])
+        // Add all bones to the mesh (they are independent siblings)
+        bones.forEach(bone => mesh.add(bone))
         mesh.bind(skeleton)
         mesh.frustumCulled = false
 
@@ -607,23 +639,18 @@ export default function Sticker({
         }
         mesh.scale.set(initialScaleX, initialScaleY, 1)
 
-        // Create a group to rotate around the center
+        // Create a group (no rotation - image stays upright, curl direction is handled by bone rotation axis)
         const group = new Group()
         groupRef.current = group
 
-        // Position mesh so its center is at the group's origin
-        // The geometry is already translated by width/2, so we need to offset by -width/2 to center it
-        const meshWidth = baseSize * initialScaleX
-        mesh.position.set(-meshWidth / 2, 0, 0)
+        // Mesh is centered at origin (no position offset needed with 2D grid approach)
+        mesh.position.set(0, 0, 0)
 
         group.add(mesh)
         meshRef.current = mesh
         scene.add(group)
 
-        // Apply curl direction rotation (Z axis rotates the curl direction)
-        group.rotation.x = 0
-        group.rotation.y = 0
-        group.rotation.z = curlRotation * (Math.PI / 180)
+        // No group rotation - curlRotation is handled by rotating the fold line axis in updateBones()
 
         // Add lighting if shadows are enabled
         if (enableShadows) {
@@ -698,8 +725,7 @@ export default function Sticker({
         shadowPositionX,
         shadowPositionY,
         castShadowOpacity,
-        boneSegments,
-        curlRotation,
+        backColor,
     ])
 
     // ========================================================================
@@ -829,27 +855,32 @@ export default function Sticker({
                 }
             }
 
-            // Create new geometry with correct aspect ratio
+            // Create new geometry with correct aspect ratio using 2D bone grid
             const geometry = createStickerGeometry(
                 contained.width,
                 contained.height,
-                boneSegments
+                BONE_GRID_X,
+                BONE_GRID_Y
             )
 
-            // Recreate bones
+            // Recreate 2D bone grid
             const bones: any[] = []
-            const segmentWidth = contained.width / boneSegments
+            const boneSpacingX = contained.width / (BONE_GRID_X - 1)
+            const boneSpacingY = contained.height / (BONE_GRID_Y - 1)
 
-            for (let i = 0; i <= boneSegments; i++) {
-                const bone = new Bone()
-                bone.position.x = i === 0 ? 0 : segmentWidth
-                if (i > 0) {
-                    bones[i - 1].add(bone)
+            for (let y = 0; y < BONE_GRID_Y; y++) {
+                for (let x = 0; x < BONE_GRID_X; x++) {
+                    const bone = new Bone()
+                    // Position bones in a grid, centered at origin
+                    bone.position.x = -contained.width / 2 + x * boneSpacingX
+                    bone.position.y = -contained.height / 2 + y * boneSpacingY
+                    bone.position.z = 0
+                    bones.push(bone)
                 }
-                bones.push(bone)
             }
 
             bonesRef.current = bones
+            bonesInitialPositionsRef.current = bones.map(b => b.position.clone())
             const skeleton = new Skeleton(bones)
 
             // Recreate materials (reuse existing material setup logic from setupScene)
@@ -936,7 +967,8 @@ export default function Sticker({
 
             // Create new mesh
             const mesh = new SkinnedMesh(geometry, materials)
-            mesh.add(bones[0])
+            // Add all bones to the mesh
+            bones.forEach(bone => mesh.add(bone))
             mesh.bind(skeleton)
             mesh.frustumCulled = false
 
@@ -945,10 +977,10 @@ export default function Sticker({
                 mesh.receiveShadow = false
             }
 
-            // Position mesh so its center is at the group's origin
-            mesh.position.set(-contained.width / 2, 0, 0)
+            // Mesh is centered at origin (no position offset needed with 2D grid approach)
+            mesh.position.set(0, 0, 0)
 
-            // Create or get group for rotation around center
+            // Create or get group (no rotation - image stays upright)
             let group = groupRef.current
             if (!group) {
                 group = new Group()
@@ -966,10 +998,7 @@ export default function Sticker({
 
             group.add(mesh)
 
-            // Apply curl direction rotation (Z axis rotates the curl direction)
-            group.rotation.x = 0
-            group.rotation.y = 0
-            group.rotation.z = curlRotation * (Math.PI / 180)
+            // No group rotation - curlRotation is handled by bone rotation axis in updateBones()
 
             meshRef.current = mesh
 
@@ -1090,12 +1119,10 @@ export default function Sticker({
         },
         [
             createStickerGeometry,
-            boneSegments,
             backColor,
             enableShadows,
             createBackTexture,
             renderFrame,
-            curlRotation,
         ]
     )
 
@@ -1127,15 +1154,10 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Update bones and rotation after mesh is recreated
+                // Update bones after mesh is recreated
                 setTimeout(() => {
                     if (meshRef.current && groupRef.current) {
-                        // Apply curl direction rotation
-                        groupRef.current.rotation.x = 0
-                        groupRef.current.rotation.y = 0
-                        groupRef.current.rotation.z =
-                            curlRotation * (Math.PI / 180)
-
+                        // No group rotation - curlRotation is handled by bone rotation axis
                         if (bonesRef.current.length > 0) {
                             updateBones()
                         }
@@ -1263,163 +1285,223 @@ export default function Sticker({
         img.src = resolvedImageUrl
     }, [
         resolvedImageUrl,
-        boneSegments,
         backColor,
         createBackTexture,
         renderFrame,
-        curlRotation,
+        recreateMeshWithAspectRatio,
     ])
+    
+    // Note: updateBones is called in setTimeout inside loadTexture, so it doesn't need to be a dependency
+    // It will be available at runtime when the setTimeout executes
 
     // ========================================================================
-    // BONE ANIMATION (like book page flip)
+    // BONE ANIMATION (2D Bone Grid with Fold Line)
+    // ========================================================================
+
+    // ========================================================================
+    // BONE ANIMATION (2D Bone Grid with Fold Line)
     // ========================================================================
 
     const updateBones = useCallback(() => {
-        if (!bonesRef.current.length || !meshRef.current) return
+        if (!bonesRef.current.length || !meshRef.current || !bonesInitialPositionsRef.current.length) return
 
         const bones = bonesRef.current
+        const initialPositions = bonesInitialPositionsRef.current
         const curlFactor = animatedCurlRef.current.amount // 0 to 1, scales the curl
         const r = internalRadiusRef.current // normalized radius
 
-        // Arc length of a semicircle = π * r (normalized to sticker length)
-        const arcLength = Math.PI * r
-        const semicircleEnd = Math.min(curlStart + arcLength, 1) // end of semicircle section
+        const mesh = meshRef.current
+        const width = mesh.geometry.parameters.width * mesh.scale.x
+        const height = mesh.geometry.parameters.height * mesh.scale.y
+
+        // Calculate diagonal length for normalization
+        const diagonalLength = Math.sqrt(width * width + height * height)
+        const maxDistFromCenter = diagonalLength / 2
+
+        // curlRotation = 0°: Curl from left to right (fold line moves from left to right)
+        // curlRotation = 90°: Curl from bottom to top
+        const curlRotationRad = (curlRotation * Math.PI) / 180
+        
+        // Direction of the curl movement (perpendicular to the fold line)
+        const dirX = Math.cos(curlRotationRad)
+        const dirY = Math.sin(curlRotationRad)
+        
+        // Fold line axis (direction along the fold line)
+        const axisX = -dirY
+        const axisY = dirX
+        const rotationAxis = new Vector3(axisX, axisY, 0).normalize()
+
+        // foldOffset: position of the fold line along the 'dir' axis
+        // curlStart=0: fold line at the starting edge (no curling)
+        // curlStart=1: fold line at the far edge (fully curled)
+        const foldOffset = -maxDistFromCenter + curlStart * 2 * maxDistFromCenter
+
+        // Semicircle radius in world units
+        const radiusWorld = r * maxDistFromCenter
 
         if (curlMode === "semicircle") {
-            // SEMICIRCLE MODE: flat → semicircle → flat
-            // Define the three sections:
-            // 1. Flat from 0 to curlStart
-            // 2. Curved from curlStart to curlStart + arcLength
-            // 3. Flat from curlStart + arcLength to 1
-            const curlEnd = semicircleEnd
-
-            // Count bones in the curved section for uniform rotation distribution
-            let bonesInCurve = 0
-            for (let i = 0; i < bones.length; i++) {
-                const t = i / (bones.length - 1)
-                if (t >= curlStart && t < curlEnd) bonesInCurve++
-            }
-
-            // For a semicircle with uniform curvature, each bone rotates by the same angle
-            // Total rotation = π (180°), distributed evenly across curved bones
-            const perBoneRotation =
-                bonesInCurve > 0 ? (Math.PI * curlFactor) / bonesInCurve : 0
+            const arcLengthWorld = Math.PI * radiusWorld
 
             for (let i = 0; i < bones.length; i++) {
                 const bone = bones[i]
-                const t = i / (bones.length - 1)
+                const initialPos = initialPositions[i]
 
-                if (t < curlStart || t >= curlEnd) {
-                    // Flat sections: no rotation
-                    bone.rotation.y = 0
+                // Project initial position onto the curl direction
+                const distOnDir = initialPos.x * dirX + initialPos.y * dirY
+                
+                // distance behind the fold line (positive = curled)
+                const signedDist = foldOffset - distOnDir
+
+                if (signedDist > 0) {
+                    // Bone is in the curled zone
+                    const angle = Math.min(signedDist / arcLengthWorld, 1) * Math.PI * curlFactor
+
+                    // Calculate new position using arc math
+                    // x' = how far the bone is from the fold line along the 'dir' axis
+                    // z' = height above plane
+                    const xPrime = radiusWorld * Math.sin(angle)
+                    const zPrime = radiusWorld * (1 - Math.cos(angle))
+
+                    // If angle has reached PI, the remaining distance stays flat on the "back"
+                    let dx = 0
+                    let dz = zPrime
+                    
+                    if (signedDist > arcLengthWorld) {
+                        const extraDist = signedDist - arcLengthWorld
+                        // Points past the semicircle are flat on top, but flipped
+                        // They move BACKWARDS along 'dir' from the end of the arc
+                        dx = -radiusWorld - extraDist - (-signedDist) // Wait.
+                        // Position relative to fold line:
+                        // Before fold: -signedDist along 'dir'
+                        // After fold: at angle PI, position is -radiusWorld along 'dir', Z is 2*radiusWorld
+                        // Past PI: position moves further -extraDist along 'dir'
+                        const posRelativeToFold = -extraDist
+                        dx = posRelativeToFold - (-signedDist)
+                        dz = 2 * radiusWorld
+                    } else {
+                        // In the arc
+                        const posRelativeToFold = -xPrime
+                        dx = posRelativeToFold - (-signedDist)
+                    }
+
+                    bone.position.x = initialPos.x + dx * dirX
+                    bone.position.y = initialPos.y + dx * dirY
+                    bone.position.z = initialPos.z + dz
+
+                    const quat = new Quaternion()
+                    quat.setFromAxisAngle(rotationAxis, angle)
+                    bone.quaternion.copy(quat)
                 } else {
-                    // Curved section: uniform rotation per bone = perfect circle
-                    bone.rotation.y = -perBoneRotation
+                    // Flat zone
+                    bone.position.copy(initialPos)
+                    bone.quaternion.identity()
                 }
             }
         } else {
-            // SPIRAL MODE: flat → first semicircle (controlled by curl & radius) → additional semicircles with decreasing radii
-            // First semicircle is IDENTICAL to semicircle mode (curl and radius apply only to it)
-            // Additional semicircles fill remaining space with progressively smaller radii
-
-            // First semicircle (same as semicircle mode)
-            const firstArcLength = Math.PI * r
-            const firstSemicircleEnd = Math.min(curlStart + firstArcLength, 1)
-
-            // Build list of all semicircles
+            // SPIRAL MODE
             const semicircles: Array<{
-                start: number
-                end: number
+                startDist: number
+                endDist: number
                 radius: number
-                isFirst: boolean
+                cumulativeAngle: number
+                angleAmount: number
+                cumulativeX: number
+                cumulativeZ: number
             }> = []
 
-            // Add first semicircle (controlled by curl amount)
+            // Build spiral segments
+            const radiusDecay = 0.75
+            const minRadius = 0.05 * maxDistFromCenter
+            let currentDist = 0
+            let currentRadius = radiusWorld
+            let currentCumulativeAngle = 0
+            let currentCumulativeX = 0 // Relative to fold line
+            let currentCumulativeZ = 0
+            const maxTotalDist = 2 * maxDistFromCenter
+
+            // First semicircle (respects curlFactor)
+            const firstArc = Math.PI * currentRadius
             semicircles.push({
-                start: curlStart,
-                end: firstSemicircleEnd,
-                radius: r,
-                isFirst: true,
+                startDist: 0,
+                endDist: firstArc,
+                radius: currentRadius,
+                cumulativeAngle: 0,
+                angleAmount: Math.PI * curlFactor,
+                cumulativeX: 0,
+                cumulativeZ: 0
             })
-
-            // Add additional semicircles with decreasing radii to fill remaining space
-            const radiusDecay = 0.75 // Each subsequent semicircle has 90% of previous radius
-            const minRadius = 0.1 // Minimum radius to prevent infinite loops
-
-            let currentPos = firstSemicircleEnd
-            let currentRadius = r * radiusDecay
-
-            while (currentPos < 1 && currentRadius >= minRadius) {
-                const arcLength = Math.PI * currentRadius
-                const endPos = Math.min(currentPos + arcLength, 1)
-
-                semicircles.push({
-                    start: currentPos,
-                    end: endPos,
-                    radius: currentRadius,
-                    isFirst: false,
-                })
-
-                currentPos = endPos
+            
+            currentCumulativeAngle = Math.PI * curlFactor
+            currentDist = firstArc
+            
+            // Note: For spiral, position math is complex. Let's simplify:
+            // For independent bones, we'll just use the cumulative rotation and a simple displacement
+            while (currentDist < maxTotalDist && currentRadius >= minRadius) {
                 currentRadius *= radiusDecay
+                const arcLen = Math.PI * currentRadius
+                semicircles.push({
+                    startDist: currentDist,
+                    endDist: currentDist + arcLen,
+                    radius: currentRadius,
+                    cumulativeAngle: currentCumulativeAngle,
+                    angleAmount: Math.PI,
+                    cumulativeX: 0, // not used in simplified math
+                    cumulativeZ: 0
+                })
+                currentCumulativeAngle += Math.PI
+                currentDist += arcLen
             }
 
-            // Calculate cumulative rotation for each semicircle
-            let cumulativeRotation = 0
-            const semicircleData = semicircles.map((semicircle, index) => {
-                const rotationForThisSemicircle = semicircle.isFirst
-                    ? Math.PI * curlFactor // First semicircle respects curl amount
-                    : Math.PI // Subsequent semicircles are always full π rotation
-
-                const data = {
-                    ...semicircle,
-                    cumulativeRotationStart: cumulativeRotation,
-                    rotationAmount: rotationForThisSemicircle,
-                }
-
-                cumulativeRotation += rotationForThisSemicircle
-                return data
-            })
-
-            // Apply rotations
             for (let i = 0; i < bones.length; i++) {
                 const bone = bones[i]
-                const t = i / (bones.length - 1)
+                const initialPos = initialPositions[i]
+                const distOnDir = initialPos.x * dirX + initialPos.y * dirY
+                const signedDist = foldOffset - distOnDir
 
-                if (t < curlStart) {
-                    // Flat section: no rotation
-                    bone.rotation.y = 0
-                } else {
-                    // Find which semicircle this bone belongs to
+                if (signedDist > 0) {
+                    let angle = 0
                     let found = false
-                    for (const semicircle of semicircleData) {
-                        if (t >= semicircle.start && t < semicircle.end) {
-                            // Position within this semicircle [0, 1]
-                            const localT =
-                                (t - semicircle.start) /
-                                (semicircle.end - semicircle.start)
+                    let currentR = radiusWorld
 
-                            // Rotation = cumulative rotation from previous semicircles + progress through current one
-                            const rotationInSemicircle =
-                                localT * semicircle.rotationAmount
-                            bone.rotation.y = -(
-                                semicircle.cumulativeRotationStart +
-                                rotationInSemicircle
-                            )
+                    for (const semi of semicircles) {
+                        if (signedDist >= semi.startDist && signedDist < semi.endDist) {
+                            const localT = (signedDist - semi.startDist) / (semi.endDist - semi.startDist)
+                            angle = semi.cumulativeAngle + localT * semi.angleAmount
+                            currentR = semi.radius
                             found = true
                             break
                         }
                     }
 
-                    if (!found && semicircleData.length > 0) {
-                        // Past all semicircles: use final cumulative rotation
-                        const lastSemicircle =
-                            semicircleData[semicircleData.length - 1]
-                        bone.rotation.y = -(
-                            lastSemicircle.cumulativeRotationStart +
-                            lastSemicircle.rotationAmount
-                        )
+                    if (!found && semicircles.length > 0) {
+                        const lastSemi = semicircles[semicircles.length - 1]
+                        angle = lastSemi.cumulativeAngle + lastSemi.angleAmount
+                        currentR = lastSemi.radius
                     }
+
+                    // Simplified position for spiral: follow a primary arc then stay at center
+                    const xPrime = currentR * Math.sin(Math.min(angle, Math.PI))
+                    const zPrime = currentR * (1 - Math.cos(Math.min(angle, Math.PI)))
+                    
+                    let dx = 0
+                    let dz = zPrime
+                    if (angle > Math.PI) {
+                        dx = -currentR - (-signedDist)
+                        dz = 2 * currentR
+                    } else {
+                        dx = -xPrime - (-signedDist)
+                    }
+
+                    bone.position.x = initialPos.x + dx * dirX
+                    bone.position.y = initialPos.y + dx * dirY
+                    bone.position.z = initialPos.z + dz
+
+                    const quat = new Quaternion()
+                    quat.setFromAxisAngle(rotationAxis, angle)
+                    bone.quaternion.copy(quat)
+                } else {
+                    bone.position.copy(initialPos)
+                    bone.quaternion.identity()
                 }
             }
         }
@@ -1428,24 +1510,30 @@ export default function Sticker({
             meshRef.current.skeleton.update()
         }
 
-        // Draw debug line at curlStart position
+        // Draw debug line along the fold line
         if (groupRef.current) {
-            const mesh = meshRef.current
-            const width = mesh.geometry.parameters.width * mesh.scale.x
-            const height = mesh.geometry.parameters.height * mesh.scale.y
-            const xPosition = -width / 2 + curlStart * width
-
-            // Remove old line if exists
             if (debugLineRef.current) {
                 groupRef.current.remove(debugLineRef.current)
                 debugLineRef.current.geometry.dispose()
                 debugLineRef.current.material.dispose()
             }
 
-            // Create new line
+            // foldOffset is distance along 'dir' from center
+            const centerX = foldOffset * dirX
+            const centerY = foldOffset * dirY
+
+            const lineHalfLen = maxDistFromCenter * 1.5
             const points = [
-                new Vector3(xPosition, -height / 2, 0.1),
-                new Vector3(xPosition, height / 2, 0.1),
+                new Vector3(
+                    centerX - axisX * lineHalfLen,
+                    centerY - axisY * lineHalfLen,
+                    0.1
+                ),
+                new Vector3(
+                    centerX + axisX * lineHalfLen,
+                    centerY + axisY * lineHalfLen,
+                    0.1
+                ),
             ]
             const lineGeometry = new BufferGeometry().setFromPoints(points)
             const lineMaterial = new LineBasicMaterial({ color: 0x0000ff })
@@ -1455,7 +1543,7 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [curlStart, curlMode, renderFrame, curlAmount])
+    }, [curlStart, curlMode, curlRotation, renderFrame, curlAmount])
 
     // ========================================================================
     // HOVER ANIMATION WITH GSAP
@@ -1654,9 +1742,8 @@ export default function Sticker({
                 const uniformScale =
                     Math.min(containerWidth, containerHeight) / baseSize
                 meshRef.current.scale.set(uniformScale, uniformScale, 1)
-                // Update mesh position to keep center at group origin
-                const meshWidth = baseSize * uniformScale
-                meshRef.current.position.set(-meshWidth / 2, 0, 0)
+                // Mesh stays centered at origin (no position offset with 2D grid)
+                meshRef.current.position.set(0, 0, 0)
             }
 
             // Update shadow camera if shadows are enabled
@@ -1669,7 +1756,6 @@ export default function Sticker({
             }
         },
         [
-            boneSegments,
             enableShadows,
             recreateMeshWithAspectRatio,
             updateBones,
@@ -1748,12 +1834,11 @@ export default function Sticker({
         updateBones()
     }, [curlStart, curlMode, updateBones])
 
-    // Update curl direction rotation when curlRotation changes
+    // Update bones when curlRotation changes (fold line direction)
     useEffect(() => {
-        if (!groupRef.current) return
-        groupRef.current.rotation.z = curlRotation * (Math.PI / 180)
-        renderFrame()
-    }, [curlRotation, renderFrame])
+        if (!meshRef.current || !bonesRef.current.length) return
+        updateBones()
+    }, [curlRotation, updateBones])
 
     // Update back color - recreate back texture when backColor changes
     useEffect(() => {
