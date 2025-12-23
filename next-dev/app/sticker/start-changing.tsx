@@ -707,11 +707,18 @@ export default function Sticker({
             directionalLight.shadow.mapSize.height = 4096
             directionalLight.shadow.camera.near = 1
             directionalLight.shadow.camera.far = 2000
-            // Use container dimensions for shadow camera (not contained dimensions)
-            directionalLight.shadow.camera.left = -containerWidth * 2
-            directionalLight.shadow.camera.right = containerWidth * 2
-            directionalLight.shadow.camera.top = containerHeight * 2
-            directionalLight.shadow.camera.bottom = -containerHeight * 2
+            // Shadow camera bounds need to account for:
+            // 1. Container size
+            // 2. Light position offset (shadowPositionX/Y can be -500 to 500)
+            // 3. Shadow projection area (shadows extend in the direction opposite to light)
+            // 4. Canvas scale (CANVAS_SCALE = 1.2 for shadow padding)
+            const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+            const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
+            const shadowOffsetY = shadowPositionY * 0.3
+            directionalLight.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
+            directionalLight.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
+            directionalLight.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
+            directionalLight.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
             // Very small bias to prevent acne while keeping shadow visible
             directionalLight.shadow.bias = -0.00001
             directionalLight.shadow.radius = 8 // Softer shadow edges
@@ -727,10 +734,10 @@ export default function Sticker({
                 color: 0x000000, // Black shadow
             })
 
-            // Create plane sized to component (slightly larger for shadow overflow)
-            const planeWidth = Math.max(containerWidth, width) * 1.5
-            const planeHeight = Math.max(containerHeight, height) * 1.5
-            const planeGeometry = new PlaneGeometry(planeWidth, planeHeight)
+            // Create plane sized to cover shadow camera area (larger to prevent clipping)
+            // Match shadow camera bounds to ensure all shadows are captured
+            const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+            const planeGeometry = new PlaneGeometry(planeSize, planeSize)
             const backgroundPlane = new Mesh(planeGeometry, shadowMat)
             backgroundPlane.receiveShadow = true
             // Position very slightly behind sticker
@@ -1810,10 +1817,14 @@ export default function Sticker({
 
             // Update shadow camera if shadows are enabled
             if (enableShadows && lightRef.current) {
-                lightRef.current.shadow.camera.left = -containerWidth * 2
-                lightRef.current.shadow.camera.right = containerWidth * 2
-                lightRef.current.shadow.camera.top = containerHeight * 2
-                lightRef.current.shadow.camera.bottom = -containerHeight * 2
+                // Match shadow camera bounds from setupScene
+                const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+                const shadowOffsetX = shadowPositionX * 0.3
+                const shadowOffsetY = shadowPositionY * 0.3
+                lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
+                lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
                 lightRef.current.shadow.camera.updateProjectionMatrix()
             }
         },
@@ -2060,13 +2071,26 @@ export default function Sticker({
 
     // Update shadow position when settings change
     useEffect(() => {
-        if (!enableShadows || !lightRef.current) return
+        if (!enableShadows || !lightRef.current || !containerRef.current) return
 
         lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
         lightRef.current.shadow.mapSize.width = 4096
         lightRef.current.shadow.mapSize.height = 4096
         lightRef.current.shadow.bias = -0.00001
         lightRef.current.shadow.radius = 8
+        
+        // Update shadow camera bounds to account for new light position
+        const container = containerRef.current
+        const containerWidth = container.clientWidth || container.offsetWidth || 1
+        const containerHeight = container.clientHeight || container.offsetHeight || 1
+        const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+        const shadowOffsetX = shadowPositionX * 0.3
+        const shadowOffsetY = shadowPositionY * 0.3
+        lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
+        lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
+        lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
+        lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+        lightRef.current.shadow.camera.updateProjectionMatrix()
         lightRef.current.shadow.needsUpdate = true
 
         renderFrame()
@@ -2098,12 +2122,24 @@ export default function Sticker({
 
     // Update cast shadow opacity when it changes
     useEffect(() => {
-        if (!enableShadows || !backgroundPlaneRef.current) return
+        if (!enableShadows || !backgroundPlaneRef.current || !containerRef.current) return
 
         const material = backgroundPlaneRef.current.material as any
         // ShadowMaterial: adjust opacity based on castShadowOpacity
         material.opacity = castShadowOpacity
         material.needsUpdate = true
+
+        // Update plane size to match shadow camera bounds
+        const container = containerRef.current
+        const containerWidth = container.clientWidth || container.offsetWidth || 1
+        const containerHeight = container.clientHeight || container.offsetHeight || 1
+        const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+        
+        // Dispose old geometry and create new one with updated size
+        const oldGeometry = backgroundPlaneRef.current.geometry
+        const newGeometry = new PlaneGeometry(planeSize, planeSize)
+        backgroundPlaneRef.current.geometry = newGeometry
+        oldGeometry.dispose()
 
         renderFrame()
     }, [enableShadows, castShadowOpacity, renderFrame])
@@ -2308,6 +2344,15 @@ addPropertyControls(Sticker, {
         type: ControlType.ResponsiveImage,
         title: "Image",
     },
+    curlMode: {
+        type: ControlType.Enum,
+        title: "Mode",
+        options: ["semicircle", "spiral"],
+        optionTitles: ["Semicircle", "Spiral"],
+        defaultValue: "spiral",
+        displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
+    },
     unrollMode:{
         type:ControlType.Enum,
         title:"Unroll Mode",
@@ -2350,15 +2395,7 @@ addPropertyControls(Sticker, {
         defaultValue: 0,
         unit: "°",
     },
-    curlMode: {
-        type: ControlType.Enum,
-        title: "Mode",
-        options: ["semicircle", "spiral"],
-        optionTitles: ["Semicircle", "Spiral"],
-        defaultValue: "spiral",
-        displaySegmentedControl: true,
-        segmentedControlDirection: "vertical",
-    },
+    
     enableShadows: {
         type: ControlType.Boolean,
         title: "Ligthing",
