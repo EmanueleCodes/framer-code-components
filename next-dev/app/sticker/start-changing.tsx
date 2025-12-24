@@ -1196,6 +1196,10 @@ export default function Sticker({
             renderFrame,
         ]
     )
+    
+    // Expose a function to trigger resize after mesh recreation
+    // This is needed to ensure responsiveness when image loads/changes
+    const triggerResizeRef = useRef<(() => void) | null>(null)
 
     // ========================================================================
     // TEXTURE LOADING
@@ -1227,7 +1231,7 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Wait for next frame to ensure mesh is fully initialized before updating bones
+                // Wait for next frame to ensure mesh is fully initialized before updating bones and triggering resize
                 // This prevents race conditions where skeleton isn't ready yet
                 requestAnimationFrame(() => {
                     // Check if component unmounted during the frame delay
@@ -1246,6 +1250,12 @@ export default function Sticker({
                         } catch (error) {
                             // Silently handle initialization errors
                         }
+                    }
+                    
+                    // Trigger resize to ensure mesh is properly sized for current container
+                    // This is critical for responsiveness when image first loads or changes
+                    if (triggerResizeRef.current && containerRef.current) {
+                        triggerResizeRef.current()
                     }
                 })
             }
@@ -1342,6 +1352,13 @@ export default function Sticker({
             // Always render after textures are applied (only if still mounted)
             if (!imageLoadAbortRef.current && meshRef.current) {
                 renderFrame()
+                // Trigger resize after textures are applied to ensure proper sizing
+                // This ensures component is responsive immediately after image loads
+                requestAnimationFrame(() => {
+                    if (!imageLoadAbortRef.current && triggerResizeRef.current && containerRef.current) {
+                        triggerResizeRef.current()
+                    }
+                })
             }
         }
         img.onerror = () => {
@@ -1408,8 +1425,11 @@ export default function Sticker({
         const r = mapInteralRadiusToUIValue(animatedCurlRadiusRef.current.radius)
 
         const mesh = meshRef.current
-        const width = mesh.geometry.parameters.width * mesh.scale.x
-        const height = mesh.geometry.parameters.height * mesh.scale.y
+        // Use BASE geometry dimensions (without scale) for curl calculations
+        // This ensures curl appearance stays visually consistent when component is resized
+        // The scale is automatically applied through bone positions being children of the scaled mesh
+        const width = mesh.geometry.parameters.width
+        const height = mesh.geometry.parameters.height
         
         // Use ref to always get current curlRotation value (avoids stale closure issues in Canvas mode)
         const curlRotationRad = (curlRotationRef.current * Math.PI) / 180
@@ -1914,6 +1934,14 @@ export default function Sticker({
             renderFrame()
             // Load texture asynchronously - it will trigger another render when done
             loadTexture()
+            
+            // Trigger initial resize to ensure proper sizing
+            // This ensures component is responsive from the start
+            requestAnimationFrame(() => {
+                if (!imageLoadAbortRef.current && triggerResizeRef.current && containerRef.current) {
+                    triggerResizeRef.current()
+                }
+            })
         }
 
         return () => {
@@ -2145,31 +2173,36 @@ export default function Sticker({
         renderFrame()
     }, [backColor, createBackTexture, renderFrame])
 
-    // Update shadow position when settings change
+    // Update shadow position when settings change (debounced to prevent lag)
     useEffect(() => {
-        if (!lightRef.current || !containerRef.current) return
+        // Debounce shadow position updates to improve performance when dragging sliders
+        const timeoutId = setTimeout(() => {
+            if (!lightRef.current || !containerRef.current) return
 
-        lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
-        lightRef.current.shadow.mapSize.width = 4096
-        lightRef.current.shadow.mapSize.height = 4096
-        lightRef.current.shadow.bias = -0.00001
-        lightRef.current.shadow.radius = 8
+            lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
+            lightRef.current.shadow.mapSize.width = 4096
+            lightRef.current.shadow.mapSize.height = 4096
+            lightRef.current.shadow.bias = -0.00001
+            lightRef.current.shadow.radius = 8
+            
+            // Update shadow camera bounds to account for new light position
+            const container = containerRef.current
+            const containerWidth = container.clientWidth || container.offsetWidth || 1
+            const containerHeight = container.clientHeight || container.offsetHeight || 1
+            const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+            const shadowOffsetX = shadowPositionX * 0.3
+            const shadowOffsetY = shadowPositionY * 0.3
+            lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.updateProjectionMatrix()
+            lightRef.current.shadow.needsUpdate = true
+
+            renderFrame()
+        }, 50) // 50ms debounce to prevent lag when dragging sliders
         
-        // Update shadow camera bounds to account for new light position
-        const container = containerRef.current
-        const containerWidth = container.clientWidth || container.offsetWidth || 1
-        const containerHeight = container.clientHeight || container.offsetHeight || 1
-        const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
-        const shadowOffsetX = shadowPositionX * 0.3
-        const shadowOffsetY = shadowPositionY * 0.3
-        lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
-        lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
-        lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
-        lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
-        lightRef.current.shadow.camera.updateProjectionMatrix()
-        lightRef.current.shadow.needsUpdate = true
-
-        renderFrame()
+        return () => clearTimeout(timeoutId)
     }, [shadowPositionX, shadowPositionY, renderFrame])
 
     // Update shadow intensity (darkness) - hardcoded to 1
@@ -2194,31 +2227,37 @@ export default function Sticker({
         renderFrame()
     }, [renderFrame])
 
-    // Update cast shadow opacity when it changes
+    // Update cast shadow opacity when it changes (debounced to prevent lag)
     useEffect(() => {
-        if (!backgroundPlaneRef.current || !containerRef.current) return
+        // Debounce shadow opacity updates to improve performance when dragging sliders
+        const timeoutId = setTimeout(() => {
+            if (!backgroundPlaneRef.current || !containerRef.current) return
 
-        const material = backgroundPlaneRef.current.material as any
-        // ShadowMaterial: adjust opacity based on castShadowOpacity
-        material.opacity = castShadowOpacity
-        material.needsUpdate = true
+            const material = backgroundPlaneRef.current.material as any
+            // ShadowMaterial: adjust opacity based on castShadowOpacity
+            material.opacity = castShadowOpacity
+            material.needsUpdate = true
 
-        // Update plane size to match shadow camera bounds
-        const container = containerRef.current
-        const containerWidth = container.clientWidth || container.offsetWidth || 1
-        const containerHeight = container.clientHeight || container.offsetHeight || 1
-        const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+            // Update plane size to match shadow camera bounds
+            const container = containerRef.current
+            const containerWidth = container.clientWidth || container.offsetWidth || 1
+            const containerHeight = container.clientHeight || container.offsetHeight || 1
+            const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+            
+            // Dispose old geometry and create new one with updated size
+            const oldGeometry = backgroundPlaneRef.current.geometry
+            const newGeometry = new PlaneGeometry(planeSize, planeSize)
+            backgroundPlaneRef.current.geometry = newGeometry
+            oldGeometry.dispose()
+
+            renderFrame()
+        }, 50) // 50ms debounce to prevent lag when dragging sliders
         
-        // Dispose old geometry and create new one with updated size
-        const oldGeometry = backgroundPlaneRef.current.geometry
-        const newGeometry = new PlaneGeometry(planeSize, planeSize)
-        backgroundPlaneRef.current.geometry = newGeometry
-        oldGeometry.dispose()
-
-        renderFrame()
+        return () => clearTimeout(timeoutId)
     }, [castShadowOpacity, renderFrame])
 
     // Size monitoring - optimized for Framer canvas
+    // Re-run when image changes to ensure responsiveness
     useEffect(() => {
         const container = containerRef.current
         if (!container) return
@@ -2235,7 +2274,7 @@ export default function Sticker({
                     Math.abs(width - last.width) > 0.5 ||
                     Math.abs(height - last.height) > 0.5
                 
-                if (sizeChanged) {
+                if (sizeChanged || !last.width || !last.height) {
                     // In preview/live mode, update immediately
                     // In canvas mode, only update if scene is ready
                     if (!isCanvas || (rendererRef.current && cameraRef.current && meshRef.current)) {
@@ -2247,6 +2286,9 @@ export default function Sticker({
                 }
             }
         }
+        
+        // Store handleResize in ref so it can be called from image load callback
+        triggerResizeRef.current = handleResize
 
         // Initial resize - delay to ensure scene is set up
         // In preview mode, the scene might not be ready immediately
@@ -2263,6 +2305,8 @@ export default function Sticker({
                 }
             }
         }
+        // Trigger immediately, then also schedule delayed attempts
+        handleResize()
         const initialResizeTimeout = setTimeout(attemptResize, isCanvas ? 0 : 50)
 
         // Use requestAnimationFrame-based monitoring for canvas mode (like interactive-thermal3.tsx)
@@ -2331,8 +2375,9 @@ export default function Sticker({
         return () => {
             clearTimeout(initialResizeTimeout)
             resizeCleanup()
+            triggerResizeRef.current = null
         }
-    }, [updateSize, renderFrame, isCanvas])
+    }, [updateSize, renderFrame, isCanvas, hasContent, resolvedImageUrl])
 
     // ========================================================================
     // RENDER
@@ -2435,7 +2480,7 @@ addPropertyControls(Sticker, {
                 type:ControlType.Enum,
                 title:"Show",
                 options:["initial","final"],
-                optionTitles:["1 – Initial","2 – Final"],
+                optionTitles:["Initial","Final"],
                 defaultValue:"final",
                 displaySegmentedControl:true,
                 segmentedControlDirection:"vertical",
@@ -2443,7 +2488,7 @@ addPropertyControls(Sticker, {
             },
             curlAmountStart:{
                 type: ControlType.Number,
-                title: "Curl 1",
+                title: "Curl Start",
                 min: 0,
                 max: 1,
                 step: 0.05,
@@ -2451,7 +2496,7 @@ addPropertyControls(Sticker, {
             },
             curlRadiusStart:{
                 type: ControlType.Number,
-                title: "Radius 1",
+                title: "Radius Start",
                 min: 0,
                 max: 1,
                 step: 0.05,
@@ -2459,7 +2504,7 @@ addPropertyControls(Sticker, {
             },
             curlStartStart:{
                 type: ControlType.Number,
-                title: "Start 1",
+                title: "Start Start",
                 min: 0,
                 max: 1,
                 step: 0.05,
@@ -2467,7 +2512,7 @@ addPropertyControls(Sticker, {
             },
             curlAmountEnd:{
                 type: ControlType.Number,
-                title: "Curl 2",
+                title: "Curl Final",
                 min: 0,
                 max: 1,
                 step: 0.05,
@@ -2476,7 +2521,7 @@ addPropertyControls(Sticker, {
             
             curlRadiusEnd:{
                 type: ControlType.Number,
-                title: "Radius 2",
+                title: "Radius Final",
                 min: 0,
                 max: 1,
                 step: 0.05,
@@ -2485,7 +2530,7 @@ addPropertyControls(Sticker, {
         
             curlStartEnd:{
                 type: ControlType.Number,
-                title: "Start 2",
+                title: "Start Final",
                 min: 0,
                 max: 1,
                 step: 0.05,
