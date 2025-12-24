@@ -328,6 +328,7 @@ export default function Sticker({
     })
     const animationFrameRef = useRef<number | null>(null)
     const loadedImageRef = useRef<HTMLImageElement | null>(null)
+    const imageLoadAbortRef = useRef<boolean>(false) // Track if component is unmounting
     // Detect environment
     const resolvedImageUrl = resolveImageSource(image)
     const isCanvas = RenderTarget.current() === RenderTarget.canvas
@@ -494,6 +495,16 @@ export default function Sticker({
         camera.lookAt(0, 0, 0)
         cameraRef.current = camera
 
+        // Dispose old renderer if it exists (prevent WebGL context accumulation)
+        if (rendererRef.current) {
+            try {
+                rendererRef.current.dispose()
+            } catch (error) {
+                // Silently handle disposal errors
+            }
+            rendererRef.current = null
+        }
+        
         // Create renderer
         const renderer = new WebGLRenderer({
             canvas: canvasRef.current,
@@ -602,14 +613,23 @@ export default function Sticker({
 
         // Create skinned mesh
         const mesh = new SkinnedMesh(geometry, materials)
-        // Add all bones to the mesh (they are independent siblings)
-        bones.forEach(bone => mesh.add(bone))
-        mesh.bind(skeleton)
         mesh.frustumCulled = false
         
-        // Force computation of world matrices for all bones BEFORE skeleton update
-        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        // Add all bones to the mesh and initialize their matrices
+        bones.forEach(bone => {
+            mesh.add(bone)
+            // Initialize bone matrix to ensure it's ready for skeleton
+            bone.updateMatrixWorld(true)
+        })
+        
+        // Bind skeleton AFTER bones are added and initialized
+        mesh.bind(skeleton)
+        
+        // Update mesh and skeleton matrices
         mesh.updateMatrixWorld(true)
+        
+        // Update skeleton AFTER mesh matrix world is computed
+        // This ensures all bone matrices are ready
         skeleton.update()
 
         // Enable shadows (always enabled)
@@ -750,16 +770,40 @@ export default function Sticker({
         if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
             return
         
+        // Check if WebGL context is lost
+        const gl = rendererRef.current.getContext()
+        if (!gl || gl.isContextLost()) {
+            return
+        }
+        
         // Ensure world matrices and skeleton are updated before rendering
         // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
-        if (meshRef.current) {
-            meshRef.current.updateMatrixWorld(true)
-            if (meshRef.current.skeleton) {
+        if (meshRef.current && meshRef.current.skeleton) {
+            try {
+                meshRef.current.updateMatrixWorld(true)
+                // Ensure all bones have valid matrices before skeleton update
+                const bones = meshRef.current.skeleton.bones
+                if (bones && bones.length > 0) {
+                    // Update bone matrices individually to ensure they're ready
+                    bones.forEach((bone: any) => {
+                        if (bone && typeof bone.updateMatrixWorld === 'function') {
+                            bone.updateMatrixWorld(true)
+                        }
+                    })
+                }
                 meshRef.current.skeleton.update()
+            } catch (error) {
+                // Silently handle errors during render to prevent console spam
+                // This can happen during component unmount or context loss
+                return
             }
         }
         
-        rendererRef.current.render(sceneRef.current, cameraRef.current)
+        try {
+            rendererRef.current.render(sceneRef.current, cameraRef.current)
+        } catch (error) {
+            // Silently handle render errors (context loss, etc.)
+        }
     }, [])
 
     // ========================================================================
@@ -869,7 +913,8 @@ export default function Sticker({
             // Preserve textures before disposing materials
             let preservedTextures: { front?: any; back?: any; side?: any } = {}
             if (meshRef.current) {
-                const oldMaterials = meshRef.current.material as any[]
+                const oldMesh = meshRef.current
+                const oldMaterials = oldMesh.material as any[]
                 if (Array.isArray(oldMaterials)) {
                     // Preserve textures before disposal
                     if (oldMaterials[4]?.map) preservedTextures.front = oldMaterials[4].map
@@ -877,10 +922,20 @@ export default function Sticker({
                     if (oldMaterials[0]?.map) preservedTextures.side = oldMaterials[0].map
                 }
                 
-                sceneRef.current.remove(meshRef.current)
-                meshRef.current.geometry.dispose()
-                if (Array.isArray(meshRef.current.material)) {
-                    meshRef.current.material.forEach((mat: any) => {
+                // Remove from scene and group first
+                if (groupRef.current) {
+                    groupRef.current.remove(oldMesh)
+                }
+                sceneRef.current.remove(oldMesh)
+                
+                // Dispose geometry
+                if (oldMesh.geometry) {
+                    oldMesh.geometry.dispose()
+                }
+                
+                // Dispose materials and textures
+                if (Array.isArray(oldMesh.material)) {
+                    oldMesh.material.forEach((mat: any) => {
                         // Don't dispose textures - they're preserved
                         if (mat.map && mat.map !== preservedTextures.front && 
                             mat.map !== preservedTextures.back && 
@@ -889,8 +944,17 @@ export default function Sticker({
                         }
                         mat.dispose()
                     })
-                } else {
-                    meshRef.current.material.dispose()
+                } else if (oldMesh.material) {
+                    oldMesh.material.dispose()
+                }
+                
+                // Clear old skeleton bones (they're children of the mesh)
+                if (oldMesh.skeleton) {
+                    oldMesh.skeleton.bones.forEach((bone: any) => {
+                        if (bone.parent) {
+                            bone.parent.remove(bone)
+                        }
+                    })
                 }
             }
 
@@ -972,14 +1036,23 @@ export default function Sticker({
 
             // Create new mesh
             const mesh = new SkinnedMesh(geometry, materials)
-            // Add all bones to the mesh
-            bones.forEach(bone => mesh.add(bone))
-            mesh.bind(skeleton)
             mesh.frustumCulled = false
             
-            // Force computation of world matrices for all bones BEFORE skeleton update
-            // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+            // Add all bones to the mesh and initialize their matrices
+            bones.forEach(bone => {
+                mesh.add(bone)
+                // Initialize bone matrix to ensure it's ready for skeleton
+                bone.updateMatrixWorld(true)
+            })
+            
+            // Bind skeleton AFTER bones are added and initialized
+            mesh.bind(skeleton)
+            
+            // Update mesh and skeleton matrices
             mesh.updateMatrixWorld(true)
+            
+            // Update skeleton AFTER mesh matrix world is computed
+            // This ensures all bone matrices are ready
             skeleton.update()
 
             // Shadows always enabled
@@ -1135,12 +1208,14 @@ export default function Sticker({
         }
 
         setTextureLoaded(false)
+        imageLoadAbortRef.current = false // Reset abort flag
 
         const img = new Image()
         img.crossOrigin = "anonymous"
         img.onload = () => {
-            if (!meshRef.current?.material) return
-
+            // Check if component was unmounted during load
+            if (imageLoadAbortRef.current || !meshRef.current) return
+            
             // Store reference for border color updates
             loadedImageRef.current = img
 
@@ -1152,19 +1227,31 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Update bones immediately after mesh is recreated (no setTimeout)
-                if (meshRef.current && groupRef.current) {
-                    // Ensure skeleton is initialized before updating bones
-                    if (meshRef.current.skeleton) {
-                        meshRef.current.skeleton.update()
+                // Wait for next frame to ensure mesh is fully initialized before updating bones
+                // This prevents race conditions where skeleton isn't ready yet
+                requestAnimationFrame(() => {
+                    // Check if component unmounted during the frame delay
+                    if (imageLoadAbortRef.current) return
+                    
+                    if (meshRef.current && groupRef.current && meshRef.current.skeleton) {
+                        try {
+                            // Ensure skeleton is fully initialized before updating bones
+                            const bones = meshRef.current.skeleton.bones
+                            if (bones && bones.length > 0 && bonesRef.current.length > 0) {
+                                // Double-check bones are ready
+                                meshRef.current.updateMatrixWorld(true)
+                                meshRef.current.skeleton.update()
+                                updateBones()
+                            }
+                        } catch (error) {
+                            // Silently handle initialization errors
+                        }
                     }
-                    // No group rotation - curlRotation is handled by bone rotation axis
-                    if (bonesRef.current.length > 0) {
-                        updateBones()
-                    }
-                    // Render will happen at end of loadTexture after textures are applied
-                }
+                })
             }
+            
+            // Check mesh is still valid after potential recreation
+            if (!meshRef.current?.material) return
 
             // Create main texture for front face
             const texture = new Texture(img)
@@ -1252,14 +1339,20 @@ export default function Sticker({
             }
 
             setTextureLoaded(true)
-            // Always render after textures are applied
-            renderFrame()
+            // Always render after textures are applied (only if still mounted)
+            if (!imageLoadAbortRef.current && meshRef.current) {
+                renderFrame()
+            }
         }
         img.onerror = () => {
-            console.error("Texture loading error")
+            if (!imageLoadAbortRef.current) {
+                console.error("Texture loading error")
+            }
             setTextureLoaded(false)
-            // Still render even if texture fails (will show back color)
-            renderFrame()
+            // Still render even if texture fails (will show back color) - only if still mounted
+            if (!imageLoadAbortRef.current && meshRef.current) {
+                renderFrame()
+            }
         }
         img.src = resolvedImageUrl
     }, [
@@ -1284,12 +1377,28 @@ export default function Sticker({
     const updateBones = useCallback(() => {
         if (!bonesRef.current.length || !meshRef.current || !bonesInitialPositionsRef.current.length) return
         
-        // Force computation of world matrices BEFORE modifying bones
-        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
-        // especially when curlRotation != 0 and bones have quaternion rotations
-        meshRef.current.updateMatrixWorld(true)
-        if (meshRef.current.skeleton) {
+        // Check if skeleton exists and has valid bones
+        if (!meshRef.current.skeleton) return
+        const skeletonBones = meshRef.current.skeleton.bones
+        if (!skeletonBones || skeletonBones.length === 0) return
+        
+        try {
+            // Force computation of world matrices BEFORE modifying bones
+            // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+            // especially when curlRotation != 0 and bones have quaternion rotations
+            meshRef.current.updateMatrixWorld(true)
+            
+            // Ensure all bones have valid matrices before skeleton update
+            skeletonBones.forEach((bone: any) => {
+                if (bone && typeof bone.updateMatrixWorld === 'function') {
+                    bone.updateMatrixWorld(true)
+                }
+            })
+            
             meshRef.current.skeleton.update()
+        } catch (error) {
+            // Silently handle errors during bone updates
+            return
         }
 
         const bones = bonesRef.current
@@ -1743,22 +1852,35 @@ export default function Sticker({
     // Initialize scene
     useEffect(() => {
         if (!hasContent) {
+            imageLoadAbortRef.current = true // Mark as aborting
             if (rendererRef.current) {
-                rendererRef.current.dispose()
+                try {
+                    rendererRef.current.dispose()
+                } catch (error) {
+                    // Silently handle disposal errors
+                }
                 rendererRef.current = null
             }
             if (sceneRef.current) {
-                sceneRef.current.clear()
+                try {
+                    sceneRef.current.clear()
+                } catch (error) {
+                    // Silently handle cleanup errors
+                }
                 sceneRef.current = null
             }
             meshRef.current = null
             bonesRef.current = []
+            bonesInitialPositionsRef.current = []
             lightRef.current = null
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
             imageAspectRatioRef.current = null
+            loadedImageRef.current = null
             return
         }
+        
+        imageLoadAbortRef.current = false // Reset abort flag when content is available
 
         const sceneSetup = setupScene()
         
@@ -1797,18 +1919,95 @@ export default function Sticker({
         return () => {
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
             }
+            
+            // Dispose mesh and all its resources
+            if (meshRef.current) {
+                const oldMesh = meshRef.current
+                
+                // Remove from scene and group
+                if (groupRef.current) {
+                    groupRef.current.remove(oldMesh)
+                }
+                if (sceneRef.current) {
+                    sceneRef.current.remove(oldMesh)
+                }
+                
+                // Dispose geometry
+                if (oldMesh.geometry) {
+                    oldMesh.geometry.dispose()
+                }
+                
+                // Dispose materials and textures
+                if (Array.isArray(oldMesh.material)) {
+                    oldMesh.material.forEach((mat: any) => {
+                        if (mat.map) mat.map.dispose()
+                        mat.dispose()
+                    })
+                } else if (oldMesh.material) {
+                    if ((oldMesh.material as any).map) {
+                        (oldMesh.material as any).map.dispose()
+                    }
+                    oldMesh.material.dispose()
+                }
+                
+                // Clear skeleton bones
+                if (oldMesh.skeleton) {
+                    oldMesh.skeleton.bones.forEach((bone: any) => {
+                        if (bone && bone.parent) {
+                            bone.parent.remove(bone)
+                        }
+                    })
+                }
+                
+                meshRef.current = null
+            }
+            
+            // Clear bones refs
+            bonesRef.current = []
+            bonesInitialPositionsRef.current = []
+            groupRef.current = null
+            
+            // Dispose renderer (this also disposes of its WebGL context)
             if (rendererRef.current) {
-                rendererRef.current.dispose()
+                try {
+                    rendererRef.current.dispose()
+                } catch (error) {
+                    // Silently handle disposal errors
+                }
                 rendererRef.current = null
             }
+            
+            // Clear scene
             if (sceneRef.current) {
-                sceneRef.current.clear()
+                try {
+                    // Remove all remaining objects
+                    while (sceneRef.current.children.length > 0) {
+                        const child = sceneRef.current.children[0]
+                        sceneRef.current.remove(child)
+                        // Dispose if it has dispose method
+                        if ((child as any).dispose && typeof (child as any).dispose === 'function') {
+                            (child as any).dispose()
+                        }
+                    }
+                    sceneRef.current.clear()
+                } catch (error) {
+                    // Silently handle cleanup errors
+                }
                 sceneRef.current = null
             }
+            
+            // Clear refs
+            cameraRef.current = null
             lightRef.current = null
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
+            loadedImageRef.current = null
+            imageAspectRatioRef.current = null
+            
+            // Mark image loading as aborted to prevent callbacks from running after unmount
+            imageLoadAbortRef.current = true
         }
     }, [hasContent, setupScene, loadTexture, updateBones, renderFrame])
 
