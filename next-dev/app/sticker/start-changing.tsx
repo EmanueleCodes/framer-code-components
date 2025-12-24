@@ -64,16 +64,20 @@ interface StickerProps {
     // Main content
     image?: ResponsiveImageSource
     // Sticker settings
-    unrollMode: "change-curl" | "move-start" | "hybrid"
-    curlAmount: number
-    curlRadius: number
-    curlStart: number
     curlRotation: number // Curl direction rotation in degrees (0-360)
     curlMode: "semicircle" | "spiral"
     backColor: string
-    // Lighting and shadows
-    enableShadows: boolean
-    shadowIntensity: number
+    // Animation settings (start = initial state, end = hover state)
+    animation: {
+        show: "initial" | "final" // Which state to show in Canvas
+        curlAmountStart: number
+        curlAmountEnd: number
+        curlRadiusStart: number
+        curlRadiusEnd: number
+        curlStartStart: number
+        curlStartEnd: number
+    }
+    // Lighting and shadows (shadows always enabled with intensity = 1)
     animationDuration: number
     shadowPositionX: number
     shadowPositionY: number
@@ -284,16 +288,20 @@ function makeBackTextureViewConsistent(tex: any, frontTex?: any): any {
 
 export default function Sticker({
     image,
-    curlAmount = 0.05,
-    curlRadius = 1,
-    curlStart = 0.45,
+
     curlRotation = 0, // 0° = curl from left, 90° = from bottom, 180° = from right, 270° = from top
     curlMode = "spiral",
-    unrollMode = "change-curl",
+    animation = {
+        show: "initial",
+        curlAmountStart: 0.6,
+        curlAmountEnd: 0.6,
+        curlRadiusStart: 0.15,
+        curlRadiusEnd: 1,
+        curlStartStart: 0.5,
+        curlStartEnd: 1,
+    },
     backColor = "rgba(255, 255, 255, 1)",
-    enableShadows = true,
     animationDuration = 0.6,
-    shadowIntensity = 1,
     shadowPositionX = -400,
     shadowPositionY = 0,
     shadowBgColor = "rgba(0, 0, 0, 0)",
@@ -320,13 +328,28 @@ export default function Sticker({
     })
     const animationFrameRef = useRef<number | null>(null)
     const loadedImageRef = useRef<HTMLImageElement | null>(null)
-    const animatedCurlRef = useRef({ amount: curlAmount }) // Animated curl value for GSAP
-    const animatedCurlStartRef = useRef({ start: curlStart }) // Animated curlStart value for GSAP
+    // Detect environment
+    const resolvedImageUrl = resolveImageSource(image)
+    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+    
+    // In Canvas mode, use the show prop to determine initial state
+    // In preview/live mode, always start with initial values
+    const shouldShowFinal = isCanvas && animation.show === "final"
+    
+    // Initialize animated refs with appropriate values based on show prop (Canvas) or start values (preview/live)
+    const animatedCurlRef = useRef({ 
+        amount: shouldShowFinal ? animation.curlAmountEnd : animation.curlAmountStart 
+    }) // Animated curl value for GSAP
+    const animatedCurlStartRef = useRef({ 
+        start: shouldShowFinal ? animation.curlStartEnd : animation.curlStartStart 
+    }) // Animated curlStart value for GSAP
+    const animatedCurlRadiusRef = useRef({ 
+        radius: shouldShowFinal ? animation.curlRadiusEnd : animation.curlRadiusStart 
+    }) // Animated curlRadius value for GSAP
     const isHoveringRef = useRef(false) // Track if currently hovering over sticker
     const lightRef = useRef<any>(null)
     const ambientLightRef = useRef<any>(null)
     const backgroundPlaneRef = useRef<any>(null)
-    const internalRadiusRef = useRef(mapInteralRadiusToUIValue(curlRadius))
     const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
@@ -334,10 +357,6 @@ export default function Sticker({
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
-
-    // Detect environment
-    const resolvedImageUrl = resolveImageSource(image)
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
     const hasContent = !!resolvedImageUrl
 
     // ========================================================================
@@ -488,11 +507,9 @@ export default function Sticker({
         )
         renderer.setPixelRatio(1)
 
-        // Enable high-quality shadow maps if shadows are enabled
-        if (enableShadows) {
-            renderer.shadowMap.enabled = true
-            renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
-        }
+        // Enable high-quality shadow maps (shadows always enabled)
+        renderer.shadowMap.enabled = true
+        renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
 
         rendererRef.current = renderer
 
@@ -535,78 +552,42 @@ export default function Sticker({
         const resolvedBackColor = resolveTokenColor(backColor)
         const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-        let frontMaterial: any
-        let backMaterial: any
-        let sideMaterial: any
+        // All faces use MeshStandardMaterial with smooth roughness (shadows always enabled)
+        const frontMaterial = new MeshStandardMaterial({
+            color: 0xffffff,
+            side: FrontSide,
+            transparent: true,
+            roughness: 0.2, // Higher roughness = more diffuse, reduces contrast
+            metalness: 0.4,
+            // Add emissive to reduce lighting dependency and striations
+            emissive: 0xffffff,
+            emissiveIntensity: 0.8, // High emissive to reduce lighting contrast between segments
+        })
 
-        if (enableShadows) {
-            // All faces use MeshStandardMaterial with smooth roughness (like Reference.tsx)
-            frontMaterial = new MeshStandardMaterial({
-                color: 0xffffff,
-                side: FrontSide,
-                transparent: true,
-                roughness: 0.2, // Higher roughness = more diffuse, reduces contrast
-                metalness: 0.4,
-                // Add emissive to reduce lighting dependency and striations
-                emissive: 0xffffff,
-                emissiveIntensity: 0.8, // High emissive to reduce lighting contrast between segments
-            })
+        // Back face: transparent with image texture, but darker with shadow overlay
+        const backMaterial = new MeshStandardMaterial({
+            color: 0xffffff, // White base to show image colors
+            side: FrontSide,
+            transparent: true,
+            roughness: 0.3, // Slightly rougher for subtle shadow effect
+            metalness: 0.0,
+            // Lower emissive than front to allow shadow/lighting overlay
+            emissive: 0xffffff,
+            emissiveIntensity: 0.3, // Lower emissive = more affected by lighting/shadows
+        })
 
-            // Back face: transparent with image texture, but darker with shadow overlay
-            backMaterial = new MeshStandardMaterial({
-                color: 0xffffff, // White base to show image colors
-                side: FrontSide,
-                transparent: true,
-                roughness: 0.3, // Slightly rougher for subtle shadow effect
-                metalness: 0.0,
-                // Lower emissive than front to allow shadow/lighting overlay
-                emissive: 0xffffff,
-                emissiveIntensity: 0.3, // Lower emissive = more affected by lighting/shadows
-            })
-
-            // Side material: will use front texture when loaded (blends with front image), back color as fallback
-            sideMaterial = new MeshStandardMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                transparent: true,
-                opacity: 1, // Visible with back color until front texture loads
-                roughness: 0.1,
-                metalness: 0.0,
-            })
-        } else {
-            // No shadows: use MeshBasicMaterial for all (simpler, no lighting needed)
-            frontMaterial = new MeshBasicMaterial({
-                color: 0xffffff,
-                side: FrontSide,
-                transparent: true,
-            })
-
-            // Back material: use backColor directly (will be set via texture or color in loadTexture)
-            backMaterial = new MeshBasicMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                side: FrontSide,
-                transparent: true,
-                opacity: backColorRgba.a,
-            })
-
-            // Side material: will use front texture when loaded (blends with front image), back color as fallback
-            sideMaterial = new MeshBasicMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                transparent: true,
-                opacity: 1, // Visible with back color until front texture loads
-            })
-        }
+        // Side material: will use front texture when loaded (blends with front image), back color as fallback
+        const sideMaterial = new MeshStandardMaterial({
+            color: new Color(
+                backColorRgba.r,
+                backColorRgba.g,
+                backColorRgba.b
+            ),
+            transparent: true,
+            opacity: 1, // Visible with back color until front texture loads
+            roughness: 0.1,
+            metalness: 0.0,
+        })
 
         // Materials array for BoxGeometry faces
         // Order: +X, -X, +Y, -Y, +Z (front), -Z (back)
@@ -631,13 +612,11 @@ export default function Sticker({
         mesh.updateMatrixWorld(true)
         skeleton.update()
 
-        // Enable shadows if configured
+        // Enable shadows (always enabled)
         // According to Three.js forum: setting both castShadow and receiveShadow can cause acne
         // The sticker casts shadows onto the background plane, but doesn't need to receive them
-        if (enableShadows) {
-            mesh.castShadow = true
-            mesh.receiveShadow = false // Don't receive shadows to avoid acne
-        }
+        mesh.castShadow = true
+        mesh.receiveShadow = false // Don't receive shadows to avoid acne
 
         // Calculate initial scale to fit container with aspect ratio (if image aspect ratio is known)
         // Otherwise, use container dimensions
@@ -678,77 +657,76 @@ export default function Sticker({
 
         // No group rotation - curlRotation is handled by rotating the fold line axis in updateBones()
 
-        // Add lighting if shadows are enabled
-        if (enableShadows) {
-            // Calculate initial light intensities based on shadowIntensity
-            // High shadowIntensity = strong directional, low ambient = dark shadows
-            // At shadowIntensity = 1, make shadows very dramatic (strong directional, low ambient)
-            const initialLightIntensity = 0.3 + shadowIntensity * 1.7 // 0.3 to 2.0 (more dramatic at max)
-            const initialAmbientIntensity = Math.max(
-                1.0 - shadowIntensity * 0.6,
-                0.4
-            ) // 1.0 to 0.4 (lower at max for drama)
+        // Add lighting (shadows always enabled with intensity = 1)
+        // Calculate initial light intensities for shadowIntensity = 1
+        // High shadowIntensity = strong directional, low ambient = dark shadows
+        // At shadowIntensity = 1, make shadows very dramatic (strong directional, low ambient)
+        const shadowIntensity = 1 // Hardcoded
+        const initialLightIntensity = 0.3 + shadowIntensity * 1.7 // 0.3 to 2.0 (more dramatic at max)
+        const initialAmbientIntensity = Math.max(
+            1.0 - shadowIntensity * 0.6,
+            0.4
+        ) // 1.0 to 0.4 (lower at max for drama)
 
-            // Ambient light for overall scene illumination
-            // Lower ambient allows shadows to be more visible
-            const ambientLight = new AmbientLight(
-                0xffffff,
-                initialAmbientIntensity
-            )
-            ambientLightRef.current = ambientLight
-            scene.add(ambientLight)
+        // Ambient light for overall scene illumination
+        // Lower ambient allows shadows to be more visible
+        const ambientLight = new AmbientLight(
+            0xffffff,
+            initialAmbientIntensity
+        )
+        ambientLightRef.current = ambientLight
+        scene.add(ambientLight)
 
-            // Directional light for shadows (reduced intensity to minimize band contrast)
-            const directionalLight = new DirectionalLight(
-                0xffffff,
-                initialLightIntensity
-            )
-            directionalLight.position.set(shadowPositionX, shadowPositionY, 400)
-            directionalLight.castShadow = true
+        // Directional light for shadows (reduced intensity to minimize band contrast)
+        const directionalLight = new DirectionalLight(
+            0xffffff,
+            initialLightIntensity
+        )
+        directionalLight.position.set(shadowPositionX, shadowPositionY, 400)
+        directionalLight.castShadow = true
 
-            // Configure shadow map for high-quality, soft shadows
-            directionalLight.shadow.mapSize.width = 4096
-            directionalLight.shadow.mapSize.height = 4096
-            directionalLight.shadow.camera.near = 1
-            directionalLight.shadow.camera.far = 2000
-            // Shadow camera bounds need to account for:
-            // 1. Container size
-            // 2. Light position offset (shadowPositionX/Y can be -500 to 500)
-            // 3. Shadow projection area (shadows extend in the direction opposite to light)
-            // 4. Canvas scale (CANVAS_SCALE = 1.2 for shadow padding)
-            const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
-            const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
-            const shadowOffsetY = shadowPositionY * 0.3
-            directionalLight.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
-            directionalLight.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
-            directionalLight.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
-            directionalLight.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
-            // Very small bias to prevent acne while keeping shadow visible
-            directionalLight.shadow.bias = -0.00001
-            directionalLight.shadow.radius = 8 // Softer shadow edges
+        // Configure shadow map for high-quality, soft shadows
+        directionalLight.shadow.mapSize.width = 4096
+        directionalLight.shadow.mapSize.height = 4096
+        directionalLight.shadow.camera.near = 1
+        directionalLight.shadow.camera.far = 2000
+        // Shadow camera bounds need to account for:
+        // 1. Container size
+        // 2. Light position offset (shadowPositionX/Y can be -500 to 500)
+        // 3. Shadow projection area (shadows extend in the direction opposite to light)
+        // 4. Canvas scale (CANVAS_SCALE = 1.2 for shadow padding)
+        const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+        const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
+        const shadowOffsetY = shadowPositionY * 0.3
+        directionalLight.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
+        directionalLight.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+        // Very small bias to prevent acne while keeping shadow visible
+        directionalLight.shadow.bias = -0.00001
+        directionalLight.shadow.radius = 8 // Softer shadow edges
 
-            lightRef.current = directionalLight
-            scene.add(directionalLight)
+        lightRef.current = directionalLight
+        scene.add(directionalLight)
 
-            // Add background plane to receive shadows
-            // Add shadow-only plane (transparent background with visible shadow)
-            // ShadowMaterial shows ONLY shadows on transparent background
-            const shadowMat = new ShadowMaterial({
-                opacity: castShadowOpacity,
-                color: 0x000000, // Black shadow
-            })
+        // Add background plane to receive shadows
+        // Add shadow-only plane (transparent background with visible shadow)
+        // ShadowMaterial shows ONLY shadows on transparent background
+        const shadowMat = new ShadowMaterial({
+            opacity: castShadowOpacity,
+            color: 0x000000, // Black shadow
+        })
 
-            // Create plane sized to cover shadow camera area (larger to prevent clipping)
-            // Match shadow camera bounds to ensure all shadows are captured
-            const planeSize = Math.max(containerWidth, containerHeight) * 3.5
-            const planeGeometry = new PlaneGeometry(planeSize, planeSize)
-            const backgroundPlane = new Mesh(planeGeometry, shadowMat)
-            backgroundPlane.receiveShadow = true
-            // Position very slightly behind sticker
-            backgroundPlane.position.set(0, 0, -1)
-            backgroundPlaneRef.current = backgroundPlane
-            scene.add(backgroundPlane)
-        }
+        // Create plane sized to cover shadow camera area (larger to prevent clipping)
+        // Match shadow camera bounds to ensure all shadows are captured
+        const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+        const planeGeometry = new PlaneGeometry(planeSize, planeSize)
+        const backgroundPlane = new Mesh(planeGeometry, shadowMat)
+        backgroundPlane.receiveShadow = true
+        // Position very slightly behind sticker
+        backgroundPlane.position.set(0, 0, -1)
+        backgroundPlaneRef.current = backgroundPlane
+        scene.add(backgroundPlane)
 
         // Initial render to show mesh immediately (even without texture)
         if (renderer && scene && camera) {
@@ -758,8 +736,6 @@ export default function Sticker({
         return { scene, camera, renderer, mesh, bones }
     }, [
         createStickerGeometry,
-        enableShadows,
-        shadowIntensity,
         shadowPositionX,
         shadowPositionY,
         castShadowOpacity,
@@ -859,7 +835,7 @@ export default function Sticker({
 
             return backTexture
         },
-        [enableShadows]
+        []
     )
 
     // ========================================================================
@@ -951,73 +927,39 @@ export default function Sticker({
             const resolvedBackColor = resolveTokenColor(backColor)
             const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-            let frontMaterial: any
-            let backMaterial: any
-            let sideMaterial: any
+            // All materials use MeshStandardMaterial (shadows always enabled)
+            const frontMaterial = new MeshStandardMaterial({
+                color: 0xffffff,
+                side: FrontSide,
+                transparent: true,
+                roughness: 0.2,
+                metalness: 0.4,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.8,
+            })
 
-            if (enableShadows) {
-                frontMaterial = new MeshStandardMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                    roughness: 0.2,
-                    metalness: 0.4,
-                    emissive: 0xffffff,
-                    emissiveIntensity: 0.8,
-                })
+            const backMaterial = new MeshStandardMaterial({
+                color: 0xffffff,
+                side: FrontSide,
+                transparent: true,
+                roughness: 0.3,
+                metalness: 0.0,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.3,
+            })
 
-                backMaterial = new MeshStandardMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                    roughness: 0.3,
-                    metalness: 0.0,
-                    emissive: 0xffffff,
-                    emissiveIntensity: 0.3,
-                })
-
-                // Side material: will use front texture when loaded (blends with front image), back color as fallback
-                sideMaterial = new MeshStandardMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    transparent: true,
-                    opacity: 1, // Visible with back color until front texture loads
-                    roughness: 0.1,
-                    metalness: 0.0,
-                })
-            } else {
-                frontMaterial = new MeshBasicMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                })
-
-                // Back material: use backColor directly (will be set via texture or color in loadTexture)
-                backMaterial = new MeshBasicMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    side: FrontSide,
-                    transparent: true,
-                    opacity: backColorRgba.a,
-                })
-
-                // Side material: will use front texture when loaded (blends with front image), back color as fallback
-                sideMaterial = new MeshBasicMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    transparent: true,
-                    opacity: 1, // Visible with back color until front texture loads
-                })
-            }
+            // Side material: will use front texture when loaded (blends with front image), back color as fallback
+            const sideMaterial = new MeshStandardMaterial({
+                color: new Color(
+                    backColorRgba.r,
+                    backColorRgba.g,
+                    backColorRgba.b
+                ),
+                transparent: true,
+                opacity: 1, // Visible with back color until front texture loads
+                roughness: 0.1,
+                metalness: 0.0,
+            })
 
             const materials = [
                 sideMaterial,
@@ -1040,10 +982,9 @@ export default function Sticker({
             mesh.updateMatrixWorld(true)
             skeleton.update()
 
-            if (enableShadows) {
-                mesh.castShadow = true
-                mesh.receiveShadow = false
-            }
+            // Shadows always enabled
+            mesh.castShadow = true
+            mesh.receiveShadow = false
 
             // Mesh is centered at origin (no position offset needed with 2D grid approach)
             mesh.position.set(0, 0, 0)
@@ -1121,47 +1062,23 @@ export default function Sticker({
                         const backColorRgba =
                             parseColorToRgba(resolvedBackColor)
 
-                        if (enableShadows) {
-                            // With shadows: use texture (MeshStandardMaterial)
-                            if (backTexture) {
-                                meshMaterials[5].map = backTexture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
+                        // With shadows: use texture (MeshStandardMaterial)
+                        if (backTexture) {
+                            meshMaterials[5].map = backTexture
+                            meshMaterials[5].transparent = true
+                            meshMaterials[5].alphaTest = 0.01
 
-                                // When using front texture (0% opacity), match front material properties for identical appearance
-                                if (
-                                    backColorRgba.a <= 0 &&
-                                    meshMaterials[5].emissiveIntensity !==
-                                        undefined
-                                ) {
-                                    meshMaterials[5].emissiveMap = texture
-                                    meshMaterials[5].emissive = new Color(
-                                        0xffffff
-                                    )
-                                    meshMaterials[5].emissiveIntensity = 0.8 // Match front material
-                                }
-                            }
-                        } else {
-                            // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                            if (backTexture && backColorRgba.a > 0) {
-                                // Use texture for blended effect
-                                meshMaterials[5].map = backTexture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
-                            } else if (backColorRgba.a <= 0) {
-                                // Fully transparent: use front texture
-                                meshMaterials[5].map = texture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
-                            } else {
-                                // Fully opaque: use flat color (no texture needed)
-                                meshMaterials[5].map = null
-                                meshMaterials[5].color.setRGB(
-                                    backColorRgba.r,
-                                    backColorRgba.g,
-                                    backColorRgba.b
+                            // When using front texture (0% opacity), match front material properties for identical appearance
+                            if (
+                                backColorRgba.a <= 0 &&
+                                meshMaterials[5].emissiveIntensity !==
+                                    undefined
+                            ) {
+                                meshMaterials[5].emissiveMap = texture
+                                meshMaterials[5].emissive = new Color(
+                                    0xffffff
                                 )
-                                meshMaterials[5].opacity = backColorRgba.a
+                                meshMaterials[5].emissiveIntensity = 0.8 // Match front material
                             }
                         }
 
@@ -1202,7 +1119,6 @@ export default function Sticker({
         [
             createStickerGeometry,
             backColor,
-            enableShadows,
             createBackTexture,
             renderFrame,
         ]
@@ -1293,44 +1209,20 @@ export default function Sticker({
                     const resolvedBackColor = resolveTokenColor(backColor)
                     const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-                    if (enableShadows) {
-                        // With shadows: use texture (MeshStandardMaterial)
-                        if (backTexture) {
-                            materials[5].map = backTexture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
+                    // With shadows: use texture (MeshStandardMaterial)
+                    if (backTexture) {
+                        materials[5].map = backTexture
+                        materials[5].transparent = true
+                        materials[5].alphaTest = 0.01
 
-                            // When using front texture (0% opacity), match front material properties for identical appearance
-                            if (
-                                backColorRgba.a <= 0 &&
-                                materials[5].emissiveIntensity !== undefined
-                            ) {
-                                materials[5].emissiveMap = texture
-                                materials[5].emissive = new Color(0xffffff)
-                                materials[5].emissiveIntensity = 0.8 // Match front material
-                            }
-                        }
-                    } else {
-                        // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                        if (backTexture && backColorRgba.a > 0) {
-                            // Use texture for blended effect
-                            materials[5].map = backTexture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
-                        } else if (backColorRgba.a <= 0) {
-                            // Fully transparent: use front texture
-                            materials[5].map = texture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
-                        } else {
-                            // Fully opaque: use flat color (no texture needed)
-                            materials[5].map = null
-                            materials[5].color.setRGB(
-                                backColorRgba.r,
-                                backColorRgba.g,
-                                backColorRgba.b
-                            )
-                            materials[5].opacity = backColorRgba.a
+                        // When using front texture (0% opacity), match front material properties for identical appearance
+                        if (
+                            backColorRgba.a <= 0 &&
+                            materials[5].emissiveIntensity !== undefined
+                        ) {
+                            materials[5].emissiveMap = texture
+                            materials[5].emissive = new Color(0xffffff)
+                            materials[5].emissiveIntensity = 0.8 // Match front material
                         }
                     }
 
@@ -1403,14 +1295,13 @@ export default function Sticker({
         const bones = bonesRef.current
         const initialPositions = bonesInitialPositionsRef.current
         const curlFactor = Math.max(0.0001, animatedCurlRef.current.amount)
-        const r = internalRadiusRef.current
+        // Use animated radius value instead of internalRadiusRef
+        const r = mapInteralRadiusToUIValue(animatedCurlRadiusRef.current.radius)
 
         const mesh = meshRef.current
         const width = mesh.geometry.parameters.width * mesh.scale.x
         const height = mesh.geometry.parameters.height * mesh.scale.y
-        const diagonalLength = Math.sqrt(width * width + height * height)
-        const maxDistFromCenter = diagonalLength / 2
-
+        
         // Use ref to always get current curlRotation value (avoids stale closure issues in Canvas mode)
         const curlRotationRad = (curlRotationRef.current * Math.PI) / 180
         const dirX = Math.cos(curlRotationRad)
@@ -1419,10 +1310,32 @@ export default function Sticker({
         const axisY = dirX
         const rotationAxis = new Vector3(axisX, axisY, 0).normalize()
 
+        // Calculate the actual maximum distance along the curl direction
+        // For a rectangle, we need to find which corner is furthest along the direction vector
+        // The rectangle extends from -halfWidth to +halfWidth in X and -halfHeight to +halfHeight in Y
+        const halfWidth = width / 2
+        const halfHeight = height / 2
+        
+        // Check all 4 corners to find the maximum distance along the curl direction
+        // Corner coordinates: (w, h), (w, -h), (-w, h), (-w, -h)
+        // Distance along direction (dirX, dirY) = x * dirX + y * dirY
+        const corner1 = halfWidth * dirX + halfHeight * dirY  // (w, h)
+        const corner2 = halfWidth * dirX - halfHeight * dirY  // (w, -h)
+        const corner3 = -halfWidth * dirX + halfHeight * dirY // (-w, h)
+        const corner4 = -halfWidth * dirX - halfHeight * dirY  // (-w, -h)
+        
+        // Maximum distance along curl direction (furthest corner in that direction)
+        const maxDistAlongDir = Math.max(corner1, corner2, corner3, corner4)
+        
+        // Keep maxDistFromCenter for radius calculations (uses diagonal for smooth curves)
+        const diagonalLength = Math.sqrt(width * width + height * height)
+        const maxDistFromCenter = diagonalLength / 2
+
         // foldOffset: position of the fold line along the 'dir' axis
         // Use animated curlStart value for smooth animations
+        // Use maxDistAlongDir to keep fold line within sticker bounds (0 = left/top edge, 1 = right/bottom edge)
         const animatedStart = animatedCurlStartRef.current.start
-        const foldOffset = -maxDistFromCenter + animatedStart * 2 * maxDistFromCenter
+        const foldOffset = -maxDistAlongDir + animatedStart * 2 * maxDistAlongDir
         const radiusWorld = r * maxDistFromCenter
         
         // RPrime is the current bending radius. As f -> 0, RPrime -> infinity (flat)
@@ -1485,28 +1398,29 @@ export default function Sticker({
             meshRef.current.skeleton.update()
         }
 
-        // Draw debug line along the fold line
-        if (groupRef.current) {
-            if (debugLineRef.current) {
-                groupRef.current.remove(debugLineRef.current)
-                debugLineRef.current.geometry.dispose()
-                debugLineRef.current.material.dispose()
-            }
+        // Draw debug line along the fold line (commented out)
+        // if (groupRef.current) {
+        //     if (debugLineRef.current) {
+        //         groupRef.current.remove(debugLineRef.current)
+        //         debugLineRef.current.geometry.dispose()
+        //         debugLineRef.current.material.dispose()
+        //     }
 
-            const centerX = foldOffset * dirX
-            const centerY = foldOffset * dirY
+        //     const centerX = foldOffset * dirX
+        //     const centerY = foldOffset * dirY
 
-            const lineHalfLen = maxDistFromCenter * 1.5
-            const points = [
-                new Vector3(centerX - axisX * lineHalfLen, centerY - axisY * lineHalfLen, 0.1),
-                new Vector3(centerX + axisX * lineHalfLen, centerY + axisY * lineHalfLen, 0.1),
-            ]
-            const lineGeometry = new BufferGeometry().setFromPoints(points)
-            const lineMaterial = new LineBasicMaterial({ color: 0x0000ff })
-            const line = new Line(lineGeometry, lineMaterial)
-            debugLineRef.current = line
-            groupRef.current.add(line)
-        }
+        //     // Use maxDistAlongDir for debug line to match fold line bounds
+        //     const lineHalfLen = maxDistAlongDir * 1.5
+        //     const points = [
+        //         new Vector3(centerX - axisX * lineHalfLen, centerY - axisY * lineHalfLen, 0.1),
+        //         new Vector3(centerX + axisX * lineHalfLen, centerY + axisY * lineHalfLen, 0.1),
+        //     ]
+        //     const lineGeometry = new BufferGeometry().setFromPoints(points)
+        //     const lineMaterial = new LineBasicMaterial({ color: 0x0000ff })
+        //     const line = new Line(lineGeometry, lineMaterial)
+        //     debugLineRef.current = line
+        //     groupRef.current.add(line)
+        // }
 
         renderFrame()
     }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
@@ -1604,91 +1518,70 @@ export default function Sticker({
             const wasHovering = isHoveringRef.current
 
             if (isOverSticker && !wasHovering) {
-                // Entering sticker: animate to flat based on unrollMode
+                // Entering sticker: animate to end values from animation object
                 isHoveringRef.current = true
                 
-                if (unrollMode === "change-curl") {
-                    // Mode 1: Animate curl amount to 0
-                    gsap.to(animatedCurlRef.current, {
-                        amount: 0,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                } else if (unrollMode === "move-start") {
-                    // Mode 2: Animate curlStart to 1 (move fold line to edge)
-                    gsap.to(animatedCurlStartRef.current, {
-                        start: 1,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                } else if (unrollMode === "hybrid") {
-                    // Mode 3: Animate both curl amount to 0 AND curlStart to 1
-                    // Use a single onUpdate callback to avoid calling updateBones twice
-                    const timeline = gsap.timeline({
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                    timeline.to(animatedCurlRef.current, {
-                        amount: 0,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                    })
-                    timeline.to(animatedCurlStartRef.current, {
-                        start: 1,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                    }, 0) // Start both animations at the same time
-                }
+                // Use a single timeline to animate all values to their end states
+                const timeline = gsap.timeline({
+                    onUpdate: () => {
+                        updateBones()
+                    },
+                })
+                
+                // Animate curlAmount to end value
+                timeline.to(animatedCurlRef.current, {
+                    amount: animation.curlAmountEnd,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                })
+                
+                // Animate curlStart to end value
+                timeline.to(animatedCurlStartRef.current, {
+                    start: animation.curlStartEnd,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                }, 0) // Start at same time
+                
+                // Animate curlRadius to end value
+                timeline.to(animatedCurlRadiusRef.current, {
+                    radius: animation.curlRadiusEnd,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                }, 0) // Start at same time
             } else if (!isOverSticker && wasHovering) {
-                // Leaving sticker: animate back to original values
+                // Leaving sticker: animate back to start values from animation object
                 isHoveringRef.current = false
                 
-                if (unrollMode === "change-curl") {
-                    gsap.to(animatedCurlRef.current, {
-                        amount: curlAmount,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                } else if (unrollMode === "move-start") {
-                    gsap.to(animatedCurlStartRef.current, {
-                        start: curlStart,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                } else if (unrollMode === "hybrid") {
-                    // Use a single timeline to animate both values back
-                    const timeline = gsap.timeline({
-                        onUpdate: () => {
-                            updateBones()
-                        },
-                    })
-                    timeline.to(animatedCurlRef.current, {
-                        amount: curlAmount,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                    })
-                    timeline.to(animatedCurlStartRef.current, {
-                        start: curlStart,
-                        duration: animationDuration,
-                        ease: "power2.inOut",
-                    }, 0) // Start both animations at the same time
-                }
+                // Use a single timeline to animate all values back to their start states
+                const timeline = gsap.timeline({
+                    onUpdate: () => {
+                        updateBones()
+                    },
+                })
+                
+                // Animate curlAmount back to start value
+                timeline.to(animatedCurlRef.current, {
+                    amount: animation.curlAmountStart,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                })
+                
+                // Animate curlStart back to start value
+                timeline.to(animatedCurlStartRef.current, {
+                    start: animation.curlStartStart,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                }, 0) // Start at same time
+                
+                // Animate curlRadius back to start value
+                timeline.to(animatedCurlRadiusRef.current, {
+                    radius: animation.curlRadiusStart,
+                    duration: animationDuration,
+                    ease: "power2.inOut",
+                }, 0) // Start at same time
             }
         },
-        [checkMouseOverSticker, curlAmount, curlStart, unrollMode, animationDuration, updateBones]
+        [checkMouseOverSticker, animation, animationDuration, updateBones]
     )
 
     // Mouse leave handler: always reset when leaving canvas
@@ -1696,44 +1589,35 @@ export default function Sticker({
         if (isHoveringRef.current) {
             isHoveringRef.current = false
             
-            if (unrollMode === "change-curl") {
-                gsap.to(animatedCurlRef.current, {
-                    amount: curlAmount,
-                    duration: animationDuration,
-                    ease: "power2.out",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
-            } else if (unrollMode === "move-start") {
-                gsap.to(animatedCurlStartRef.current, {
-                    start: curlStart,
-                    duration: animationDuration,
-                    ease: "power2.out",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
-            } else if (unrollMode === "hybrid") {
-                // Use a single timeline to animate both values back
-                const timeline = gsap.timeline({
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
-                timeline.to(animatedCurlRef.current, {
-                    amount: curlAmount,
-                    duration: animationDuration,
-                    ease: "power2.out",
-                })
-                timeline.to(animatedCurlStartRef.current, {
-                    start: curlStart,
-                    duration: animationDuration,
-                    ease: "power2.out",
-                }, 0) // Start both animations at the same time
-            }
+            // Use a single timeline to animate all values back to their start states
+            const timeline = gsap.timeline({
+                onUpdate: () => {
+                    updateBones()
+                },
+            })
+            
+            // Animate curlAmount back to start value
+            timeline.to(animatedCurlRef.current, {
+                amount: animation.curlAmountStart,
+                duration: animationDuration,
+                ease: "power2.out",
+            })
+            
+            // Animate curlStart back to start value
+            timeline.to(animatedCurlStartRef.current, {
+                start: animation.curlStartStart,
+                duration: animationDuration,
+                ease: "power2.out",
+            }, 0) // Start at same time
+            
+            // Animate curlRadius back to start value
+            timeline.to(animatedCurlRadiusRef.current, {
+                radius: animation.curlRadiusStart,
+                duration: animationDuration,
+                ease: "power2.out",
+            }, 0) // Start at same time
         }
-    }, [curlAmount, curlStart, unrollMode, animationDuration, updateBones])
+    }, [animation, animationDuration, updateBones])
 
     // ========================================================================
     // RESIZE HANDLING
@@ -1827,8 +1711,8 @@ export default function Sticker({
                 }
             }
 
-            // Update shadow camera if shadows are enabled
-            if (enableShadows && lightRef.current) {
+            // Update shadow camera (shadows always enabled)
+            if (lightRef.current) {
                 // Match shadow camera bounds from setupScene
                 const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
                 const shadowOffsetX = shadowPositionX * 0.3
@@ -1841,7 +1725,6 @@ export default function Sticker({
             }
         },
         [
-            enableShadows,
             recreateMeshWithAspectRatio,
             updateBones,
             renderFrame,
@@ -1929,29 +1812,26 @@ export default function Sticker({
         }
     }, [hasContent, setupScene, loadTexture, updateBones, renderFrame])
 
-    // Sync animated curl ref with prop changes
+    // Sync animated refs with animation prop changes (only when not hovering)
     useEffect(() => {
         // Only update if not currently animating (not hovering)
         if (!isHoveringRef.current) {
-            animatedCurlRef.current.amount = curlAmount
+            // In Canvas mode, respect the show prop to determine which state to display
+            // In preview/live mode, always use start values
+            const shouldShowFinal = isCanvas && animation.show === "final"
+            
+            animatedCurlRef.current.amount = shouldShowFinal 
+                ? animation.curlAmountEnd 
+                : animation.curlAmountStart
+            animatedCurlStartRef.current.start = shouldShowFinal 
+                ? animation.curlStartEnd 
+                : animation.curlStartStart
+            animatedCurlRadiusRef.current.radius = shouldShowFinal 
+                ? animation.curlRadiusEnd 
+                : animation.curlRadiusStart
             updateBones()
         }
-    }, [curlAmount, updateBones])
-
-    // Sync animated curlStart ref with prop changes
-    useEffect(() => {
-        // Only update if not currently animating (not hovering)
-        if (!isHoveringRef.current) {
-            animatedCurlStartRef.current.start = curlStart
-            updateBones()
-        }
-    }, [curlStart, updateBones])
-
-    // Update internalRadius when curlRadius prop changes
-    useEffect(() => {
-        internalRadiusRef.current = mapInteralRadiusToUIValue(curlRadius)
-        updateBones()
-    }, [curlRadius, updateBones])
+    }, [animation, isCanvas, updateBones])
 
     // Update bones when curlMode changes
     // Note: curlAmount and curlStart are handled by GSAP animations via animated refs
@@ -2007,46 +1887,22 @@ export default function Sticker({
                 materials[5].map.dispose()
             }
 
-            if (enableShadows) {
-                // With shadows: use texture (MeshStandardMaterial)
-                if (backTexture) {
-                    materials[5].map = backTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
+            // With shadows: use texture (MeshStandardMaterial)
+            if (backTexture) {
+                materials[5].map = backTexture
+                materials[5].transparent = true
+                materials[5].alphaTest = 0.01
 
-                    // When using front texture (0% opacity), match front material properties more closely
-                    if (
-                        backColorRgba.a <= 0 &&
-                        materials[5].emissiveIntensity !== undefined
-                    ) {
-                        // Match front material emissive for identical appearance
-                        materials[5].emissiveIntensity =
-                            materials[4]?.emissiveIntensity ?? 0.8
-                        materials[5].emissive =
-                            materials[4]?.emissive ?? new Color(0xffffff)
-                    }
-                }
-            } else {
-                // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                if (backTexture && backColorRgba.a > 0) {
-                    // Use texture for blended effect
-                    materials[5].map = backTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
-                } else if (backColorRgba.a <= 0) {
-                    // Fully transparent: use front texture
-                    materials[5].map = frontTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
-                } else {
-                    // Fully opaque: use flat color (no texture needed)
-                    materials[5].map = null
-                    materials[5].color.setRGB(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    )
-                    materials[5].opacity = backColorRgba.a
+                // When using front texture (0% opacity), match front material properties more closely
+                if (
+                    backColorRgba.a <= 0 &&
+                    materials[5].emissiveIntensity !== undefined
+                ) {
+                    // Match front material emissive for identical appearance
+                    materials[5].emissiveIntensity =
+                        materials[4]?.emissiveIntensity ?? 0.8
+                    materials[5].emissive =
+                        materials[4]?.emissive ?? new Color(0xffffff)
                 }
             }
 
@@ -2088,11 +1944,11 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [backColor, createBackTexture, enableShadows, renderFrame])
+    }, [backColor, createBackTexture, renderFrame])
 
     // Update shadow position when settings change
     useEffect(() => {
-        if (!enableShadows || !lightRef.current || !containerRef.current) return
+        if (!lightRef.current || !containerRef.current) return
 
         lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
         lightRef.current.shadow.mapSize.width = 4096
@@ -2115,18 +1971,16 @@ export default function Sticker({
         lightRef.current.shadow.needsUpdate = true
 
         renderFrame()
-    }, [enableShadows, shadowPositionX, shadowPositionY, renderFrame])
+    }, [shadowPositionX, shadowPositionY, renderFrame])
 
-    // Update shadow intensity (darkness) when settings change
+    // Update shadow intensity (darkness) - hardcoded to 1
     useEffect(() => {
-        if (!enableShadows || !lightRef.current || !ambientLightRef.current)
-            return
+        if (!lightRef.current || !ambientLightRef.current) return
 
         // Shadow darkness is controlled by the ratio of directional to ambient light
-        // High shadowIntensity: strong directional light, low ambient = dark shadows
-        // Low shadowIntensity: weaker directional, high ambient = soft/no shadows
-        // At shadowIntensity = 1, make shadows very dramatic
+        // shadowIntensity = 1 (hardcoded), make shadows very dramatic
 
+        const shadowIntensity = 1 // Hardcoded
         // Directional light: 0.3 to 2.0 (more dramatic at max)
         const adjustedLightIntensity = 0.3 + shadowIntensity * 1.7
         lightRef.current.intensity = adjustedLightIntensity
@@ -2139,11 +1993,11 @@ export default function Sticker({
         )
 
         renderFrame()
-    }, [enableShadows, shadowIntensity, renderFrame])
+    }, [renderFrame])
 
     // Update cast shadow opacity when it changes
     useEffect(() => {
-        if (!enableShadows || !backgroundPlaneRef.current || !containerRef.current) return
+        if (!backgroundPlaneRef.current || !containerRef.current) return
 
         const material = backgroundPlaneRef.current.material as any
         // ShadowMaterial: adjust opacity based on castShadowOpacity
@@ -2163,7 +2017,7 @@ export default function Sticker({
         oldGeometry.dispose()
 
         renderFrame()
-    }, [enableShadows, castShadowOpacity, renderFrame])
+    }, [castShadowOpacity, renderFrame])
 
     // Size monitoring - optimized for Framer canvas
     useEffect(() => {
@@ -2374,38 +2228,71 @@ addPropertyControls(Sticker, {
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
     },
-    unrollMode:{
-        type:ControlType.Enum,
-        title:"Unroll Mode",
-        options:["change-curl","move-start","hybrid"],
-        optionTitles:["Change Curl","Move Start","Hybrid"],
-        defaultValue:"change-curl",
-        displaySegmentedControl:true,
-        segmentedControlDirection:"vertical",
-    },
-    curlAmount: {
-        type: ControlType.Number,
-        title: "Curl",
-        min: 0,
-        max: 1,
-        step: 0.05,
-        defaultValue: 0.05,
-    },
-    curlRadius: {
-        type: ControlType.Number,
-        title: "Radius",
-        min: 0.1,
-        max: 1,
-        step: 0.05,
-        defaultValue: 1,
-    },
-    curlStart: {
-        type: ControlType.Number,
-        title: "Start",
-        min: 0,
-        max: 1,
-        step: 0.05,
-        defaultValue: 0.45,
+    animation:{
+        type:ControlType.Object,
+        title:"Animation",
+        controls:{
+            show:{
+                type:ControlType.Enum,
+                title:"Show",
+                options:["initial","final"],
+                optionTitles:["1 – Initial","2 – Final"],
+                defaultValue:"final",
+                displaySegmentedControl:true,
+                segmentedControlDirection:"vertical",
+                description:"The state to show in the canvas",
+            },
+            curlAmountStart:{
+                type: ControlType.Number,
+                title: "Curl 1",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.45,
+            },
+            curlRadiusStart:{
+                type: ControlType.Number,
+                title: "Radius 1",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.15,
+            },
+            curlStartStart:{
+                type: ControlType.Number,
+                title: "Start 1",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.8,
+            },
+            curlAmountEnd:{
+                type: ControlType.Number,
+                title: "Curl 2",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.45,
+            },
+            
+            curlRadiusEnd:{
+                type: ControlType.Number,
+                title: "Radius 2",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.15,
+            },
+        
+            curlStartEnd:{
+                type: ControlType.Number,
+                title: "Start 2",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.55,
+            },
+        }
     },
     curlRotation: {
         type: ControlType.Number,
@@ -2413,26 +2300,10 @@ addPropertyControls(Sticker, {
         min: 0,
         max: 360,
         step: 15,
-        defaultValue: 0,
+        defaultValue: 315,
         unit: "°",
     },
     
-    enableShadows: {
-        type: ControlType.Boolean,
-        title: "Ligthing",
-        defaultValue: true,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-    shadowIntensity: {
-        type: ControlType.Number,
-        title: "Light",
-        min: 0.1,
-        max: 1,
-        step: 0.05,
-        defaultValue: 1,
-        hidden: (props) => !props.enableShadows,
-    },
     shadowPositionX: {
         type: ControlType.Number,
         title: "Light X",
@@ -2440,7 +2311,6 @@ addPropertyControls(Sticker, {
         max: 500,
         step: 10,
         defaultValue: -400,
-        hidden: (props) => !props.enableShadows,
     },
     shadowPositionY: {
         type: ControlType.Number,
@@ -2449,7 +2319,6 @@ addPropertyControls(Sticker, {
         max: 500,
         step: 10,
         defaultValue: 0,
-        hidden: (props) => !props.enableShadows,
     },
     castShadowOpacity: {
         type: ControlType.Number,
@@ -2458,7 +2327,6 @@ addPropertyControls(Sticker, {
         max: 1,
         step: 0.05,
         defaultValue: 0.3,
-        hidden: (props) => !props.enableShadows,
     },
     shadowBgColor: {
         type: ControlType.Color,
