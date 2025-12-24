@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
+import { useMotionValue, animate, useMotionValueEvent } from "framer-motion"
 
 // Three.js imports from CDN
 import {
@@ -36,9 +37,6 @@ import {
     LineBasicMaterial,
     BufferGeometry,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
-
-// GSAP import from CDN
-import gsap from "https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"
 
 // OrbitControls import from Three.js examples
 import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/3D-text-rug.js"
@@ -76,6 +74,20 @@ interface StickerProps {
         curlRadiusEnd: number
         curlStartStart: number
         curlStartEnd: number
+    }
+    // Transition settings for Framer Motion animations
+    transition?: {
+        type?: "tween" | "spring" | "keyframes" | "inertia"
+        duration?: number
+        ease?: string | number[]
+        delay?: number
+        // Spring properties
+        stiffness?: number
+        damping?: number
+        mass?: number
+        bounce?: number
+        restDelta?: number
+        restSpeed?: number
     }
     // Lighting and shadows (shadows always enabled with intensity = 1)
     animationDuration: number
@@ -300,8 +312,24 @@ export default function Sticker({
         curlStartStart: 0.5,
         curlStartEnd: 1,
     },
+    transition = {
+        type: "tween" as const,
+        duration: 0.6,
+        ease: "easeInOut",
+    } as {
+        type?: "tween" | "spring" | "keyframes" | "inertia"
+        duration?: number
+        ease?: string | number[]
+        delay?: number
+        stiffness?: number
+        damping?: number
+        mass?: number
+        bounce?: number
+        restDelta?: number
+        restSpeed?: number
+    },
     backColor = "rgba(255, 255, 255, 1)",
-    animationDuration = 0.6,
+    animationDuration = 0.6, // Deprecated: use transition.duration instead, kept for backwards compatibility
     shadowPositionX = -400,
     shadowPositionY = 0,
     shadowBgColor = "rgba(0, 0, 0, 0)",
@@ -337,16 +365,20 @@ export default function Sticker({
     // In preview/live mode, always start with initial values
     const shouldShowFinal = isCanvas && animation.show === "final"
     
-    // Initialize animated refs with appropriate values based on show prop (Canvas) or start values (preview/live)
-    const animatedCurlRef = useRef({ 
-        amount: shouldShowFinal ? animation.curlAmountEnd : animation.curlAmountStart 
-    }) // Animated curl value for GSAP
-    const animatedCurlStartRef = useRef({ 
-        start: shouldShowFinal ? animation.curlStartEnd : animation.curlStartStart 
-    }) // Animated curlStart value for GSAP
-    const animatedCurlRadiusRef = useRef({ 
-        radius: shouldShowFinal ? animation.curlRadiusEnd : animation.curlRadiusStart 
-    }) // Animated curlRadius value for GSAP
+    // Use Framer Motion values for animated properties
+    const initialCurlAmount = shouldShowFinal ? animation.curlAmountEnd : animation.curlAmountStart
+    const initialCurlStart = shouldShowFinal ? animation.curlStartEnd : animation.curlStartStart
+    const initialCurlRadius = shouldShowFinal ? animation.curlRadiusEnd : animation.curlRadiusStart
+    
+    const curlAmountMotion = useMotionValue(initialCurlAmount)
+    const curlStartMotion = useMotionValue(initialCurlStart)
+    const curlRadiusMotion = useMotionValue(initialCurlRadius)
+    
+    // Keep refs for quick access in updateBones (motion values are read synchronously)
+    const animatedCurlRef = useRef({ amount: initialCurlAmount })
+    const animatedCurlStartRef = useRef({ start: initialCurlStart })
+    const animatedCurlRadiusRef = useRef({ radius: initialCurlRadius })
+    
     const isHoveringRef = useRef(false) // Track if currently hovering over sticker
     const lightRef = useRef<any>(null)
     const ambientLightRef = useRef<any>(null)
@@ -1553,9 +1585,26 @@ export default function Sticker({
 
         renderFrame()
     }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
+    
+    // Set up motion value event listeners to sync with refs and update bones
+    // These must be after updateBones is defined
+    useMotionValueEvent(curlAmountMotion, "change", (latest) => {
+        animatedCurlRef.current.amount = latest
+        updateBones()
+    })
+    
+    useMotionValueEvent(curlStartMotion, "change", (latest) => {
+        animatedCurlStartRef.current.start = latest
+        updateBones()
+    })
+    
+    useMotionValueEvent(curlRadiusMotion, "change", (latest) => {
+        animatedCurlRadiusRef.current.radius = latest
+        updateBones()
+    })
 
     // ========================================================================
-    // HOVER ANIMATION WITH GSAP
+    // HOVER ANIMATION WITH FRAMER MOTION
     // ========================================================================
 
     // Check if mouse is over non-transparent part of sticker
@@ -1640,6 +1689,55 @@ export default function Sticker({
         []
     )
 
+    // Store animation controls refs to allow cancellation
+    const animationControlsRef = useRef<{
+        curlAmount?: ReturnType<typeof animate>
+        curlStart?: ReturnType<typeof animate>
+        curlRadius?: ReturnType<typeof animate>
+    }>({})
+    
+    // Helper function to build transition config from ControlType.Transition
+    // Handles both tween and spring animation types with all their properties
+    const buildTransitionConfig = useCallback((
+        transitionValue: typeof transition,
+        fallbackDuration: number = animationDuration,
+        defaultEase?: string
+    ): any => {
+        const config: any = {
+            ...(transitionValue?.type && { type: transitionValue.type }),
+        }
+        
+        // For tween animations
+        if (!transitionValue?.type || transitionValue.type === "tween") {
+            // ControlType.Transition already provides duration in seconds
+            // fallbackDuration (animationDuration) is also in seconds
+            const duration = transitionValue?.duration ?? fallbackDuration
+            config.duration = duration
+            if (transitionValue?.ease) {
+                config.ease = transitionValue.ease
+            } else if (defaultEase) {
+                config.ease = defaultEase
+            }
+            if (transitionValue?.delay !== undefined) config.delay = transitionValue.delay
+        }
+        
+        // For spring animations
+        if (transitionValue?.type === "spring") {
+            if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
+            if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
+            if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
+            if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
+            if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
+            if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
+            // Spring can also have duration if provided (already in seconds from ControlType.Transition)
+            if (transitionValue.duration !== undefined) {
+                config.duration = transitionValue.duration
+            }
+        }
+        
+        return config
+    }, [animationDuration])
+
     // Mouse move handler: check if over sticker and trigger animations
     const handleMouseMove = useCallback(
         (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1650,67 +1748,65 @@ export default function Sticker({
                 // Entering sticker: animate to end values from animation object
                 isHoveringRef.current = true
                 
-                // Use a single timeline to animate all values to their end states
-                const timeline = gsap.timeline({
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
+                // Stop any existing animations
+                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
+                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
+                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
                 
-                // Animate curlAmount to end value
-                timeline.to(animatedCurlRef.current, {
-                    amount: animation.curlAmountEnd,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                })
+                // Build transition config from ControlType.Transition
+                const transitionConfig = buildTransitionConfig(transition)
                 
-                // Animate curlStart to end value
-                timeline.to(animatedCurlStartRef.current, {
-                    start: animation.curlStartEnd,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                }, 0) // Start at same time
+                // Animate all values to their end states simultaneously
+                animationControlsRef.current.curlAmount = animate(
+                    curlAmountMotion,
+                    animation.curlAmountEnd,
+                    transitionConfig
+                )
                 
-                // Animate curlRadius to end value
-                timeline.to(animatedCurlRadiusRef.current, {
-                    radius: animation.curlRadiusEnd,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                }, 0) // Start at same time
+                animationControlsRef.current.curlStart = animate(
+                    curlStartMotion,
+                    animation.curlStartEnd,
+                    transitionConfig
+                )
+                
+                animationControlsRef.current.curlRadius = animate(
+                    curlRadiusMotion,
+                    animation.curlRadiusEnd,
+                    transitionConfig
+                )
             } else if (!isOverSticker && wasHovering) {
                 // Leaving sticker: animate back to start values from animation object
                 isHoveringRef.current = false
                 
-                // Use a single timeline to animate all values back to their start states
-                const timeline = gsap.timeline({
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
+                // Stop any existing animations
+                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
+                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
+                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
                 
-                // Animate curlAmount back to start value
-                timeline.to(animatedCurlRef.current, {
-                    amount: animation.curlAmountStart,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                })
+                // Build transition config from ControlType.Transition
+                const transitionConfig = buildTransitionConfig(transition)
                 
-                // Animate curlStart back to start value
-                timeline.to(animatedCurlStartRef.current, {
-                    start: animation.curlStartStart,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                }, 0) // Start at same time
+                // Animate all values back to their start states simultaneously
+                animationControlsRef.current.curlAmount = animate(
+                    curlAmountMotion,
+                    animation.curlAmountStart,
+                    transitionConfig
+                )
                 
-                // Animate curlRadius back to start value
-                timeline.to(animatedCurlRadiusRef.current, {
-                    radius: animation.curlRadiusStart,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                }, 0) // Start at same time
+                animationControlsRef.current.curlStart = animate(
+                    curlStartMotion,
+                    animation.curlStartStart,
+                    transitionConfig
+                )
+                
+                animationControlsRef.current.curlRadius = animate(
+                    curlRadiusMotion,
+                    animation.curlRadiusStart,
+                    transitionConfig
+                )
             }
         },
-        [checkMouseOverSticker, animation, animationDuration, updateBones]
+        [checkMouseOverSticker, animation, transition, animationDuration, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig]
     )
 
     // Mouse leave handler: always reset when leaving canvas
@@ -1718,35 +1814,34 @@ export default function Sticker({
         if (isHoveringRef.current) {
             isHoveringRef.current = false
             
-            // Use a single timeline to animate all values back to their start states
-            const timeline = gsap.timeline({
-                onUpdate: () => {
-                    updateBones()
-                },
-            })
+            // Stop any existing animations
+            if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
             
-            // Animate curlAmount back to start value
-            timeline.to(animatedCurlRef.current, {
-                amount: animation.curlAmountStart,
-                duration: animationDuration,
-                ease: "power2.out",
-            })
+            // Build transition config from ControlType.Transition (use easeOut for mouse leave)
+            const transitionConfig = buildTransitionConfig(transition, animationDuration, "easeOut")
             
-            // Animate curlStart back to start value
-            timeline.to(animatedCurlStartRef.current, {
-                start: animation.curlStartStart,
-                duration: animationDuration,
-                ease: "power2.out",
-            }, 0) // Start at same time
+            // Animate all values back to their start states simultaneously
+            animationControlsRef.current.curlAmount = animate(
+                curlAmountMotion,
+                animation.curlAmountStart,
+                transitionConfig
+            )
             
-            // Animate curlRadius back to start value
-            timeline.to(animatedCurlRadiusRef.current, {
-                radius: animation.curlRadiusStart,
-                duration: animationDuration,
-                ease: "power2.out",
-            }, 0) // Start at same time
+            animationControlsRef.current.curlStart = animate(
+                curlStartMotion,
+                animation.curlStartStart,
+                transitionConfig
+            )
+            
+            animationControlsRef.current.curlRadius = animate(
+                curlRadiusMotion,
+                animation.curlRadiusStart,
+                transitionConfig
+            )
         }
-    }, [animation, animationDuration, updateBones])
+    }, [animation, transition, animationDuration, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig])
 
     // ========================================================================
     // RESIZE HANDLING
@@ -2034,6 +2129,12 @@ export default function Sticker({
             loadedImageRef.current = null
             imageAspectRatioRef.current = null
             
+            // Stop any running animations
+            if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
+            animationControlsRef.current = {}
+            
             // Mark image loading as aborted to prevent callbacks from running after unmount
             imageLoadAbortRef.current = true
         }
@@ -2047,18 +2148,29 @@ export default function Sticker({
             // In preview/live mode, always use start values
             const shouldShowFinal = isCanvas && animation.show === "final"
             
-            animatedCurlRef.current.amount = shouldShowFinal 
+            const targetCurlAmount = shouldShowFinal 
                 ? animation.curlAmountEnd 
                 : animation.curlAmountStart
-            animatedCurlStartRef.current.start = shouldShowFinal 
+            const targetCurlStart = shouldShowFinal 
                 ? animation.curlStartEnd 
                 : animation.curlStartStart
-            animatedCurlRadiusRef.current.radius = shouldShowFinal 
+            const targetCurlRadius = shouldShowFinal 
                 ? animation.curlRadiusEnd 
                 : animation.curlRadiusStart
+            
+            // Set motion values directly (no animation when props change)
+            // Note: .set() doesn't trigger useMotionValueEvent, so we update refs manually
+            curlAmountMotion.set(targetCurlAmount)
+            curlStartMotion.set(targetCurlStart)
+            curlRadiusMotion.set(targetCurlRadius)
+            
+            // Update refs directly and call updateBones
+            animatedCurlRef.current.amount = targetCurlAmount
+            animatedCurlStartRef.current.start = targetCurlStart
+            animatedCurlRadiusRef.current.radius = targetCurlRadius
             updateBones()
         }
-    }, [animation, isCanvas, updateBones])
+    }, [animation, isCanvas, curlAmountMotion, curlStartMotion, curlRadiusMotion, updateBones])
 
     // Update bones when curlMode changes
     // Note: curlAmount and curlStart are handled by GSAP animations via animated refs
@@ -2591,6 +2703,15 @@ addPropertyControls(Sticker, {
         type: ControlType.Color,
         title: "Back Color",
         defaultValue: "rgba(255, 255, 255, 1)",
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.6,
+            ease: "easeInOut",
+        },
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },
