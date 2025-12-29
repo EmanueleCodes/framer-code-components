@@ -2690,15 +2690,6 @@ addPropertyControls(Sticker, {
         defaultValue: "rgba(0, 0, 0, 0)",
         hidden: () => true, // Hidden - ShadowMaterial handles transparency automatically
     },
-    animationDuration: {
-        type: ControlType.Number,
-        title: "Duration",
-        min: 0.1,
-        max: 5,
-        step: 0.1,
-        defaultValue: 0.6,
-        unit: "s",
-    },
     backColor: {
         type: ControlType.Color,
         title: "Back Color",
@@ -2721,4 +2712,4 @@ addPropertyControls(Sticker, {
 // DISPLAY NAME
 // ============================================================================
 
-Sticker.displayName = "3D Sticker"
+Sticker.displayName = "Sticker Peeling"

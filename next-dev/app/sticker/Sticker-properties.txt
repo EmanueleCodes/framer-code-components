@@ -1,0 +1,50 @@
+Sticker Peeling - Property Controls
+
+Image
+The image to display on the sticker. This image will be applied to the front face of the 3D sticker and will curl/peel when hovered.
+
+Mode
+Controls the curl animation style. "Semicircle" creates a smooth semicircular curl that follows an arc. "Spiral" creates a tighter, spiraling curl effect that wraps around itself.
+
+Animation
+Controls the animation states and curl parameters for the sticker. The sticker animates between initial and final states when hovered.
+
+Animation - Show
+Controls which state to display in the Framer canvas. "Initial" shows the sticker in its default, uncurled state. "Final" shows the sticker in its fully curled, hover state. This is useful for previewing different states while designing.
+
+Animation - Curl Start
+Controls the initial curl amount when the sticker is not hovered. Higher values create more curl in the default state. Lower values keep the sticker flatter. Range: 0 to 1.
+
+Animation - Radius Start
+Controls the initial curl radius when the sticker is not hovered. Higher values create a wider, more gradual curl. Lower values create a tighter, sharper curl. Range: 0 to 1.
+
+Animation - Start Start
+Controls the initial position of the fold line when the sticker is not hovered. This determines where the curl begins along the sticker. Range: 0 to 1.
+
+Animation - Curl Final
+Controls the final curl amount when the sticker is hovered. Higher values create more dramatic curling. Lower values create subtler curl effects. Range: 0 to 1.
+
+Animation - Radius Final
+Controls the final curl radius when the sticker is hovered. Higher values create a wider, more gradual curl. Lower values create a tighter, sharper curl. Range: 0 to 1.
+
+Animation - Start Final
+Controls the final position of the fold line when the sticker is hovered. This determines where the curl ends along the sticker. Range: 0 to 1.
+
+Direction
+Controls the direction of the curl. Values range from 0° to 360°. 0° curls from the left, 90° curls from the bottom, 180° curls from the right, and 270° curls from the top. Adjust this to control which edge of the sticker peels up.
+
+Light X
+Controls the horizontal position of the directional light that creates shadows. Negative values move the light to the left, positive values move it to the right. This affects the shadow direction and position. Range: -500 to 500.
+
+Light Y
+Controls the vertical position of the directional light that creates shadows. Negative values move the light down, positive values move it up. This affects the shadow direction and position. Range: -500 to 500.
+
+Shadow
+Controls the opacity of the shadow cast by the curled sticker. Higher values create darker, more visible shadows. Lower values create lighter, more subtle shadows. Set to 0 to hide shadows completely. Range: 0 to 1.
+
+Back Color
+Controls the color of the back face of the sticker (the side that becomes visible when curled). Use this to create a paper-like backing or match your design theme. The opacity of this color determines how much it blends with the front image.
+
+Transition
+Controls the animation transition when hovering over the sticker. Configure the animation type (tween, spring, keyframes, or inertia), duration, easing, and other properties to customize how smoothly the sticker curls and uncurls.
+

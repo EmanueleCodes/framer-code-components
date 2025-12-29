@@ -1,16 +1,10 @@
 import { addPropertyControls, ControlType } from "framer"
-import React, { useEffect, useState, useCallback, useRef, useMemo, startTransition } from "react"
-import { useCurrentLocation } from "https://framer.com/m/FramerDevGemsPublic-djHN.js"
+import React, { useEffect, useRef, startTransition } from "react"
+// @ts-ignore
+import { useRouter } from "framer"
 
 type ShortcutKeyFromProps = {
     key: string
-    link: string
-    newTab: boolean
-}
-
-type NormalizedShortcut = {
-    originalKey: string
-    normalizedKey: string
     link: string
     newTab: boolean
 }
@@ -19,221 +13,90 @@ type NormalizedShortcut = {
  * @framerDisableUnlink
  * @framerSupportedLayoutWidth any
  * @framerSupportedLayoutHeight any
- */ 
+ */
 
 export default function KeyboardShortcut({
     shortcuts,
 }: {
     shortcuts: ShortcutKeyFromProps[]
 }) {
-    // const setCurrentLocation = (redirectTo: string) => {
-    //   console.log(redirectTo);
-    // };
-    const [currentLocation, setCurrentLocation] = useCurrentLocation()
-    const [pressedKeys, setPressedKeys] = useState(new Set<string>())
-    const resetTimerRef = useRef<number | null>(null)
-    const pressedKeysRef = useRef(pressedKeys)
+    // Get router navigation function and routes from Framer
+    const { navigate, routes } = useRouter() || {}
     const containerRef = useRef<HTMLDivElement>(null)
-    
-    // Refs to avoid stale closures in event handlers
-    const currentLocationRef = useRef(currentLocation)
-    const setCurrentLocationRef = useRef(setCurrentLocation)
-    
-    useEffect(() => {
-        pressedKeysRef.current = pressedKeys
-    }, [pressedKeys])
-    
-    useEffect(() => {
-        currentLocationRef.current = currentLocation
-        setCurrentLocationRef.current = setCurrentLocation
-    }, [currentLocation, setCurrentLocation])
 
-    // Add auto-focus effect
+    // Focus the container on mount to ensure keyboard events work in Framer
     useEffect(() => {
         if (containerRef.current) {
             containerRef.current.focus()
         }
     }, [])
 
-    const normalizeKey = useCallback((key: string): string => {
-        key = key.toLowerCase()
-        if (key === "meta" || key === "command" || key === "os") return "cmd"
-        if (key === "control") return "ctrl"
-        if (key === "alt" || key === "option") return "alt"
-        if (key === "shift") return "shift"
-        if (key === "arrowup") return "up"
-        if (key === "arrowdown") return "down"
-        if (key === "arrowleft") return "left"
-        if (key === "arrowright") return "right"
-        return key
-    }, [])
-
-    const isModifierKey = useCallback((key: string): boolean => {
-        return ["cmd", "ctrl", "alt", "shift"].includes(key)
-    }, [])
-
-    const normalizedShortcuts: NormalizedShortcut[] = useMemo(() => {
-        return shortcuts
-            .map((shortcut) => ({
-                originalKey: shortcut.key,
-                normalizedKey: shortcut.key
-                    .toLowerCase()
-                    .split("+")
-                    .map(normalizeKey)
-                    .sort()
-                    .join("+"),
-                link: shortcut.link,
-                newTab: shortcut.newTab,
-            }))
-            .filter((s) => s.normalizedKey)
-    }, [shortcuts, normalizeKey])
-
-    const resetKeys = useCallback(() => {
-        startTransition(() => {
-            setPressedKeys(new Set())
-        })
-        if (resetTimerRef.current) {
-            clearTimeout(resetTimerRef.current)
-            resetTimerRef.current = null
-        }
-    }, [])
-
+    // Set up keyboard shortcut listener
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            const targetElement = e.target as HTMLElement
+            // Ignore keyboard events when user is typing in input fields
+            const target = e.target as HTMLElement
             if (
-                targetElement.tagName === "INPUT" ||
-                targetElement.tagName === "TEXTAREA" ||
-                targetElement.isContentEditable
+                target.tagName === "INPUT" ||
+                target.tagName === "TEXTAREA" ||
+                target.isContentEditable
             ) {
                 return
             }
 
-            if (e.repeat) return
-            if (e.key === "Dead") return
-
-            const key = normalizeKey(e.key)
-
-            const tempPressedSet = new Set(pressedKeysRef.current)
-            tempPressedSet.add(key)
-            const currentModifiers =
-                Array.from(tempPressedSet).filter(isModifierKey)
-            const keysToCheck = Array.from(tempPressedSet).filter(
-                (k) => !isModifierKey(k)
-            )
-
-            if (keysToCheck.length > 0) {
-                const currentCombination = [...currentModifiers, ...keysToCheck]
-                    .sort()
-                    .join("+")
-                const isDefinedShortcut = normalizedShortcuts.some(
-                    (shortcut) => shortcut.normalizedKey === currentCombination
-                )
-                if (isDefinedShortcut) {
-                    e.preventDefault()
-                }
+            // Build the key combination string (e.g., "cmd+shift+a")
+            const parts: string[] = []
+            if (e.metaKey || e.ctrlKey) parts.push(e.metaKey ? "cmd" : "ctrl")
+            if (e.altKey) parts.push("alt")
+            if (e.shiftKey) parts.push("shift")
+            if (e.key && !["Meta", "Control", "Alt", "Shift"].includes(e.key)) {
+                let key = e.key.toLowerCase()
+                // Normalize arrow keys
+                if (key === "arrowleft") key = "left"
+                if (key === "arrowright") key = "right"
+                parts.push(key)
             }
 
-            startTransition(() => {
-                setPressedKeys((prev) => {
-                    const newSet = new Set(prev)
-                    newSet.add(key)
-                    return newSet
-                })
+            const combination = parts.join("+")
+
+            // Find matching shortcut from props
+            const shortcut = shortcuts.find((s) => {
+                const normalized = s.key.toLowerCase().replace(/\s+/g, "")
+                return normalized === combination
             })
 
-            const finalModifiers =
-                Array.from(tempPressedSet).filter(isModifierKey)
-            const finalKeysToCheck = Array.from(tempPressedSet).filter(
-                (k) => !isModifierKey(k)
-            )
+            if (shortcut) {
+                e.preventDefault()
 
-            if (finalKeysToCheck.length > 0) {
-                const finalCombination = [
-                    ...finalModifiers,
-                    ...finalKeysToCheck,
-                ]
-                    .sort()
-                    .join("+")
-
-                const matchedShortcut = normalizedShortcuts.find(
-                    (shortcut) => shortcut.normalizedKey === finalCombination
-                )
-
-                if (matchedShortcut) {
-                    let targetUrl = matchedShortcut.link
-                    const openInNewTab = matchedShortcut.newTab
-
-                    if (targetUrl === "Home") {
-                        targetUrl = "/"
-                    } else if (
-                        !targetUrl.startsWith("/") &&
-                        !targetUrl.match(/^([a-zA-Z]+:)?\/\//)
-                    ) {
-                        if (targetUrl.includes(".")) {
-                            targetUrl = `https://${targetUrl}`
-                        } else {
-                            targetUrl = `/${targetUrl}`
-                        }
+                // Open in new tab if specified
+                if (shortcut.newTab) {
+                    window.open(shortcut.link, "_blank", "noopener,noreferrer")
+                } else if (navigate && routes) {
+                    // For internal navigation, find the route name from the path
+                    // Framer's navigate() requires a route name, not a URL path
+                    const [path, hash] = shortcut.link.split("#")
+                    const routeEntry = Object.entries(routes).find(
+                        ([, value]: [string, any]) => value?.path === path
+                    )
+                    if (routeEntry) {
+                        // Wrap navigation in startTransition for non-blocking updates
+                        startTransition(() => {
+                            // Navigate using route name (routeEntry[0]) and optional hash
+                            navigate(routeEntry[0], hash)
+                        })
                     }
-
-                    if (openInNewTab) {
-                        window.open(targetUrl, "_blank", "noopener,noreferrer")
-                    } else {
-                        // Simple approach: try setCurrentLocation, fallback to window.location.href
-                        const setCurrentLoc = setCurrentLocationRef.current
-                        try {
-                            setCurrentLoc(targetUrl)
-                        } catch {
-                            window.location.href = targetUrl
-                        }
-                    }
-
-                    resetKeys()
-                    return
                 }
             }
-
-            if (resetTimerRef.current) {
-                clearTimeout(resetTimerRef.current)
-            }
-            resetTimerRef.current = window.setTimeout(resetKeys, 1000)
-        }
-
-        const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key === "Dead") return
-            const key = normalizeKey(e.key)
-            startTransition(() => {
-                setPressedKeys((prev) => {
-                    const newSet = new Set(prev)
-                    newSet.delete(key)
-                    return newSet
-                })
-            })
-        }
-
-        const handleBlur = () => {
-            resetKeys()
         }
 
         window.addEventListener("keydown", handleKeyDown)
-        window.addEventListener("keyup", handleKeyUp)
-        window.addEventListener("blur", handleBlur)
-
-        return () => {
-            window.removeEventListener("keydown", handleKeyDown)
-            window.removeEventListener("keyup", handleKeyUp)
-            window.removeEventListener("blur", handleBlur)
-            if (resetTimerRef.current) {
-                clearTimeout(resetTimerRef.current)
-            }
-        }
-    }, [normalizedShortcuts, resetKeys, isModifierKey, normalizeKey])
+        return () => window.removeEventListener("keydown", handleKeyDown)
+    }, [shortcuts, navigate, routes])
 
     return <div ref={containerRef} tabIndex={-1} style={{ outline: "none" }} />
 }
 
-KeyboardShortcut.displayName = "Test"
+KeyboardShortcut.displayName = "Shortcuts"
 
 addPropertyControls(KeyboardShortcut, {
     shortcuts: {

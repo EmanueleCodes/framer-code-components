@@ -1,0 +1,56 @@
+Snow Fall - Property Controls
+
+Preview
+When enabled, shows the snowfall animation in the Framer canvas. When disabled, displays a static scene without falling snow.
+
+Count
+Controls the number of snowflakes displayed. Higher values create a denser snowfall effect. Lower values create a sparser, lighter snowfall. Range: 10 to 1000.
+
+Speed
+Controls the falling speed of snowflakes. Each snowflake will have a random speed between the Min and Max values. Higher values create faster falling snow. Lower values create slower, more gentle snowfall. Range: 0 to 1.
+
+Speed - Min
+The minimum falling speed for snowflakes. All snowflakes will fall at least this fast.
+
+Speed - Max
+The maximum falling speed for snowflakes. No snowflake will fall faster than this value.
+
+Wind
+Controls the horizontal wind effect on snowflakes. Each snowflake will have a random wind value between the Min and Max values. Positive values move snowflakes to the right, negative values move them to the left. Range: -1 to 1.
+
+Wind - Min
+The minimum horizontal wind effect. Negative values move snowflakes left, positive values move them right.
+
+Wind - Max
+The maximum horizontal wind effect. Negative values move snowflakes left, positive values move them right.
+
+Radius
+Controls the size of snowflakes. Each snowflake will have a random size between the Min and Max values. Higher values create larger snowflakes. Lower values create smaller, more subtle snowflakes. Range: 0 to 1.
+
+Radius - Min
+The minimum size for snowflakes. All snowflakes will be at least this large.
+
+Radius - Max
+The maximum size for snowflakes. No snowflake will be larger than this value.
+
+Opacity
+Controls the transparency of snowflakes. Each snowflake will have a random opacity between the Min and Max values. Higher values create more opaque, visible snowflakes. Lower values create more transparent, subtle snowflakes. Range: 0 to 1.
+
+Opacity - Min
+The minimum opacity for snowflakes. All snowflakes will be at least this visible.
+
+Opacity - Max
+The maximum opacity for snowflakes. No snowflake will be more opaque than this value.
+
+Direction
+Controls the direction of snowfall. "Down" makes snowflakes fall downward (normal snowfall). "Up" makes snowflakes fall upward (reverse snowfall effect).
+
+Transition
+Controls the transition time when properties change. Higher values create smoother, slower transitions. Set to 0 for instant changes. Range: 0 to 5 seconds.
+
+Color
+Controls the color of the snowflakes. Use this to match your design theme or create colored snow effects.
+
+Background
+Controls the background color of the component. Leave empty for a transparent background. This color appears behind the snowfall animation.
+
