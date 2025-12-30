@@ -125,11 +125,6 @@ function mapGrainScale(ui: number): number {
     return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 50, 500)
 }
 
-// Bloom: UI 0-1 → Internal 0.0-0.6 (glow intensity around grains)
-function mapBloom(ui: number): number {
-    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0.0, 0.6)
-}
-
 interface BurnTransitionProps {
     color?: string
     transitionColor?: string
@@ -138,7 +133,6 @@ interface BurnTransitionProps {
     scrollSensitivity?: number // UI: 0-1
     baseAnimationSpeed?: number // UI: 0-1
     edgeSoftness?: number // UI: 0-1
-    bloom?: number // UI: 0-1
     style?: React.CSSProperties
     movement?:{
         horizontal: number
@@ -161,7 +155,6 @@ export default function BurnTransition({
     scrollSensitivity = 0.01, // UI default (maps to ~0.0001 internally)
     baseAnimationSpeed = 0.1, // UI default (maps to ~0.01 internally)
     edgeSoftness = 0.4, // UI default (maps to ~0.08 internally)
-    bloom = 0, // UI default (maps to 1.0 internally - no bloom)
     style,
     movement = {
         horizontal: 0.5,
@@ -175,7 +168,6 @@ export default function BurnTransition({
     const internalBaseAnimationSpeed = mapBaseAnimationSpeed(baseAnimationSpeed)
     const internalEdgeSoftness = mapEdgeSoftness(edgeSoftness)
     const internalGrainScale = 0
-    const internalBloom = mapBloom(bloom)
 
     // Resolve color token and parse to RGBA
     const resolvedColor = resolveTokenColor(color)
@@ -207,7 +199,6 @@ export default function BurnTransition({
     const baseAnimationSpeedRef = useRef<number>(internalBaseAnimationSpeed)
     const edgeSoftnessRef = useRef<number>(internalEdgeSoftness)
     const grainScaleRef = useRef<number>(internalGrainScale)
-    const bloomRef = useRef<number>(internalBloom)
     const movementHorizontalRef = useRef<number>(movement.horizontal)
     const movementVerticalRef = useRef<number>(movement.vertical)
     const scrollOffsetRef = useRef<number>(0)
@@ -217,6 +208,7 @@ export default function BurnTransition({
     const animationFrameRef = useRef<number | null>(null)
     const baseTimeRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
+    const canvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
 
 
     // Helper function to create shader
@@ -265,30 +257,40 @@ export default function BurnTransition({
         return program
     }
 
-    // Resize canvas to match container
+    // Resize canvas
     const resizeCanvas = () => {
         const canvas = canvasRef.current
         const container = containerRef.current
+        const gl = glRef.current
         if (!canvas || !container) return
 
         const rect = container.getBoundingClientRect()
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
 
-        canvas.width = rect.width * dpr
-        canvas.height = rect.height * dpr
+        const newWidth = Math.floor(rect.width * dpr)
+        const newHeight = Math.floor(rect.height * dpr)
 
-        const gl = glRef.current
+        // Only resize if dimensions changed
+        if (canvas.width === newWidth && canvas.height === newHeight) return
+
+        canvas.width = newWidth
+        canvas.height = newHeight
+        canvasSizeRef.current = { width: newWidth, height: newHeight }
+
         if (gl) {
             gl.viewport(0, 0, canvas.width, canvas.height)
         }
     }
 
-    // Render function
-    const render = () => {
+    // Render the main scene
+    const renderScene = () => {
         const gl = glRef.current
         const program = programRef.current
         const buffer = bufferRef.current
         if (!gl || !program || !buffer) return
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.viewport(0, 0, canvasSizeRef.current.width, canvasSizeRef.current.height)
 
         // Use program
         gl.useProgram(program)
@@ -335,8 +337,6 @@ export default function BurnTransition({
         if (startTimeRef.current === 0) {
             startTimeRef.current = currentTime
         }
-        // Base animation speed: linear time that increases constantly
-        // Movement controls (horizontal/vertical) will scale this to control direction and speed
         const elapsedSeconds = (currentTime - startTimeRef.current) / 1000
         baseTimeRef.current = elapsedSeconds * baseAnimationSpeedRef.current
 
@@ -346,7 +346,6 @@ export default function BurnTransition({
             "u_scroll_offset"
         )
         if (scrollOffsetLocation) {
-            // Combine base slow animation with scroll-based animation
             gl.uniform1f(
                 scrollOffsetLocation,
                 baseTimeRef.current + scrollOffsetRef.current
@@ -388,12 +387,6 @@ export default function BurnTransition({
             gl.uniform1f(movementVerticalLocation, movementVerticalRef.current)
         }
 
-        // Set bloom uniform
-        const bloomLocation = gl.getUniformLocation(program, "u_bloom")
-        if (bloomLocation) {
-            gl.uniform1f(bloomLocation, bloomRef.current)
-        }
-
         // Clear with transparent background
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
@@ -404,6 +397,13 @@ export default function BurnTransition({
 
         // Draw
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    }
+
+    // Main render function
+    const render = () => {
+        if (glRef.current && programRef.current) {
+            renderScene()
+        }
     }
 
     // Update refs when props change
@@ -464,13 +464,6 @@ export default function BurnTransition({
     }, [])
 
     useEffect(() => {
-        bloomRef.current = mapBloom(bloom)
-        if (glRef.current && programRef.current) {
-            render()
-        }
-    }, [bloom])
-
-    useEffect(() => {
         movementHorizontalRef.current = movement.horizontal
         if (glRef.current && programRef.current) {
             render()
@@ -508,7 +501,6 @@ export default function BurnTransition({
         uniform float u_grain_scale;
         uniform float u_movement_horizontal;
         uniform float u_movement_vertical;
-        uniform float u_bloom;
 
         // Random function
         float random(vec2 st) {
@@ -613,10 +605,6 @@ export default function BurnTransition({
             
             // === STEP 5: Render based on position ===
             
-            // Bloom creates glow around grain pixels
-            // u_bloom ranges from 0.0 (no glow) to 0.15 (max glow)
-            float glowExtent = u_bloom;
-            
             // Below lower bound - solid base color
             if (v_uv.y < lowerBound) {
                 gl_FragColor = vec4(u_color, 1.0);
@@ -636,25 +624,6 @@ export default function BurnTransition({
                 if (combinedGrain > grainThreshold) {
                     // Solid grain pixel
                     gl_FragColor = vec4(u_transition_color, 1.0);
-                } else if (glowExtent > 0.001) {
-                    // BLOOM: Radiant glow around grain pixels in lower zone
-                    float distFromThreshold = grainThreshold - combinedGrain;
-                    float bloomRange = glowExtent * 1.5;
-                    float glowIntensity = 1.0 - (distFromThreshold / bloomRange);
-                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
-                    
-                    // Softer falloff for more radiant bloom
-                    glowIntensity = pow(glowIntensity, 0.7);
-                    glowIntensity = glowIntensity * (1.0 + glowExtent);
-                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
-                    
-                    if (glowIntensity > 0.01) {
-                        // Blend glow with base color based on intensity
-                        vec3 blendedColor = mix(u_color, u_transition_color, glowIntensity);
-                        gl_FragColor = vec4(blendedColor, 1.0);
-                    } else {
-                        gl_FragColor = vec4(u_color, 1.0);
-                    }
                 } else {
                     gl_FragColor = vec4(u_color, 1.0);
                 }
@@ -673,31 +642,6 @@ export default function BurnTransition({
                 if (combinedGrain > grainThreshold) {
                     // Solid grain pixel
                     gl_FragColor = vec4(u_transition_color, 1.0);
-                } else if (glowExtent > 0.001) {
-                    // BLOOM: Radiant glow around grain pixels
-                    // Calculate how close this pixel is to being a grain
-                    float distFromThreshold = grainThreshold - combinedGrain;
-                    
-                    // Bloom range - how far the glow extends from grains
-                    // Higher multiplier = wider glow reach
-                    float bloomRange = glowExtent * 1.5;
-                    
-                    // Glow intensity: 1.0 at threshold, fading to 0 as we get further
-                    float glowIntensity = 1.0 - (distFromThreshold / bloomRange);
-                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
-                    
-                    // Softer falloff for more radiant bloom (lower power = brighter glow)
-                    glowIntensity = pow(glowIntensity, 0.7);
-                    
-                    // Boost the intensity for stronger bloom
-                    glowIntensity = glowIntensity * (1.0 + glowExtent);
-                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
-                    
-                    if (glowIntensity > 0.01) {
-                        gl_FragColor = vec4(u_transition_color, glowIntensity);
-                    } else {
-                        discard;
-                    }
                 } else {
                     discard;
                 }
@@ -911,14 +855,6 @@ addPropertyControls(BurnTransition, {
         type: ControlType.Number,
         title: "Edge",
         defaultValue: 0.4,
-        min: 0.0,
-        max: 1.0,
-        step: 0.1,
-    },
-    bloom: {
-        type: ControlType.Number,
-        title: "Bloom",
-        defaultValue: 0,
         min: 0.0,
         max: 1.0,
         step: 0.1,
