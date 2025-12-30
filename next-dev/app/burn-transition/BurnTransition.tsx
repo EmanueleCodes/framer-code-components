@@ -125,9 +125,9 @@ function mapGrainScale(ui: number): number {
     return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 50, 500)
 }
 
-// Bloom: UI 0-1 → Internal 1.0-3.0 (brightness multiplier for transition layer)
+// Bloom: UI 0-1 → Internal 0.0-0.6 (glow intensity around grains)
 function mapBloom(ui: number): number {
-    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 1.0, 3.0)
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0.0, 0.6)
 }
 
 interface BurnTransitionProps {
@@ -613,11 +613,9 @@ export default function BurnTransition({
             
             // === STEP 5: Render based on position ===
             
-            // Apply bloom to transition color - makes it "shinier"
-            // u_bloom ranges from 1.0 (no bloom) to 3.0 (max bloom)
-            vec3 bloomedTransitionColor = u_transition_color * u_bloom;
-            // Clamp to prevent overflow but allow HDR-like brightness
-            bloomedTransitionColor = min(bloomedTransitionColor, vec3(1.0));
+            // Bloom creates glow around grain pixels
+            // u_bloom ranges from 0.0 (no glow) to 0.15 (max glow)
+            float glowExtent = u_bloom;
             
             // Below lower bound - solid base color
             if (v_uv.y < lowerBound) {
@@ -636,7 +634,27 @@ export default function BurnTransition({
                 grainThreshold -= thicknessNoise * 0.2;
                 
                 if (combinedGrain > grainThreshold) {
-                    gl_FragColor = vec4(bloomedTransitionColor, 1.0);
+                    // Solid grain pixel
+                    gl_FragColor = vec4(u_transition_color, 1.0);
+                } else if (glowExtent > 0.001) {
+                    // BLOOM: Radiant glow around grain pixels in lower zone
+                    float distFromThreshold = grainThreshold - combinedGrain;
+                    float bloomRange = glowExtent * 1.5;
+                    float glowIntensity = 1.0 - (distFromThreshold / bloomRange);
+                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
+                    
+                    // Softer falloff for more radiant bloom
+                    glowIntensity = pow(glowIntensity, 0.7);
+                    glowIntensity = glowIntensity * (1.0 + glowExtent);
+                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
+                    
+                    if (glowIntensity > 0.01) {
+                        // Blend glow with base color based on intensity
+                        vec3 blendedColor = mix(u_color, u_transition_color, glowIntensity);
+                        gl_FragColor = vec4(blendedColor, 1.0);
+                    } else {
+                        gl_FragColor = vec4(u_color, 1.0);
+                    }
                 } else {
                     gl_FragColor = vec4(u_color, 1.0);
                 }
@@ -653,7 +671,33 @@ export default function BurnTransition({
                 grainThreshold += thicknessNoise * 0.15;
                 
                 if (combinedGrain > grainThreshold) {
-                    gl_FragColor = vec4(bloomedTransitionColor, 1.0);
+                    // Solid grain pixel
+                    gl_FragColor = vec4(u_transition_color, 1.0);
+                } else if (glowExtent > 0.001) {
+                    // BLOOM: Radiant glow around grain pixels
+                    // Calculate how close this pixel is to being a grain
+                    float distFromThreshold = grainThreshold - combinedGrain;
+                    
+                    // Bloom range - how far the glow extends from grains
+                    // Higher multiplier = wider glow reach
+                    float bloomRange = glowExtent * 1.5;
+                    
+                    // Glow intensity: 1.0 at threshold, fading to 0 as we get further
+                    float glowIntensity = 1.0 - (distFromThreshold / bloomRange);
+                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
+                    
+                    // Softer falloff for more radiant bloom (lower power = brighter glow)
+                    glowIntensity = pow(glowIntensity, 0.7);
+                    
+                    // Boost the intensity for stronger bloom
+                    glowIntensity = glowIntensity * (1.0 + glowExtent);
+                    glowIntensity = clamp(glowIntensity, 0.0, 1.0);
+                    
+                    if (glowIntensity > 0.01) {
+                        gl_FragColor = vec4(u_transition_color, glowIntensity);
+                    } else {
+                        discard;
+                    }
                 } else {
                     discard;
                 }
