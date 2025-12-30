@@ -95,8 +95,6 @@ interface StickerProps {
     shadowPositionY: number
     shadowBgColor: string
     castShadowOpacity: number
-    // Refresh toggle to force re-initialization
-    refresh: boolean
     // Style (always last)
     style?: React.CSSProperties
 }
@@ -126,7 +124,7 @@ const STICKER_DEPTH = 0.003
 const CANVAS_SCALE = 1.2 // 20% extra space for shadows
 
 // 2D Bone Grid settings
-const BONE_GRID_X =60 // Performance-safe bone count for hardware skinning
+const BONE_GRID_X = 60 // Performance-safe bone count for hardware skinning
 const BONE_GRID_Y = 60
 
 // ============================================================================
@@ -336,7 +334,6 @@ export default function Sticker({
     shadowPositionY = 0,
     shadowBgColor = "rgba(0, 0, 0, 0)",
     castShadowOpacity = 0.3,
-    refresh = false,
     style,
 }: StickerProps) {
     // Refs
@@ -363,25 +360,31 @@ export default function Sticker({
     // Detect environment
     const resolvedImageUrl = resolveImageSource(image)
     const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    
+
     // In Canvas mode, use the show prop to determine initial state
     // In preview/live mode, always start with initial values
     const shouldShowFinal = isCanvas && animation.show === "final"
-    
+
     // Use Framer Motion values for animated properties
-    const initialCurlAmount = shouldShowFinal ? animation.curlAmountEnd : animation.curlAmountStart
-    const initialCurlStart = shouldShowFinal ? animation.curlStartEnd : animation.curlStartStart
-    const initialCurlRadius = shouldShowFinal ? animation.curlRadiusEnd : animation.curlRadiusStart
-    
+    const initialCurlAmount = shouldShowFinal
+        ? animation.curlAmountEnd
+        : animation.curlAmountStart
+    const initialCurlStart = shouldShowFinal
+        ? animation.curlStartEnd
+        : animation.curlStartStart
+    const initialCurlRadius = shouldShowFinal
+        ? animation.curlRadiusEnd
+        : animation.curlRadiusStart
+
     const curlAmountMotion = useMotionValue(initialCurlAmount)
     const curlStartMotion = useMotionValue(initialCurlStart)
     const curlRadiusMotion = useMotionValue(initialCurlRadius)
-    
+
     // Keep refs for quick access in updateBones (motion values are read synchronously)
     const animatedCurlRef = useRef({ amount: initialCurlAmount })
     const animatedCurlStartRef = useRef({ start: initialCurlStart })
     const animatedCurlRadiusRef = useRef({ radius: initialCurlRadius })
-    
+
     const isHoveringRef = useRef(false) // Track if currently hovering over sticker
     const lightRef = useRef<any>(null)
     const ambientLightRef = useRef<any>(null)
@@ -389,15 +392,13 @@ export default function Sticker({
     const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
-    const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
-    const lastRetryAttemptRef = useRef<number>(0) // Track last retry attempt to prevent rapid retries
-    const previousRefreshRef = useRef<boolean | undefined>(undefined) // Track previous refresh value to detect changes
+    const lastMeshDimensionsRef = useRef<{
+        width: number
+        height: number
+    } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
-    // Track WebGL context loss (happens when too many WebGL contexts are active)
-    // Browser limit is typically 8-16 contexts depending on the browser and hardware
-    const [contextLost, setContextLost] = useState(false)
     const hasContent = !!resolvedImageUrl
 
     // ========================================================================
@@ -407,7 +408,7 @@ export default function Sticker({
     const createStickerGeometry = useCallback(
         (width: number, height: number, gridX: number, gridY: number) => {
             // High resolution geometry for smooth curves, independent of bone count
-            const xSegments = 150 
+            const xSegments = 150
             const ySegments = 100
 
             const geometry = new BoxGeometry(
@@ -500,7 +501,7 @@ export default function Sticker({
             container.clientWidth || container.offsetWidth || 1
         const containerHeight =
             container.clientHeight || container.offsetHeight || 1
-        
+
         // Ensure we have valid dimensions (at least 1px)
         if (containerWidth <= 0 || containerHeight <= 0) {
             return null
@@ -544,43 +545,25 @@ export default function Sticker({
             }
             rendererRef.current = null
         }
-        
+
         // Create renderer
-        let renderer
-        try {
-            renderer = new WebGLRenderer({
-                canvas: canvasRef.current,
-                alpha: true,
-                antialias: true,
-            })
-            
-            // Check if context was actually created
-            const gl = renderer.getContext()
-            if (!gl || gl.isContextLost()) {
-                console.error("WebGL context is lost or unavailable")
-                setContextLost(true)
-                renderer.dispose()
-                return null
-            }
-            
-            renderer.setSize(
-                Math.round(canvasWidth * dpr),
-                Math.round(canvasHeight * dpr),
-                false
-            )
-            renderer.setPixelRatio(1)
+        const renderer = new WebGLRenderer({
+            canvas: canvasRef.current,
+            alpha: true,
+            antialias: true,
+        })
+        renderer.setSize(
+            Math.round(canvasWidth * dpr),
+            Math.round(canvasHeight * dpr),
+            false
+        )
+        renderer.setPixelRatio(1)
 
-            // Enable high-quality shadow maps (shadows always enabled)
-            renderer.shadowMap.enabled = true
-            renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
+        // Enable high-quality shadow maps (shadows always enabled)
+        renderer.shadowMap.enabled = true
+        renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
 
-            rendererRef.current = renderer
-        } catch (error) {
-            // WebGL context creation failed (too many contexts)
-            console.error("Failed to create WebGL context:", error)
-            setContextLost(true)
-            return null
-        }
+        rendererRef.current = renderer
 
         canvasRef.current.style.width = `${canvasWidth}px`
         canvasRef.current.style.height = `${canvasHeight}px`
@@ -588,7 +571,12 @@ export default function Sticker({
         // Create geometry with base dimensions (1:1 or image aspect ratio if known)
         // We'll scale the mesh uniformly to fit the container while maintaining aspect ratio
         const baseSize = Math.min(containerWidth, containerHeight)
-        const geometry = createStickerGeometry(baseSize, baseSize, BONE_GRID_X, BONE_GRID_Y)
+        const geometry = createStickerGeometry(
+            baseSize,
+            baseSize,
+            BONE_GRID_X,
+            BONE_GRID_Y
+        )
 
         // Create 2D bone grid
         // Bones are independent (not parented) - each bone controls a region of the sticker
@@ -610,7 +598,7 @@ export default function Sticker({
         }
 
         bonesRef.current = bones
-        bonesInitialPositionsRef.current = bones.map(b => b.position.clone())
+        bonesInitialPositionsRef.current = bones.map((b) => b.position.clone())
         const skeleton = new Skeleton(bones)
 
         // Create materials for front and back
@@ -647,11 +635,7 @@ export default function Sticker({
 
         // Side material: will use front texture when loaded (blends with front image), back color as fallback
         const sideMaterial = new MeshStandardMaterial({
-            color: new Color(
-                backColorRgba.r,
-                backColorRgba.g,
-                backColorRgba.b
-            ),
+            color: new Color(backColorRgba.r, backColorRgba.g, backColorRgba.b),
             transparent: true,
             opacity: 1, // Visible with back color until front texture loads
             roughness: 0.1,
@@ -672,20 +656,20 @@ export default function Sticker({
         // Create skinned mesh
         const mesh = new SkinnedMesh(geometry, materials)
         mesh.frustumCulled = false
-        
+
         // Add all bones to the mesh and initialize their matrices
-        bones.forEach(bone => {
+        bones.forEach((bone) => {
             mesh.add(bone)
             // Initialize bone matrix to ensure it's ready for skeleton
             bone.updateMatrixWorld(true)
         })
-        
+
         // Bind skeleton AFTER bones are added and initialized
         mesh.bind(skeleton)
-        
+
         // Update mesh and skeleton matrices
         mesh.updateMatrixWorld(true)
-        
+
         // Update skeleton AFTER mesh matrix world is computed
         // This ensures all bone matrices are ready
         skeleton.update()
@@ -724,12 +708,12 @@ export default function Sticker({
 
         group.add(mesh)
         meshRef.current = mesh
-        
+
         // Initialize last mesh dimensions
         lastMeshDimensionsRef.current = { width: baseSize, height: baseSize }
-        
+
         scene.add(group)
-        
+
         // Ensure mesh is immediately visible (will show back color until texture loads)
         // This prevents the "white plane only" issue
 
@@ -748,10 +732,7 @@ export default function Sticker({
 
         // Ambient light for overall scene illumination
         // Lower ambient allows shadows to be more visible
-        const ambientLight = new AmbientLight(
-            0xffffff,
-            initialAmbientIntensity
-        )
+        const ambientLight = new AmbientLight(0xffffff, initialAmbientIntensity)
         ambientLightRef.current = ambientLight
         scene.add(ambientLight)
 
@@ -776,10 +757,14 @@ export default function Sticker({
         const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
         const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
         const shadowOffsetY = shadowPositionY * 0.3
-        directionalLight.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
-        directionalLight.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
-        directionalLight.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
-        directionalLight.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+        directionalLight.shadow.camera.left =
+            -shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.right =
+            shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.top =
+            shadowCameraSize / 2 + shadowOffsetY
+        directionalLight.shadow.camera.bottom =
+            -shadowCameraSize / 2 + shadowOffsetY
         // Very small bias to prevent acne while keeping shadow visible
         directionalLight.shadow.bias = -0.00001
         directionalLight.shadow.radius = 8 // Softer shadow edges
@@ -810,7 +795,7 @@ export default function Sticker({
         if (renderer && scene && camera) {
             renderer.render(scene, camera)
         }
-        
+
         return { scene, camera, renderer, mesh, bones }
     }, [
         createStickerGeometry,
@@ -827,13 +812,13 @@ export default function Sticker({
     const renderFrame = useCallback(() => {
         if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
             return
-        
-        // Check if WebGL context is lost - but don't update state here to avoid infinite loops
+
+        // Check if WebGL context is lost
         const gl = rendererRef.current.getContext()
         if (!gl || gl.isContextLost()) {
             return
         }
-        
+
         // Ensure world matrices and skeleton are updated before rendering
         // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
         if (meshRef.current && meshRef.current.skeleton) {
@@ -844,7 +829,10 @@ export default function Sticker({
                 if (bones && bones.length > 0) {
                     // Update bone matrices individually to ensure they're ready
                     bones.forEach((bone: any) => {
-                        if (bone && typeof bone.updateMatrixWorld === 'function') {
+                        if (
+                            bone &&
+                            typeof bone.updateMatrixWorld === "function"
+                        ) {
                             bone.updateMatrixWorld(true)
                         }
                     })
@@ -856,12 +844,11 @@ export default function Sticker({
                 return
             }
         }
-        
+
         try {
             rendererRef.current.render(sceneRef.current, cameraRef.current)
         } catch (error) {
             // Silently handle render errors (context loss, etc.)
-            // Don't update state here to avoid render loops
         }
     }, [])
 
@@ -976,29 +963,35 @@ export default function Sticker({
                 const oldMaterials = oldMesh.material as any[]
                 if (Array.isArray(oldMaterials)) {
                     // Preserve textures before disposal
-                    if (oldMaterials[4]?.map) preservedTextures.front = oldMaterials[4].map
-                    if (oldMaterials[5]?.map) preservedTextures.back = oldMaterials[5].map
-                    if (oldMaterials[0]?.map) preservedTextures.side = oldMaterials[0].map
+                    if (oldMaterials[4]?.map)
+                        preservedTextures.front = oldMaterials[4].map
+                    if (oldMaterials[5]?.map)
+                        preservedTextures.back = oldMaterials[5].map
+                    if (oldMaterials[0]?.map)
+                        preservedTextures.side = oldMaterials[0].map
                 }
-                
+
                 // Remove from scene and group first
                 if (groupRef.current) {
                     groupRef.current.remove(oldMesh)
                 }
                 sceneRef.current.remove(oldMesh)
-                
+
                 // Dispose geometry
                 if (oldMesh.geometry) {
                     oldMesh.geometry.dispose()
                 }
-                
+
                 // Dispose materials and textures
                 if (Array.isArray(oldMesh.material)) {
                     oldMesh.material.forEach((mat: any) => {
                         // Don't dispose textures - they're preserved
-                        if (mat.map && mat.map !== preservedTextures.front && 
-                            mat.map !== preservedTextures.back && 
-                            mat.map !== preservedTextures.side) {
+                        if (
+                            mat.map &&
+                            mat.map !== preservedTextures.front &&
+                            mat.map !== preservedTextures.back &&
+                            mat.map !== preservedTextures.side
+                        ) {
                             mat.map.dispose()
                         }
                         mat.dispose()
@@ -1006,7 +999,7 @@ export default function Sticker({
                 } else if (oldMesh.material) {
                     oldMesh.material.dispose()
                 }
-                
+
                 // Clear old skeleton bones (they're children of the mesh)
                 if (oldMesh.skeleton) {
                     oldMesh.skeleton.bones.forEach((bone: any) => {
@@ -1042,7 +1035,9 @@ export default function Sticker({
             }
 
             bonesRef.current = bones
-            bonesInitialPositionsRef.current = bones.map(b => b.position.clone())
+            bonesInitialPositionsRef.current = bones.map((b) =>
+                b.position.clone()
+            )
             const skeleton = new Skeleton(bones)
 
             // Recreate materials (reuse existing material setup logic from setupScene)
@@ -1096,20 +1091,20 @@ export default function Sticker({
             // Create new mesh
             const mesh = new SkinnedMesh(geometry, materials)
             mesh.frustumCulled = false
-            
+
             // Add all bones to the mesh and initialize their matrices
-            bones.forEach(bone => {
+            bones.forEach((bone) => {
                 mesh.add(bone)
                 // Initialize bone matrix to ensure it's ready for skeleton
                 bone.updateMatrixWorld(true)
             })
-            
+
             // Bind skeleton AFTER bones are added and initialized
             mesh.bind(skeleton)
-            
+
             // Update mesh and skeleton matrices
             mesh.updateMatrixWorld(true)
-            
+
             // Update skeleton AFTER mesh matrix world is computed
             // This ensures all bone matrices are ready
             skeleton.update()
@@ -1142,9 +1137,12 @@ export default function Sticker({
             // No group rotation - curlRotation is handled by bone rotation axis in updateBones()
 
             meshRef.current = mesh
-            
+
             // Update last mesh dimensions
-            lastMeshDimensionsRef.current = { width: contained.width, height: contained.height }
+            lastMeshDimensionsRef.current = {
+                width: contained.width,
+                height: contained.height,
+            }
 
             // Apply textures if they're already loaded
             // Reuse preserved textures if available, otherwise create new ones
@@ -1203,13 +1201,10 @@ export default function Sticker({
                             // When using front texture (0% opacity), match front material properties for identical appearance
                             if (
                                 backColorRgba.a <= 0 &&
-                                meshMaterials[5].emissiveIntensity !==
-                                    undefined
+                                meshMaterials[5].emissiveIntensity !== undefined
                             ) {
                                 meshMaterials[5].emissiveMap = texture
-                                meshMaterials[5].emissive = new Color(
-                                    0xffffff
-                                )
+                                meshMaterials[5].emissive = new Color(0xffffff)
                                 meshMaterials[5].emissiveIntensity = 0.8 // Match front material
                             }
                         }
@@ -1248,14 +1243,9 @@ export default function Sticker({
             // Always render after mesh recreation to ensure it's visible
             renderFrame()
         },
-        [
-            createStickerGeometry,
-            backColor,
-            createBackTexture,
-            renderFrame,
-        ]
+        [createStickerGeometry, backColor, createBackTexture, renderFrame]
     )
-    
+
     // Expose a function to trigger resize after mesh recreation
     // This is needed to ensure responsiveness when image loads/changes
     const triggerResizeRef = useRef<(() => void) | null>(null)
@@ -1278,7 +1268,7 @@ export default function Sticker({
         img.onload = () => {
             // Check if component was unmounted during load
             if (imageLoadAbortRef.current || !meshRef.current) return
-            
+
             // Store reference for border color updates
             loadedImageRef.current = img
 
@@ -1295,12 +1285,20 @@ export default function Sticker({
                 requestAnimationFrame(() => {
                     // Check if component unmounted during the frame delay
                     if (imageLoadAbortRef.current) return
-                    
-                    if (meshRef.current && groupRef.current && meshRef.current.skeleton) {
+
+                    if (
+                        meshRef.current &&
+                        groupRef.current &&
+                        meshRef.current.skeleton
+                    ) {
                         try {
                             // Ensure skeleton is fully initialized before updating bones
                             const bones = meshRef.current.skeleton.bones
-                            if (bones && bones.length > 0 && bonesRef.current.length > 0) {
+                            if (
+                                bones &&
+                                bones.length > 0 &&
+                                bonesRef.current.length > 0
+                            ) {
                                 // Double-check bones are ready
                                 meshRef.current.updateMatrixWorld(true)
                                 meshRef.current.skeleton.update()
@@ -1310,7 +1308,7 @@ export default function Sticker({
                             // Silently handle initialization errors
                         }
                     }
-                    
+
                     // Trigger resize to ensure mesh is properly sized for current container
                     // This is critical for responsiveness when image first loads or changes
                     if (triggerResizeRef.current && containerRef.current) {
@@ -1318,7 +1316,7 @@ export default function Sticker({
                     }
                 })
             }
-            
+
             // Check mesh is still valid after potential recreation
             if (!meshRef.current?.material) return
 
@@ -1414,7 +1412,11 @@ export default function Sticker({
                 // Trigger resize after textures are applied to ensure proper sizing
                 // This ensures component is responsive immediately after image loads
                 requestAnimationFrame(() => {
-                    if (!imageLoadAbortRef.current && triggerResizeRef.current && containerRef.current) {
+                    if (
+                        !imageLoadAbortRef.current &&
+                        triggerResizeRef.current &&
+                        containerRef.current
+                    ) {
                         triggerResizeRef.current()
                     }
                 })
@@ -1438,7 +1440,7 @@ export default function Sticker({
         renderFrame,
         recreateMeshWithAspectRatio,
     ])
-    
+
     // Note: updateBones is called in setTimeout inside loadTexture, so it doesn't need to be a dependency
     // It will be available at runtime when the setTimeout executes
 
@@ -1451,26 +1453,31 @@ export default function Sticker({
     // ========================================================================
 
     const updateBones = useCallback(() => {
-        if (!bonesRef.current.length || !meshRef.current || !bonesInitialPositionsRef.current.length) return
-        
+        if (
+            !bonesRef.current.length ||
+            !meshRef.current ||
+            !bonesInitialPositionsRef.current.length
+        )
+            return
+
         // Check if skeleton exists and has valid bones
         if (!meshRef.current.skeleton) return
         const skeletonBones = meshRef.current.skeleton.bones
         if (!skeletonBones || skeletonBones.length === 0) return
-        
+
         try {
             // Force computation of world matrices BEFORE modifying bones
             // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
             // especially when curlRotation != 0 and bones have quaternion rotations
             meshRef.current.updateMatrixWorld(true)
-            
+
             // Ensure all bones have valid matrices before skeleton update
             skeletonBones.forEach((bone: any) => {
-                if (bone && typeof bone.updateMatrixWorld === 'function') {
+                if (bone && typeof bone.updateMatrixWorld === "function") {
                     bone.updateMatrixWorld(true)
                 }
             })
-            
+
             meshRef.current.skeleton.update()
         } catch (error) {
             // Silently handle errors during bone updates
@@ -1481,7 +1488,9 @@ export default function Sticker({
         const initialPositions = bonesInitialPositionsRef.current
         const curlFactor = Math.max(0.0001, animatedCurlRef.current.amount)
         // Use animated radius value instead of internalRadiusRef
-        const r = mapInteralRadiusToUIValue(animatedCurlRadiusRef.current.radius)
+        const r = mapInteralRadiusToUIValue(
+            animatedCurlRadiusRef.current.radius
+        )
 
         const mesh = meshRef.current
         // Use BASE geometry dimensions (without scale) for curl calculations
@@ -1489,7 +1498,7 @@ export default function Sticker({
         // The scale is automatically applied through bone positions being children of the scaled mesh
         const width = mesh.geometry.parameters.width
         const height = mesh.geometry.parameters.height
-        
+
         // Use ref to always get current curlRotation value (avoids stale closure issues in Canvas mode)
         const curlRotationRad = (curlRotationRef.current * Math.PI) / 180
         const dirX = Math.cos(curlRotationRad)
@@ -1503,18 +1512,18 @@ export default function Sticker({
         // The rectangle extends from -halfWidth to +halfWidth in X and -halfHeight to +halfHeight in Y
         const halfWidth = width / 2
         const halfHeight = height / 2
-        
+
         // Check all 4 corners to find the maximum distance along the curl direction
         // Corner coordinates: (w, h), (w, -h), (-w, h), (-w, -h)
         // Distance along direction (dirX, dirY) = x * dirX + y * dirY
-        const corner1 = halfWidth * dirX + halfHeight * dirY  // (w, h)
-        const corner2 = halfWidth * dirX - halfHeight * dirY  // (w, -h)
+        const corner1 = halfWidth * dirX + halfHeight * dirY // (w, h)
+        const corner2 = halfWidth * dirX - halfHeight * dirY // (w, -h)
         const corner3 = -halfWidth * dirX + halfHeight * dirY // (-w, h)
-        const corner4 = -halfWidth * dirX - halfHeight * dirY  // (-w, -h)
-        
+        const corner4 = -halfWidth * dirX - halfHeight * dirY // (-w, -h)
+
         // Maximum distance along curl direction (furthest corner in that direction)
         const maxDistAlongDir = Math.max(corner1, corner2, corner3, corner4)
-        
+
         // Keep maxDistFromCenter for radius calculations (uses diagonal for smooth curves)
         const diagonalLength = Math.sqrt(width * width + height * height)
         const maxDistFromCenter = diagonalLength / 2
@@ -1523,9 +1532,10 @@ export default function Sticker({
         // Use animated curlStart value for smooth animations
         // Use maxDistAlongDir to keep fold line within sticker bounds (0 = left/top edge, 1 = right/bottom edge)
         const animatedStart = animatedCurlStartRef.current.start
-        const foldOffset = -maxDistAlongDir + animatedStart * 2 * maxDistAlongDir
+        const foldOffset =
+            -maxDistAlongDir + animatedStart * 2 * maxDistAlongDir
         const radiusWorld = r * maxDistFromCenter
-        
+
         // RPrime is the current bending radius. As f -> 0, RPrime -> infinity (flat)
         const RPrime = radiusWorld / curlFactor
         const arcLimit = Math.PI * radiusWorld
@@ -1538,10 +1548,10 @@ export default function Sticker({
 
             if (signedDist > 0) {
                 let xRel, zRel, finalAngle
-                
+
                 if (curlMode === "semicircle") {
                     // Semicircle: follow arc of radius RPrime for arcLimit distance, then go straight
-                    const angle_s = signedDist * curlFactor / radiusWorld
+                    const angle_s = (signedDist * curlFactor) / radiusWorld
                     if (signedDist <= arcLimit) {
                         xRel = RPrime * Math.sin(angle_s)
                         zRel = RPrime * (1 - Math.cos(angle_s))
@@ -1558,11 +1568,12 @@ export default function Sticker({
                     }
                 } else {
                     // Spiral mode: tighten the radius as we wrap
-                    const angle_sp = signedDist * curlFactor / radiusWorld
+                    const angle_sp = (signedDist * curlFactor) / radiusWorld
                     const spiralDecay = 0.85
-                    const effectiveR = radiusWorld * Math.pow(spiralDecay, angle_sp / Math.PI)
+                    const effectiveR =
+                        radiusWorld * Math.pow(spiralDecay, angle_sp / Math.PI)
                     const effectiveRPrime = effectiveR / curlFactor
-                    
+
                     xRel = effectiveRPrime * Math.sin(angle_sp)
                     zRel = effectiveRPrime * (1 - Math.cos(angle_sp))
                     finalAngle = angle_sp
@@ -1612,19 +1623,19 @@ export default function Sticker({
 
         renderFrame()
     }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
-    
+
     // Set up motion value event listeners to sync with refs and update bones
     // These must be after updateBones is defined
     useMotionValueEvent(curlAmountMotion, "change", (latest) => {
         animatedCurlRef.current.amount = latest
         updateBones()
     })
-    
+
     useMotionValueEvent(curlStartMotion, "change", (latest) => {
         animatedCurlStartRef.current.start = latest
         updateBones()
     })
-    
+
     useMotionValueEvent(curlRadiusMotion, "change", (latest) => {
         animatedCurlRadiusRef.current.radius = latest
         updateBones()
@@ -1722,48 +1733,58 @@ export default function Sticker({
         curlStart?: ReturnType<typeof animate>
         curlRadius?: ReturnType<typeof animate>
     }>({})
-    
+
     // Helper function to build transition config from ControlType.Transition
     // Handles both tween and spring animation types with all their properties
-    const buildTransitionConfig = useCallback((
-        transitionValue: typeof transition,
-        fallbackDuration: number = animationDuration,
-        defaultEase?: string
-    ): any => {
-        const config: any = {
-            ...(transitionValue?.type && { type: transitionValue.type }),
-        }
-        
-        // For tween animations
-        if (!transitionValue?.type || transitionValue.type === "tween") {
-            // ControlType.Transition already provides duration in seconds
-            // fallbackDuration (animationDuration) is also in seconds
-            const duration = transitionValue?.duration ?? fallbackDuration
-            config.duration = duration
-            if (transitionValue?.ease) {
-                config.ease = transitionValue.ease
-            } else if (defaultEase) {
-                config.ease = defaultEase
+    const buildTransitionConfig = useCallback(
+        (
+            transitionValue: typeof transition,
+            fallbackDuration: number = animationDuration,
+            defaultEase?: string
+        ): any => {
+            const config: any = {
+                ...(transitionValue?.type && { type: transitionValue.type }),
             }
-            if (transitionValue?.delay !== undefined) config.delay = transitionValue.delay
-        }
-        
-        // For spring animations
-        if (transitionValue?.type === "spring") {
-            if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
-            if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
-            if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
-            if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
-            if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
-            if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
-            // Spring can also have duration if provided (already in seconds from ControlType.Transition)
-            if (transitionValue.duration !== undefined) {
-                config.duration = transitionValue.duration
+
+            // For tween animations
+            if (!transitionValue?.type || transitionValue.type === "tween") {
+                // ControlType.Transition already provides duration in seconds
+                // fallbackDuration (animationDuration) is also in seconds
+                const duration = transitionValue?.duration ?? fallbackDuration
+                config.duration = duration
+                if (transitionValue?.ease) {
+                    config.ease = transitionValue.ease
+                } else if (defaultEase) {
+                    config.ease = defaultEase
+                }
+                if (transitionValue?.delay !== undefined)
+                    config.delay = transitionValue.delay
             }
-        }
-        
-        return config
-    }, [animationDuration])
+
+            // For spring animations
+            if (transitionValue?.type === "spring") {
+                if (transitionValue.stiffness !== undefined)
+                    config.stiffness = transitionValue.stiffness
+                if (transitionValue.damping !== undefined)
+                    config.damping = transitionValue.damping
+                if (transitionValue.mass !== undefined)
+                    config.mass = transitionValue.mass
+                if (transitionValue.bounce !== undefined)
+                    config.bounce = transitionValue.bounce
+                if (transitionValue.restDelta !== undefined)
+                    config.restDelta = transitionValue.restDelta
+                if (transitionValue.restSpeed !== undefined)
+                    config.restSpeed = transitionValue.restSpeed
+                // Spring can also have duration if provided (already in seconds from ControlType.Transition)
+                if (transitionValue.duration !== undefined) {
+                    config.duration = transitionValue.duration
+                }
+            }
+
+            return config
+        },
+        [animationDuration]
+    )
 
     // Mouse move handler: check if over sticker and trigger animations
     const handleMouseMove = useCallback(
@@ -1774,28 +1795,31 @@ export default function Sticker({
             if (isOverSticker && !wasHovering) {
                 // Entering sticker: animate to end values from animation object
                 isHoveringRef.current = true
-                
+
                 // Stop any existing animations
-                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
-                
+                if (animationControlsRef.current.curlAmount)
+                    animationControlsRef.current.curlAmount.stop()
+                if (animationControlsRef.current.curlStart)
+                    animationControlsRef.current.curlStart.stop()
+                if (animationControlsRef.current.curlRadius)
+                    animationControlsRef.current.curlRadius.stop()
+
                 // Build transition config from ControlType.Transition
                 const transitionConfig = buildTransitionConfig(transition)
-                
+
                 // Animate all values to their end states simultaneously
                 animationControlsRef.current.curlAmount = animate(
                     curlAmountMotion,
                     animation.curlAmountEnd,
                     transitionConfig
                 )
-                
+
                 animationControlsRef.current.curlStart = animate(
                     curlStartMotion,
                     animation.curlStartEnd,
                     transitionConfig
                 )
-                
+
                 animationControlsRef.current.curlRadius = animate(
                     curlRadiusMotion,
                     animation.curlRadiusEnd,
@@ -1804,28 +1828,31 @@ export default function Sticker({
             } else if (!isOverSticker && wasHovering) {
                 // Leaving sticker: animate back to start values from animation object
                 isHoveringRef.current = false
-                
+
                 // Stop any existing animations
-                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
-                
+                if (animationControlsRef.current.curlAmount)
+                    animationControlsRef.current.curlAmount.stop()
+                if (animationControlsRef.current.curlStart)
+                    animationControlsRef.current.curlStart.stop()
+                if (animationControlsRef.current.curlRadius)
+                    animationControlsRef.current.curlRadius.stop()
+
                 // Build transition config from ControlType.Transition
                 const transitionConfig = buildTransitionConfig(transition)
-                
+
                 // Animate all values back to their start states simultaneously
                 animationControlsRef.current.curlAmount = animate(
                     curlAmountMotion,
                     animation.curlAmountStart,
                     transitionConfig
                 )
-                
+
                 animationControlsRef.current.curlStart = animate(
                     curlStartMotion,
                     animation.curlStartStart,
                     transitionConfig
                 )
-                
+
                 animationControlsRef.current.curlRadius = animate(
                     curlRadiusMotion,
                     animation.curlRadiusStart,
@@ -1833,42 +1860,66 @@ export default function Sticker({
                 )
             }
         },
-        [checkMouseOverSticker, animation, transition, animationDuration, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig]
+        [
+            checkMouseOverSticker,
+            animation,
+            transition,
+            animationDuration,
+            curlAmountMotion,
+            curlStartMotion,
+            curlRadiusMotion,
+            buildTransitionConfig,
+        ]
     )
 
     // Mouse leave handler: always reset when leaving canvas
     const handleMouseLeave = useCallback(() => {
         if (isHoveringRef.current) {
             isHoveringRef.current = false
-            
+
             // Stop any existing animations
-            if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-            if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-            if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
-            
+            if (animationControlsRef.current.curlAmount)
+                animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart)
+                animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius)
+                animationControlsRef.current.curlRadius.stop()
+
             // Build transition config from ControlType.Transition (use easeOut for mouse leave)
-            const transitionConfig = buildTransitionConfig(transition, animationDuration, "easeOut")
-            
+            const transitionConfig = buildTransitionConfig(
+                transition,
+                animationDuration,
+                "easeOut"
+            )
+
             // Animate all values back to their start states simultaneously
             animationControlsRef.current.curlAmount = animate(
                 curlAmountMotion,
                 animation.curlAmountStart,
                 transitionConfig
             )
-            
+
             animationControlsRef.current.curlStart = animate(
                 curlStartMotion,
                 animation.curlStartStart,
                 transitionConfig
             )
-            
+
             animationControlsRef.current.curlRadius = animate(
                 curlRadiusMotion,
                 animation.curlRadiusStart,
                 transitionConfig
             )
         }
-    }, [animation, transition, animationDuration, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig])
+    }, [
+        animation,
+        transition,
+        animationDuration,
+        curlAmountMotion,
+        curlStartMotion,
+        curlRadiusMotion,
+        buildTransitionConfig,
+    ])
 
     // ========================================================================
     // RESIZE HANDLING
@@ -1922,12 +1973,17 @@ export default function Sticker({
                 const geometry = meshRef.current.geometry
                 const baseWidth = geometry.parameters.width
                 const baseHeight = geometry.parameters.height
-                
+
                 // Check if aspect ratio changed significantly (needs recreation)
-                const aspectRatioChanged = imageAspectRatioRef.current && 
+                const aspectRatioChanged =
+                    imageAspectRatioRef.current &&
                     lastMeshDimensionsRef.current &&
-                    Math.abs((lastMeshDimensionsRef.current.width / lastMeshDimensionsRef.current.height) - (width / height)) > 0.01
-                
+                    Math.abs(
+                        lastMeshDimensionsRef.current.width /
+                            lastMeshDimensionsRef.current.height -
+                            width / height
+                    ) > 0.01
+
                 if (aspectRatioChanged && imageAspectRatioRef.current) {
                     // Recreate mesh with new aspect ratio
                     recreateMeshWithAspectRatio(imageAspectRatioRef.current)
@@ -1948,14 +2004,14 @@ export default function Sticker({
                     // This preserves textures and is much faster
                     const scaleX = width / baseWidth
                     const scaleY = height / baseHeight
-                    
+
                     meshRef.current.scale.set(scaleX, scaleY, 1)
                     // Mesh stays centered at origin (no position offset with 2D grid)
                     meshRef.current.position.set(0, 0, 0)
-                    
+
                     // Update last dimensions
                     lastMeshDimensionsRef.current = { width, height }
-                    
+
                     // Update bones to reflect new scale
                     updateBones()
                     renderFrame()
@@ -1965,222 +2021,32 @@ export default function Sticker({
             // Update shadow camera (shadows always enabled)
             if (lightRef.current) {
                 // Match shadow camera bounds from setupScene
-                const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+                const shadowCameraSize =
+                    Math.max(containerWidth, containerHeight) * 3.5
                 const shadowOffsetX = shadowPositionX * 0.3
                 const shadowOffsetY = shadowPositionY * 0.3
-                lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
-                lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
-                lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
-                lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+                lightRef.current.shadow.camera.left =
+                    -shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.right =
+                    shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.top =
+                    shadowCameraSize / 2 + shadowOffsetY
+                lightRef.current.shadow.camera.bottom =
+                    -shadowCameraSize / 2 + shadowOffsetY
                 lightRef.current.shadow.camera.updateProjectionMatrix()
             }
         },
-        [
-            recreateMeshWithAspectRatio,
-            updateBones,
-            renderFrame,
-        ]
+        [recreateMeshWithAspectRatio, updateBones, renderFrame]
     )
 
     // ========================================================================
     // EFFECTS
     // ========================================================================
 
-    // WebGL context loss detection - set up early
-    useEffect(() => {
-        const canvas = canvasRef.current
-        if (!canvas) return
-
-        const handleContextLost = (event: Event) => {
-            event.preventDefault() // Prevent default behavior
-            console.warn(
-                "WebGL context lost event fired. Too many WebGL contexts active. Try reducing the number of 3D components on the page."
-            )
-            setContextLost(true)
-        }
-
-        const handleContextRestored = () => {
-            console.log("WebGL context restored event fired")
-            setContextLost(false)
-            // Re-initialize the scene when context is restored
-            if (hasContent) {
-                const sceneSetup = setupScene()
-                if (sceneSetup && meshRef.current) {
-                    if (meshRef.current.skeleton) {
-                        meshRef.current.skeleton.update()
-                    }
-                    updateBones()
-                    renderFrame()
-                    loadTexture()
-                }
-            }
-        }
-
-        canvas.addEventListener("webglcontextlost", handleContextLost, false)
-        canvas.addEventListener("webglcontextrestored", handleContextRestored, false)
-
-        return () => {
-            canvas.removeEventListener("webglcontextlost", handleContextLost)
-            canvas.removeEventListener(
-                "webglcontextrestored",
-                handleContextRestored
-            )
-        }
-    }, [hasContent, setupScene, updateBones, renderFrame, loadTexture])
-    
-    // Retry initialization when props change and context was lost
-    // This allows the component to recover when user tweaks props
-    useEffect(() => {
-        if (contextLost && hasContent) {
-            // Prevent rapid retry attempts - only allow once per 2 seconds
-            const now = Date.now()
-            if (now - lastRetryAttemptRef.current < 2000) {
-                return
-            }
-            lastRetryAttemptRef.current = now
-            
-            console.log("Props changed while context lost - attempting to reinitialize...")
-            // Reset context lost state and attempt to reinitialize
-            setContextLost(false)
-            imageLoadAbortRef.current = false
-            
-            // Attempt to recreate the scene with a slight delay to ensure cleanup
-            const retryTimeout = setTimeout(() => {
-                console.log("Retrying scene setup after context loss...")
-                const sceneSetup = setupScene()
-                if (sceneSetup && meshRef.current) {
-                    // Successfully created new context
-                    console.log("Successfully recreated WebGL context!")
-                    if (meshRef.current.skeleton) {
-                        meshRef.current.skeleton.update()
-                    }
-                    updateBones()
-                    renderFrame()
-                    loadTexture()
-                } else {
-                    console.warn("Failed to recreate WebGL context - still unavailable")
-                }
-            }, 100)
-            
-            return () => clearTimeout(retryTimeout)
-        }
-    }, [
-        resolvedImageUrl, 
-        curlRotation, 
-        curlMode, 
-        backColor, 
-        shadowPositionX, 
-        shadowPositionY, 
-        castShadowOpacity, 
-        animation.curlAmountStart,
-        animation.curlAmountEnd,
-        animation.curlRadiusStart,
-        animation.curlRadiusEnd,
-        animation.curlStartStart,
-        animation.curlStartEnd,
-        animation.show,
-        contextLost, 
-        hasContent, 
-        setupScene, 
-        updateBones, 
-        renderFrame, 
-        loadTexture
-    ])
-
     // Reset aspect ratio when image changes
     useEffect(() => {
         imageAspectRatioRef.current = null
     }, [resolvedImageUrl])
-
-    // Refresh toggle - force complete re-initialization when toggled
-    useEffect(() => {
-        // Only run when refresh value actually changes (not on initial mount)
-        if (previousRefreshRef.current === undefined) {
-            previousRefreshRef.current = refresh
-            return
-        }
-        
-        // If refresh value hasn't changed, do nothing
-        if (previousRefreshRef.current === refresh) {
-            return
-        }
-        
-        // Update the previous value
-        previousRefreshRef.current = refresh
-        
-        if (!hasContent) return
-        
-        // Clean up existing scene completely
-        if (rendererRef.current) {
-            try {
-                rendererRef.current.dispose()
-            } catch (error) {
-                // Silently handle disposal errors
-            }
-            rendererRef.current = null
-        }
-        if (sceneRef.current) {
-            try {
-                // Remove all children before clearing
-                while (sceneRef.current.children.length > 0) {
-                    const child = sceneRef.current.children[0]
-                    sceneRef.current.remove(child)
-                }
-                sceneRef.current.clear()
-            } catch (error) {
-                // Silently handle cleanup errors
-            }
-            sceneRef.current = null
-        }
-        if (meshRef.current) {
-            const oldMesh = meshRef.current
-            if (groupRef.current) {
-                groupRef.current.remove(oldMesh)
-            }
-            // Dispose skeleton bones
-            if (oldMesh.skeleton) {
-                oldMesh.skeleton.bones.forEach((bone: any) => {
-                    if (bone && bone.parent) {
-                        bone.parent.remove(bone)
-                    }
-                })
-            }
-            if (oldMesh.geometry) {
-                oldMesh.geometry.dispose()
-            }
-            if (Array.isArray(oldMesh.material)) {
-                oldMesh.material.forEach((mat: any) => {
-                    if (mat.map) mat.map.dispose()
-                    mat.dispose()
-                })
-            }
-            meshRef.current = null
-        }
-        groupRef.current = null
-        bonesRef.current = []
-        bonesInitialPositionsRef.current = []
-        lightRef.current = null
-        ambientLightRef.current = null
-        backgroundPlaneRef.current = null
-        loadedImageRef.current = null
-        
-        // Reset context lost state
-        setContextLost(false)
-        imageLoadAbortRef.current = false
-        
-        // Reinitialize scene after a brief delay to ensure cleanup is complete
-        setTimeout(() => {
-            const sceneSetup = setupScene()
-            if (sceneSetup && meshRef.current) {
-                if (meshRef.current.skeleton) {
-                    meshRef.current.skeleton.update()
-                }
-                updateBones()
-                renderFrame()
-                loadTexture()
-            }
-        }, 50)
-    }, [refresh, hasContent, setupScene, updateBones, renderFrame, loadTexture])
 
     // Initialize scene
     useEffect(() => {
@@ -2212,16 +2078,13 @@ export default function Sticker({
             loadedImageRef.current = null
             return
         }
-        
+
         imageLoadAbortRef.current = false // Reset abort flag when content is available
 
         const sceneSetup = setupScene()
-        
+
         if (!sceneSetup) {
-            // If setupScene returns null, it might be:
-            // 1. Container not ready (retry)
-            // 2. WebGL context failed (contextLost already set in setupScene)
-            // Try again after a short delay
+            // If setupScene returns null (container not ready), try again after a short delay
             const retryTimeout = setTimeout(() => {
                 const retrySetup = setupScene()
                 if (retrySetup && meshRef.current) {
@@ -2234,9 +2097,6 @@ export default function Sticker({
                     renderFrame()
                     // Load texture asynchronously
                     loadTexture()
-                } else if (!retrySetup) {
-                    // Retry failed - if contextLost isn't already set, this might be a context issue
-                    console.warn("Scene setup failed on retry - context may be unavailable")
                 }
             }, 100)
             return () => clearTimeout(retryTimeout)
@@ -2253,11 +2113,15 @@ export default function Sticker({
             renderFrame()
             // Load texture asynchronously - it will trigger another render when done
             loadTexture()
-            
+
             // Trigger initial resize to ensure proper sizing
             // This ensures component is responsive from the start
             requestAnimationFrame(() => {
-                if (!imageLoadAbortRef.current && triggerResizeRef.current && containerRef.current) {
+                if (
+                    !imageLoadAbortRef.current &&
+                    triggerResizeRef.current &&
+                    containerRef.current
+                ) {
                     triggerResizeRef.current()
                 }
             })
@@ -2268,11 +2132,11 @@ export default function Sticker({
                 cancelAnimationFrame(animationFrameRef.current)
                 animationFrameRef.current = null
             }
-            
+
             // Dispose mesh and all its resources
             if (meshRef.current) {
                 const oldMesh = meshRef.current
-                
+
                 // Remove from scene and group
                 if (groupRef.current) {
                     groupRef.current.remove(oldMesh)
@@ -2280,12 +2144,12 @@ export default function Sticker({
                 if (sceneRef.current) {
                     sceneRef.current.remove(oldMesh)
                 }
-                
+
                 // Dispose geometry
                 if (oldMesh.geometry) {
                     oldMesh.geometry.dispose()
                 }
-                
+
                 // Dispose materials and textures
                 if (Array.isArray(oldMesh.material)) {
                     oldMesh.material.forEach((mat: any) => {
@@ -2294,11 +2158,11 @@ export default function Sticker({
                     })
                 } else if (oldMesh.material) {
                     if ((oldMesh.material as any).map) {
-                        (oldMesh.material as any).map.dispose()
+                        ;(oldMesh.material as any).map.dispose()
                     }
                     oldMesh.material.dispose()
                 }
-                
+
                 // Clear skeleton bones
                 if (oldMesh.skeleton) {
                     oldMesh.skeleton.bones.forEach((bone: any) => {
@@ -2307,15 +2171,15 @@ export default function Sticker({
                         }
                     })
                 }
-                
+
                 meshRef.current = null
             }
-            
+
             // Clear bones refs
             bonesRef.current = []
             bonesInitialPositionsRef.current = []
             groupRef.current = null
-            
+
             // Dispose renderer (this also disposes of its WebGL context)
             if (rendererRef.current) {
                 try {
@@ -2325,7 +2189,7 @@ export default function Sticker({
                 }
                 rendererRef.current = null
             }
-            
+
             // Clear scene
             if (sceneRef.current) {
                 try {
@@ -2334,8 +2198,11 @@ export default function Sticker({
                         const child = sceneRef.current.children[0]
                         sceneRef.current.remove(child)
                         // Dispose if it has dispose method
-                        if ((child as any).dispose && typeof (child as any).dispose === 'function') {
-                            (child as any).dispose()
+                        if (
+                            (child as any).dispose &&
+                            typeof (child as any).dispose === "function"
+                        ) {
+                            ;(child as any).dispose()
                         }
                     }
                     sceneRef.current.clear()
@@ -2344,7 +2211,7 @@ export default function Sticker({
                 }
                 sceneRef.current = null
             }
-            
+
             // Clear refs
             cameraRef.current = null
             lightRef.current = null
@@ -2352,13 +2219,16 @@ export default function Sticker({
             backgroundPlaneRef.current = null
             loadedImageRef.current = null
             imageAspectRatioRef.current = null
-            
+
             // Stop any running animations
-            if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-            if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-            if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
+            if (animationControlsRef.current.curlAmount)
+                animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart)
+                animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius)
+                animationControlsRef.current.curlRadius.stop()
             animationControlsRef.current = {}
-            
+
             // Mark image loading as aborted to prevent callbacks from running after unmount
             imageLoadAbortRef.current = true
         }
@@ -2371,30 +2241,37 @@ export default function Sticker({
             // In Canvas mode, respect the show prop to determine which state to display
             // In preview/live mode, always use start values
             const shouldShowFinal = isCanvas && animation.show === "final"
-            
-            const targetCurlAmount = shouldShowFinal 
-                ? animation.curlAmountEnd 
+
+            const targetCurlAmount = shouldShowFinal
+                ? animation.curlAmountEnd
                 : animation.curlAmountStart
-            const targetCurlStart = shouldShowFinal 
-                ? animation.curlStartEnd 
+            const targetCurlStart = shouldShowFinal
+                ? animation.curlStartEnd
                 : animation.curlStartStart
-            const targetCurlRadius = shouldShowFinal 
-                ? animation.curlRadiusEnd 
+            const targetCurlRadius = shouldShowFinal
+                ? animation.curlRadiusEnd
                 : animation.curlRadiusStart
-            
+
             // Set motion values directly (no animation when props change)
             // Note: .set() doesn't trigger useMotionValueEvent, so we update refs manually
             curlAmountMotion.set(targetCurlAmount)
             curlStartMotion.set(targetCurlStart)
             curlRadiusMotion.set(targetCurlRadius)
-            
+
             // Update refs directly and call updateBones
             animatedCurlRef.current.amount = targetCurlAmount
             animatedCurlStartRef.current.start = targetCurlStart
             animatedCurlRadiusRef.current.radius = targetCurlRadius
             updateBones()
         }
-    }, [animation, isCanvas, curlAmountMotion, curlStartMotion, curlRadiusMotion, updateBones])
+    }, [
+        animation,
+        isCanvas,
+        curlAmountMotion,
+        curlStartMotion,
+        curlRadiusMotion,
+        updateBones,
+    ])
 
     // Update bones when curlMode changes
     // Note: curlAmount and curlStart are handled by GSAP animations via animated refs
@@ -2409,7 +2286,12 @@ export default function Sticker({
         if (!meshRef.current || !bonesRef.current.length) return
         updateBones()
         // In Canvas mode, explicitly render to ensure the change is visible
-        if (isCanvas && rendererRef.current && sceneRef.current && cameraRef.current) {
+        if (
+            isCanvas &&
+            rendererRef.current &&
+            sceneRef.current &&
+            cameraRef.current
+        ) {
             renderFrame()
         }
     }, [curlRotation, updateBones, isCanvas, renderFrame])
@@ -2520,24 +2402,31 @@ export default function Sticker({
             lightRef.current.shadow.mapSize.height = 4096
             lightRef.current.shadow.bias = -0.00001
             lightRef.current.shadow.radius = 8
-            
+
             // Update shadow camera bounds to account for new light position
             const container = containerRef.current
-            const containerWidth = container.clientWidth || container.offsetWidth || 1
-            const containerHeight = container.clientHeight || container.offsetHeight || 1
-            const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+            const containerWidth =
+                container.clientWidth || container.offsetWidth || 1
+            const containerHeight =
+                container.clientHeight || container.offsetHeight || 1
+            const shadowCameraSize =
+                Math.max(containerWidth, containerHeight) * 3.5
             const shadowOffsetX = shadowPositionX * 0.3
             const shadowOffsetY = shadowPositionY * 0.3
-            lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
-            lightRef.current.shadow.camera.right = shadowCameraSize / 2 + shadowOffsetX
-            lightRef.current.shadow.camera.top = shadowCameraSize / 2 + shadowOffsetY
-            lightRef.current.shadow.camera.bottom = -shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.left =
+                -shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.right =
+                shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.top =
+                shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.bottom =
+                -shadowCameraSize / 2 + shadowOffsetY
             lightRef.current.shadow.camera.updateProjectionMatrix()
             lightRef.current.shadow.needsUpdate = true
 
             renderFrame()
         }, 50) // 50ms debounce to prevent lag when dragging sliders
-        
+
         return () => clearTimeout(timeoutId)
     }, [shadowPositionX, shadowPositionY, renderFrame])
 
@@ -2576,10 +2465,12 @@ export default function Sticker({
 
             // Update plane size to match shadow camera bounds
             const container = containerRef.current
-            const containerWidth = container.clientWidth || container.offsetWidth || 1
-            const containerHeight = container.clientHeight || container.offsetHeight || 1
+            const containerWidth =
+                container.clientWidth || container.offsetWidth || 1
+            const containerHeight =
+                container.clientHeight || container.offsetHeight || 1
             const planeSize = Math.max(containerWidth, containerHeight) * 3.5
-            
+
             // Dispose old geometry and create new one with updated size
             const oldGeometry = backgroundPlaneRef.current.geometry
             const newGeometry = new PlaneGeometry(planeSize, planeSize)
@@ -2588,7 +2479,7 @@ export default function Sticker({
 
             renderFrame()
         }, 50) // 50ms debounce to prevent lag when dragging sliders
-        
+
         return () => clearTimeout(timeoutId)
     }, [castShadowOpacity, renderFrame])
 
@@ -2601,7 +2492,7 @@ export default function Sticker({
         const handleResize = () => {
             const width = container.clientWidth || container.offsetWidth || 1
             const height = container.clientHeight || container.offsetHeight || 1
-            
+
             // For preview/live mode, always update if dimensions are valid
             // For canvas mode, only update if scene is initialized
             if (width > 0 && height > 0) {
@@ -2609,11 +2500,16 @@ export default function Sticker({
                 const sizeChanged =
                     Math.abs(width - last.width) > 0.5 ||
                     Math.abs(height - last.height) > 0.5
-                
+
                 if (sizeChanged || !last.width || !last.height) {
                     // In preview/live mode, update immediately
                     // In canvas mode, only update if scene is ready
-                    if (!isCanvas || (rendererRef.current && cameraRef.current && meshRef.current)) {
+                    if (
+                        !isCanvas ||
+                        (rendererRef.current &&
+                            cameraRef.current &&
+                            meshRef.current)
+                    ) {
                         last.width = width
                         last.height = height
                         updateSize(width, height)
@@ -2622,7 +2518,7 @@ export default function Sticker({
                 }
             }
         }
-        
+
         // Store handleResize in ref so it can be called from image load callback
         triggerResizeRef.current = handleResize
 
@@ -2643,7 +2539,10 @@ export default function Sticker({
         }
         // Trigger immediately, then also schedule delayed attempts
         handleResize()
-        const initialResizeTimeout = setTimeout(attemptResize, isCanvas ? 0 : 50)
+        const initialResizeTimeout = setTimeout(
+            attemptResize,
+            isCanvas ? 0 : 50
+        )
 
         // Use requestAnimationFrame-based monitoring for canvas mode (like interactive-thermal3.tsx)
         const resizeCleanup = isCanvas
@@ -2679,7 +2578,11 @@ export default function Sticker({
 
                       if (timeOk && (aspectChanged || sizeChanged)) {
                           // Only update lastSizeRef if scene is ready (canvas mode requirement)
-                          if (rendererRef.current && cameraRef.current && meshRef.current) {
+                          if (
+                              rendererRef.current &&
+                              cameraRef.current &&
+                              meshRef.current
+                          ) {
                               lastSizeRef.current = {
                                   width: cw,
                                   height: ch,
@@ -2715,47 +2618,6 @@ export default function Sticker({
         }
     }, [updateSize, renderFrame, isCanvas, hasContent, resolvedImageUrl])
 
-    // Periodic check for context loss (in case event doesn't fire)
-    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
-    useEffect(() => {
-        if (!hasContent || contextLost) return
-        
-        let checkCount = 0
-        const maxFastChecks = 5 // First 5 checks are faster
-        
-        const checkContext = () => {
-            if (rendererRef.current) {
-                const gl = rendererRef.current.getContext()
-                if (!gl || gl.isContextLost()) {
-                    console.warn("Detected context loss via periodic check")
-                    setContextLost(true)
-                }
-            }
-            checkCount++
-        }
-        
-        // Start with faster checks (every 500ms for first 2.5 seconds)
-        // Then slow down to every 3 seconds
-        const fastInterval = setInterval(() => {
-            if (checkCount >= maxFastChecks) {
-                clearInterval(fastInterval)
-            } else {
-                checkContext()
-            }
-        }, 500)
-        
-        const slowInterval = setInterval(() => {
-            if (checkCount >= maxFastChecks) {
-                checkContext()
-            }
-        }, 3000)
-        
-        return () => {
-            clearInterval(fastInterval)
-            clearInterval(slowInterval)
-        }
-    }, [hasContent, contextLost])
-
     // ========================================================================
     // RENDER
     // ========================================================================
@@ -2778,36 +2640,8 @@ export default function Sticker({
 
     // Show canvas when scene is initialized (mesh will be visible even before texture loads)
     // The mesh will show with back color until texture loads
-    // NOTE: This must be before conditional returns for React hooks rules
     const isReady = sceneRef.current !== null && meshRef.current !== null
-    
-    // If we have content but no scene after a delay, assume context loss
-    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
-    useEffect(() => {
-        if (!hasContent || contextLost || isReady) return
-        
-        // After 2 seconds, if still no scene, assume WebGL context issue
-        const checkTimeout = setTimeout(() => {
-            if (!sceneRef.current && !contextLost) {
-                console.warn("Scene failed to initialize after 2 seconds - assuming WebGL context unavailable")
-                setContextLost(true)
-            }
-        }, 2000)
-        
-        return () => clearTimeout(checkTimeout)
-    }, [hasContent, contextLost, isReady])
 
-    // Show error message when WebGL context is lost
-    if (contextLost) {
-        return (
-            <ComponentMessage
-            title="⚠️ Don't worry, this is normal."
-            subtitle="There are currently more stickers in Canvas than Browsers can handle. Tweak Refresh to see the sticker re-appear. If you don't add too many stickers, you won't have issues in preview or deployed website."
-            />
-            
-        )
-    }
-    
     // Calculate offset to center the larger canvas within the container
     // This gives extra space for shadows while keeping the sticker centered
     const offsetPercent = ((CANVAS_SCALE - 1) / 2) * 100
@@ -2846,10 +2680,12 @@ export default function Sticker({
                     left: `-${offsetPercent}%`,
                     // In canvas mode, use explicit dimensions for better responsiveness
                     // In preview/live mode, let JavaScript set dimensions
-                    ...(isCanvas ? {
-                        width: `${CANVAS_SCALE * 100}%`,
-                        height: `${CANVAS_SCALE * 100}%`,
-                    } : {}),
+                    ...(isCanvas
+                        ? {
+                              width: `${CANVAS_SCALE * 100}%`,
+                              height: `${CANVAS_SCALE * 100}%`,
+                          }
+                        : {}),
                     display: "block",
                     cursor: "pointer",
                     opacity: isReady ? 1 : 0,
@@ -2864,14 +2700,6 @@ export default function Sticker({
 // ============================================================================
 
 addPropertyControls(Sticker, {
-    refresh:{
-        type:ControlType.Boolean,
-        title:"Refresh",
-        defaultValue:false,
-        enabledTitle:"•",
-        disabledTitle:"•",
-        description:"Toggle if the sticker is showing an error to see it again",
-    },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
@@ -2885,21 +2713,21 @@ addPropertyControls(Sticker, {
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
     },
-    animation:{
-        type:ControlType.Object,
-        title:"Animation",
-        controls:{
-            show:{
-                type:ControlType.Enum,
-                title:"Show",
-                options:["initial","final"],
-                optionTitles:["Initial","Final"],
-                defaultValue:"final",
-                displaySegmentedControl:true,
-                segmentedControlDirection:"vertical",
-                description:"The state to show in the canvas",
+    animation: {
+        type: ControlType.Object,
+        title: "Animation",
+        controls: {
+            show: {
+                type: ControlType.Enum,
+                title: "Show",
+                options: ["initial", "final"],
+                optionTitles: ["Initial", "Final"],
+                defaultValue: "final",
+                displaySegmentedControl: true,
+                segmentedControlDirection: "vertical",
+                description: "The state to show in the canvas",
             },
-            curlAmountStart:{
+            curlAmountStart: {
                 type: ControlType.Number,
                 title: "Curl Start",
                 min: 0,
@@ -2907,7 +2735,7 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.45,
             },
-            curlRadiusStart:{
+            curlRadiusStart: {
                 type: ControlType.Number,
                 title: "Radius Start",
                 min: 0,
@@ -2915,7 +2743,7 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.15,
             },
-            curlStartStart:{
+            curlStartStart: {
                 type: ControlType.Number,
                 title: "Start Start",
                 min: 0,
@@ -2923,7 +2751,7 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.8,
             },
-            curlAmountEnd:{
+            curlAmountEnd: {
                 type: ControlType.Number,
                 title: "Curl Final",
                 min: 0,
@@ -2931,8 +2759,8 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.45,
             },
-            
-            curlRadiusEnd:{
+
+            curlRadiusEnd: {
                 type: ControlType.Number,
                 title: "Radius Final",
                 min: 0,
@@ -2940,8 +2768,8 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.15,
             },
-        
-            curlStartEnd:{
+
+            curlStartEnd: {
                 type: ControlType.Number,
                 title: "Start Final",
                 min: 0,
@@ -2949,7 +2777,7 @@ addPropertyControls(Sticker, {
                 step: 0.05,
                 defaultValue: 0.55,
             },
-        }
+        },
     },
     curlRotation: {
         type: ControlType.Number,
@@ -2960,7 +2788,7 @@ addPropertyControls(Sticker, {
         defaultValue: 315,
         unit: "°",
     },
-    
+
     shadowPositionX: {
         type: ControlType.Number,
         title: "Light X",
