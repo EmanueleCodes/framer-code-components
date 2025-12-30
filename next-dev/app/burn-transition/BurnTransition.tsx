@@ -1,13 +1,149 @@
 import React, { useEffect, useRef } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 
+// CSS variable token and color parsing (hex/rgba/var())
+const cssVariableRegex =
+    /var\s*\(\s*(--[\w-]+)(?:\s*,\s*((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*))?\s*\)/
+
+function extractDefaultValue(cssVar: string): string {
+    if (!cssVar || !cssVar.startsWith("var(")) return cssVar
+    const match = cssVariableRegex.exec(cssVar)
+    if (!match) return cssVar
+    const fallback = (match[2] || "").trim()
+    if (fallback.startsWith("var(")) return extractDefaultValue(fallback)
+    return fallback || cssVar
+}
+
+function resolveTokenColor(input: any): any {
+    if (typeof input !== "string") return input
+    if (!input.startsWith("var(")) return input
+    return extractDefaultValue(input)
+}
+
+function parseColorToRgba(input: string | undefined): {
+    r: number
+    g: number
+    b: number
+    a: number
+} {
+    if (!input || input.trim() === "") return { r: 0, g: 0, b: 0, a: 1 }
+    const str = input.trim()
+
+    // Handle rgba() format
+    const rgbaMatch = str.match(
+        /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/i
+    )
+    if (rgbaMatch) {
+        const r = Math.max(0, Math.min(255, parseFloat(rgbaMatch[1]))) / 255
+        const g = Math.max(0, Math.min(255, parseFloat(rgbaMatch[2]))) / 255
+        const b = Math.max(0, Math.min(255, parseFloat(rgbaMatch[3]))) / 255
+        const a =
+            rgbaMatch[4] !== undefined
+                ? Math.max(0, Math.min(1, parseFloat(rgbaMatch[4])))
+                : 1
+        return { r, g, b, a }
+    }
+
+    // Handle hex formats
+    const hex = str.replace(/^#/, "")
+    if (hex.length === 8) {
+        return {
+            r: parseInt(hex.slice(0, 2), 16) / 255,
+            g: parseInt(hex.slice(2, 4), 16) / 255,
+            b: parseInt(hex.slice(4, 6), 16) / 255,
+            a: parseInt(hex.slice(6, 8), 16) / 255,
+        }
+    }
+    if (hex.length === 6) {
+        return {
+            r: parseInt(hex.slice(0, 2), 16) / 255,
+            g: parseInt(hex.slice(2, 4), 16) / 255,
+            b: parseInt(hex.slice(4, 6), 16) / 255,
+            a: 1,
+        }
+    }
+    if (hex.length === 4) {
+        return {
+            r: parseInt(hex[0] + hex[0], 16) / 255,
+            g: parseInt(hex[1] + hex[1], 16) / 255,
+            b: parseInt(hex[2] + hex[2], 16) / 255,
+            a: parseInt(hex[3] + hex[3], 16) / 255,
+        }
+    }
+    if (hex.length === 3) {
+        return {
+            r: parseInt(hex[0] + hex[0], 16) / 255,
+            g: parseInt(hex[1] + hex[1], 16) / 255,
+            b: parseInt(hex[2] + hex[2], 16) / 255,
+            a: 1,
+        }
+    }
+    return { r: 0, g: 0, b: 0, a: 1 }
+}
+
+// Linear mapping function for normalizing UI values to internal values
+function mapLinear(
+    value: number,
+    inMin: number,
+    inMax: number,
+    outMin: number,
+    outMax: number
+): number {
+    if (inMax === inMin) return outMin
+    const t = (value - inMin) / (inMax - inMin)
+    return outMin + t * (outMax - outMin)
+}
+
+// Mapping functions for UI (0-1) to internal values
+// Noise Scale: UI 0-1 → Internal 1-20
+function mapNoiseScale(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 1, 20)
+}
+
+// Noise Intensity: UI 0-1 → Internal 0-0.5
+function mapNoiseIntensity(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0, 0.5)
+}
+
+// Scroll Sensitivity: UI 0-1 → Internal 0-0.01
+function mapScrollSensitivity(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0, 0.01)
+}
+
+// Base Animation Speed: UI 0-1 → Internal 0-0.1
+function mapBaseAnimationSpeed(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0, 0.1)
+}
+
+// Edge Softness: UI 0-1 → Internal 0.01-0.2 (transition zone width)
+function mapEdgeSoftness(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0.01, 0.2)
+}
+
+// Grain Scale: UI 0-1 → Internal 50-500 (noise frequency for grain)
+function mapGrainScale(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 50, 500)
+}
+
+// Bloom: UI 0-1 → Internal 1.0-3.0 (brightness multiplier for transition layer)
+function mapBloom(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 1.0, 3.0)
+}
+
 interface BurnTransitionProps {
     color?: string
-    noiseScale?: number
-    noiseIntensity?: number
-    scrollSensitivity?: number
-    baseAnimationSpeed?: number
+    transitionColor?: string
+    noiseScale?: number // UI: 0-1
+    noiseIntensity?: number // UI: 0-1
+    scrollSensitivity?: number // UI: 0-1
+    baseAnimationSpeed?: number // UI: 0-1
+    edgeSoftness?: number // UI: 0-1
+    bloom?: number // UI: 0-1
     style?: React.CSSProperties
+    movement?:{
+        horizontal: number
+        vertical: number
+    }
 }
 
 /**
@@ -19,22 +155,61 @@ interface BurnTransitionProps {
  */
 export default function BurnTransition({
     color = "#ff0000",
-    noiseScale = 8.0,
-    noiseIntensity = 0.15,
-    scrollSensitivity = 0.0001,
-    baseAnimationSpeed = 0.01,
+    transitionColor,
+    noiseScale = 0.37, // UI default (maps to ~8.0 internally)
+    noiseIntensity = 0.3, // UI default (maps to ~0.15 internally)
+    scrollSensitivity = 0.01, // UI default (maps to ~0.0001 internally)
+    baseAnimationSpeed = 0.1, // UI default (maps to ~0.01 internally)
+    edgeSoftness = 0.4, // UI default (maps to ~0.08 internally)
+    bloom = 0, // UI default (maps to 1.0 internally - no bloom)
     style,
+    movement = {
+        horizontal: 0.5,
+        vertical: 0.5,
+    },
 }: BurnTransitionProps) {
+    // Map UI values to internal values
+    const internalNoiseScale = mapNoiseScale(noiseScale)
+    const internalNoiseIntensity = mapNoiseIntensity(noiseIntensity)
+    const internalScrollSensitivity = mapScrollSensitivity(scrollSensitivity)
+    const internalBaseAnimationSpeed = mapBaseAnimationSpeed(baseAnimationSpeed)
+    const internalEdgeSoftness = mapEdgeSoftness(edgeSoftness)
+    const internalGrainScale = 0
+    const internalBloom = mapBloom(bloom)
+
+    // Resolve color token and parse to RGBA
+    const resolvedColor = resolveTokenColor(color)
+    const colorRgba = parseColorToRgba(resolvedColor)
+    
+    // Resolve transition color (defaults to a lighter version of base color if not provided)
+    const resolvedTransitionColor = transitionColor
+        ? resolveTokenColor(transitionColor)
+        : resolvedColor
+    const transitionColorRgba = parseColorToRgba(resolvedTransitionColor)
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const glRef = useRef<WebGLRenderingContext | null>(null)
     const programRef = useRef<WebGLProgram | null>(null)
     const bufferRef = useRef<WebGLBuffer | null>(null)
-    const colorRef = useRef<string>(color)
-    const noiseScaleRef = useRef<number>(noiseScale)
-    const noiseIntensityRef = useRef<number>(noiseIntensity)
-    const scrollSensitivityRef = useRef<number>(scrollSensitivity)
-    const baseAnimationSpeedRef = useRef<number>(baseAnimationSpeed)
+    const colorRef = useRef<[number, number, number]>([
+        colorRgba.r,
+        colorRgba.g,
+        colorRgba.b,
+    ])
+    const transitionColorRef = useRef<[number, number, number]>([
+        transitionColorRgba.r,
+        transitionColorRgba.g,
+        transitionColorRgba.b,
+    ])
+    const noiseScaleRef = useRef<number>(internalNoiseScale)
+    const noiseIntensityRef = useRef<number>(internalNoiseIntensity)
+    const scrollSensitivityRef = useRef<number>(internalScrollSensitivity)
+    const baseAnimationSpeedRef = useRef<number>(internalBaseAnimationSpeed)
+    const edgeSoftnessRef = useRef<number>(internalEdgeSoftness)
+    const grainScaleRef = useRef<number>(internalGrainScale)
+    const bloomRef = useRef<number>(internalBloom)
+    const movementHorizontalRef = useRef<number>(movement.horizontal)
+    const movementVerticalRef = useRef<number>(movement.vertical)
     const scrollOffsetRef = useRef<number>(0)
     const lastScrollYRef = useRef<number>(0)
     const lastScrollTimeRef = useRef<number>(0)
@@ -43,14 +218,6 @@ export default function BurnTransition({
     const baseTimeRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
 
-    // Helper function to parse color to RGB
-    const parseColor = (colorStr: string): [number, number, number] => {
-        const hex = colorStr.replace("#", "")
-        const r = parseInt(hex.substring(0, 2), 16) / 255
-        const g = parseInt(hex.substring(2, 4), 16) / 255
-        const b = parseInt(hex.substring(4, 6), 16) / 255
-        return [r, g, b]
-    }
 
     // Helper function to create shader
     const createShader = (
@@ -136,8 +303,18 @@ export default function BurnTransition({
 
         // Set color uniform
         const colorLocation = gl.getUniformLocation(program, "u_color")
-        const [r, g, b] = parseColor(colorRef.current)
+        const [r, g, b] = colorRef.current
         gl.uniform3f(colorLocation, r, g, b)
+
+        // Set transition color uniform
+        const transitionColorLocation = gl.getUniformLocation(
+            program,
+            "u_transition_color"
+        )
+        if (transitionColorLocation) {
+            const [tr, tg, tb] = transitionColorRef.current
+            gl.uniform3f(transitionColorLocation, tr, tg, tb)
+        }
 
         // Set noise uniforms
         const noiseScaleLocation = gl.getUniformLocation(program, "u_noise_scale")
@@ -153,15 +330,15 @@ export default function BurnTransition({
             gl.uniform1f(noiseIntensityLocation, noiseIntensityRef.current)
         }
 
-        // Update base time (slow continuous animation)
+        // Update base time (linear, constant speed animation)
         const currentTime = performance.now()
         if (startTimeRef.current === 0) {
             startTimeRef.current = currentTime
         }
-        // Base animation speed: controlled by user (units per second, converted to per millisecond)
-        baseTimeRef.current =
-            (currentTime - startTimeRef.current) *
-            (baseAnimationSpeedRef.current / 1000)
+        // Base animation speed: linear time that increases constantly
+        // Movement controls (horizontal/vertical) will scale this to control direction and speed
+        const elapsedSeconds = (currentTime - startTimeRef.current) / 1000
+        baseTimeRef.current = elapsedSeconds * baseAnimationSpeedRef.current
 
         // Set scroll offset uniform for animation (base time + scroll offset)
         const scrollOffsetLocation = gl.getUniformLocation(
@@ -174,6 +351,47 @@ export default function BurnTransition({
                 scrollOffsetLocation,
                 baseTimeRef.current + scrollOffsetRef.current
             )
+        }
+
+        // Set edge softness uniform
+        const edgeSoftnessLocation = gl.getUniformLocation(
+            program,
+            "u_edge_softness"
+        )
+        if (edgeSoftnessLocation) {
+            gl.uniform1f(edgeSoftnessLocation, edgeSoftnessRef.current)
+        }
+
+        // Set grain scale uniform
+        const grainScaleLocation = gl.getUniformLocation(
+            program,
+            "u_grain_scale"
+        )
+        if (grainScaleLocation) {
+            gl.uniform1f(grainScaleLocation, grainScaleRef.current)
+        }
+
+        // Set movement uniforms
+        const movementHorizontalLocation = gl.getUniformLocation(
+            program,
+            "u_movement_horizontal"
+        )
+        if (movementHorizontalLocation) {
+            gl.uniform1f(movementHorizontalLocation, movementHorizontalRef.current)
+        }
+
+        const movementVerticalLocation = gl.getUniformLocation(
+            program,
+            "u_movement_vertical"
+        )
+        if (movementVerticalLocation) {
+            gl.uniform1f(movementVerticalLocation, movementVerticalRef.current)
+        }
+
+        // Set bloom uniform
+        const bloomLocation = gl.getUniformLocation(program, "u_bloom")
+        if (bloomLocation) {
+            gl.uniform1f(bloomLocation, bloomRef.current)
         }
 
         // Clear with transparent background
@@ -190,33 +408,81 @@ export default function BurnTransition({
 
     // Update refs when props change
     useEffect(() => {
-        colorRef.current = color
+        const resolved = resolveTokenColor(color)
+        const rgba = parseColorToRgba(resolved)
+        colorRef.current = [rgba.r, rgba.g, rgba.b]
         if (glRef.current && programRef.current) {
             render()
         }
     }, [color])
 
     useEffect(() => {
-        noiseScaleRef.current = noiseScale
+        const resolved = transitionColor
+            ? resolveTokenColor(transitionColor)
+            : resolveTokenColor(color)
+        const rgba = parseColorToRgba(resolved)
+        transitionColorRef.current = [rgba.r, rgba.g, rgba.b]
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [transitionColor, color])
+
+    useEffect(() => {
+        noiseScaleRef.current = mapNoiseScale(noiseScale)
         if (glRef.current && programRef.current) {
             render()
         }
     }, [noiseScale])
 
     useEffect(() => {
-        noiseIntensityRef.current = noiseIntensity
+        noiseIntensityRef.current = mapNoiseIntensity(noiseIntensity)
         if (glRef.current && programRef.current) {
             render()
         }
     }, [noiseIntensity])
 
     useEffect(() => {
-        scrollSensitivityRef.current = scrollSensitivity
+        scrollSensitivityRef.current = mapScrollSensitivity(scrollSensitivity)
     }, [scrollSensitivity])
 
     useEffect(() => {
-        baseAnimationSpeedRef.current = baseAnimationSpeed
+        baseAnimationSpeedRef.current = mapBaseAnimationSpeed(baseAnimationSpeed)
     }, [baseAnimationSpeed])
+
+    useEffect(() => {
+        edgeSoftnessRef.current = mapEdgeSoftness(edgeSoftness)
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [edgeSoftness])
+
+    useEffect(() => {
+        grainScaleRef.current = mapGrainScale(0)
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [])
+
+    useEffect(() => {
+        bloomRef.current = mapBloom(bloom)
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [bloom])
+
+    useEffect(() => {
+        movementHorizontalRef.current = movement.horizontal
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [movement.horizontal])
+
+    useEffect(() => {
+        movementVerticalRef.current = movement.vertical
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [movement.vertical])
 
     // Vertex shader - simple fullscreen quad
     const vertexShader = `
@@ -229,14 +495,20 @@ export default function BurnTransition({
         }
     `
 
-    // Fragment shader - transparent top half, colored bottom half with wavy noisy edge
+    // Fragment shader - torn paper effect with uneven transition thickness
     const fragmentShader = `
         precision mediump float;
         varying vec2 v_uv;
         uniform vec3 u_color;
+        uniform vec3 u_transition_color;
         uniform float u_noise_scale;
         uniform float u_noise_intensity;
         uniform float u_scroll_offset;
+        uniform float u_edge_softness;
+        uniform float u_grain_scale;
+        uniform float u_movement_horizontal;
+        uniform float u_movement_vertical;
+        uniform float u_bloom;
 
         // Random function
         float random(vec2 st) {
@@ -262,7 +534,6 @@ export default function BurnTransition({
         float fbm(vec2 st) {
             float value = 0.0;
             float amplitude = 0.5;
-            float frequency = 0.0;
             
             for (int i = 0; i < 4; i++) {
                 value += amplitude * noise(st);
@@ -272,22 +543,124 @@ export default function BurnTransition({
             return value;
         }
 
+        // High-frequency detailed noise for fiber-like grain
+        float detailedNoise(vec2 st) {
+            float value = 0.0;
+            float amplitude = 0.5;
+            
+            for (int i = 0; i < 6; i++) {
+                value += amplitude * noise(st);
+                st *= 2.2;
+                amplitude *= 0.45;
+            }
+            return value;
+        }
+
         void main() {
-            // Create wavy edge using noise
+            // === STEP 1: Define the main wavy edge (the "tear line") ===
             float baseLine = 0.5;
-            // Add scroll offset to y-coordinate for animation
-            vec2 noiseCoord = vec2(v_uv.x * u_noise_scale, u_scroll_offset);
-            float noiseValue = fbm(noiseCoord);
+            // Apply movement controls: horizontal controls direction/speed, vertical controls evolution amount
+            // horizontal: -1 = right to left, 1 = left to right, 0 = no horizontal movement
+            // vertical: 0 = no vertical evolution, 1 = full vertical evolution
+            float horizontalOffset = u_scroll_offset * u_movement_horizontal;
+            float verticalOffset = u_scroll_offset * u_movement_vertical;
             
-            // Offset the threshold line based on noise
-            float threshold = baseLine + (noiseValue - 0.5) * u_noise_intensity;
+            vec2 noiseCoord = vec2(
+                v_uv.x * u_noise_scale + horizontalOffset,
+                v_uv.y * 3.0 + verticalOffset * 0.6
+            );
+            float edgeNoise = fbm(noiseCoord);
+            float mainEdge = baseLine + (edgeNoise - 0.5) * u_noise_intensity;
             
-            // Top part (above threshold) is transparent
-            // Bottom part (below threshold) is filled with color
-            if (v_uv.y > threshold) {
-                discard; // Make top part transparent
-            } else {
+            // === STEP 2: Create UNEVEN transition thickness ===
+            // Use a different noise to vary how thick the transition zone is at each point
+            // Apply movement controls for consistent animation
+            vec2 thicknessNoiseCoord = vec2(
+                v_uv.x * u_noise_scale * 2.3 + horizontalOffset * 0.7,
+                v_uv.y * 2.0 + verticalOffset * 0.4 + 100.0
+            );
+            float thicknessNoise = fbm(thicknessNoiseCoord);
+            // Transition width varies from very thin to full width
+            float minThickness = u_edge_softness * 0.1;
+            float maxThickness = u_edge_softness;
+            float localThickness = mix(minThickness, maxThickness, thicknessNoise);
+            
+            // === STEP 3: Define the two boundaries ===
+            // Lower boundary: where solid base color ends
+            // Upper boundary: where transparency begins
+            // The transition color fills the space between
+            float lowerBound = mainEdge - localThickness * 0.4;  // Solid color edge
+            float upperBound = mainEdge + localThickness * 0.6;  // Transparency edge
+            
+            // === STEP 4: High-frequency grain for fiber effect ===
+            // Animate grain both horizontally and vertically using movement controls
+            vec2 grainCoord = v_uv * u_grain_scale * 3.0 + vec2(horizontalOffset * 0.5, verticalOffset * 0.3);
+            float grain = detailedNoise(grainCoord);
+            
+            // Additional "fiber" noise - elongated in Y direction for torn paper fibers
+            // Apply movement controls for consistent animation
+            vec2 fiberCoord = vec2(
+                v_uv.x * u_grain_scale * 8.0 + horizontalOffset * 0.3,
+                v_uv.y * u_grain_scale * 2.0 + verticalOffset * 0.2
+            );
+            float fiberNoise = noise(fiberCoord);
+            
+            // Combine grain patterns
+            float combinedGrain = grain * 0.6 + fiberNoise * 0.4;
+            
+            // Distance from the main edge
+            float distFromEdge = v_uv.y - mainEdge;
+            
+            // === STEP 5: Render based on position ===
+            
+            // Apply bloom to transition color - makes it "shinier"
+            // u_bloom ranges from 1.0 (no bloom) to 3.0 (max bloom)
+            vec3 bloomedTransitionColor = u_transition_color * u_bloom;
+            // Clamp to prevent overflow but allow HDR-like brightness
+            bloomedTransitionColor = min(bloomedTransitionColor, vec3(1.0));
+            
+            // Below lower bound - solid base color
+            if (v_uv.y < lowerBound) {
                 gl_FragColor = vec4(u_color, 1.0);
+            }
+            // Between lower bound and main edge - base color with transition color fibers bleeding in
+            else if (v_uv.y < mainEdge) {
+                // How far into the transition zone (0 at lowerBound, 1 at mainEdge)
+                float t = (v_uv.y - lowerBound) / max(mainEdge - lowerBound, 0.001);
+                
+                // Grain threshold: less grain near solid, more grain near edge
+                // Use exponential curve for more natural distribution
+                float grainThreshold = 1.0 - pow(t, 1.5);
+                
+                // Add some randomness to threshold based on position
+                grainThreshold -= thicknessNoise * 0.2;
+                
+                if (combinedGrain > grainThreshold) {
+                    gl_FragColor = vec4(bloomedTransitionColor, 1.0);
+                } else {
+                    gl_FragColor = vec4(u_color, 1.0);
+                }
+            }
+            // Between main edge and upper bound - transition color with transparency bleeding in
+            else if (v_uv.y < upperBound) {
+                // How far into the upper transition zone (0 at mainEdge, 1 at upperBound)
+                float t = (v_uv.y - mainEdge) / max(upperBound - mainEdge, 0.001);
+                
+                // Grain threshold: more visible near edge, fading to transparent
+                float grainThreshold = pow(t, 1.2);
+                
+                // Add variation
+                grainThreshold += thicknessNoise * 0.15;
+                
+                if (combinedGrain > grainThreshold) {
+                    gl_FragColor = vec4(bloomedTransitionColor, 1.0);
+                } else {
+                    discard;
+                }
+            }
+            // Above upper bound - fully transparent
+            else {
+                discard;
             }
         }
     `
@@ -448,41 +821,89 @@ addPropertyControls(BurnTransition, {
         title: "Color",
         defaultValue: "#ff0000",
     },
+    transitionColor: {
+        type: ControlType.Color,
+        title: "Transition Color",
+        defaultValue: "#ffffff",
+        optional: true,
+    },
+    
     noiseScale: {
         type: ControlType.Number,
         title: "Scale",
-        defaultValue: 8.0,
-        min: 1.0,
-        max: 20.0,
-        step: 0.5,
-        displayStepper: true,
+        defaultValue: 0.37,
+        min: 0.0,
+        max: 1.0,
+        step: 0.1,
+       
     },
     noiseIntensity: {
         type: ControlType.Number,
         title: "Noise",
-        defaultValue: 0.15,
+        defaultValue: 0.3,
         min: 0.0,
-        max: 0.5,
-        step: 0.01,
-        displayStepper: true,
+        max: 1.0,
+        step: 0.1,
+       
     },
     scrollSensitivity: {
         type: ControlType.Number,
-        title: "Scroll Amount",
-        defaultValue: 0.0001,
+        title: "Scroll",
+        defaultValue: 0.4,
         min: 0.0,
-        max: 0.01,
-        step: 0.00001,
-        displayStepper: true,
+        max: 1.0,
+        step: 0.1,
+
     },
     baseAnimationSpeed: {
         type: ControlType.Number,
         title: "Base Speed",
-        defaultValue: 0.01,
+        defaultValue: 0.1,
         min: 0.0,
-        max: 0.1,
-        step: 0.001,
-        displayStepper: true,
+        max: 1.0,
+        step: 0.1,
     },
+    edgeSoftness: {
+        type: ControlType.Number,
+        title: "Edge",
+        defaultValue: 0.4,
+        min: 0.0,
+        max: 1.0,
+        step: 0.1,
+    },
+    bloom: {
+        type: ControlType.Number,
+        title: "Bloom",
+        defaultValue: 0,
+        min: 0.0,
+        max: 1.0,
+        step: 0.1,
+    },
+    movement:{
+        type:ControlType.Object,
+        controls:{
+            horizontal:{
+                type:ControlType.Number,
+                title: "Horizontal",
+                defaultValue: 0,
+                step:0.1,
+                min: -1,
+                max: 1,
+                description:"-1 = right to left, 1 = left to right"
+            },
+            vertical:{
+                type:ControlType.Number,
+                title: "Vertical",
+                defaultValue: 0,
+                step:0.1,
+                min: 0,
+                max: 1,
+            }
+        },
+        defaultValue:{
+            horizontal: 0.5,
+            vertical: 0.5,
+        }
+    }
 })
 
