@@ -10,16 +10,15 @@ import {
     WebGLRenderer,
     BoxGeometry,
     SkinnedMesh,
-    MeshBasicMaterial,
     MeshStandardMaterial,
     Texture,
     Vector3,
+    Vector2,
     Quaternion,
     Bone,
     Skeleton,
     Float32BufferAttribute,
     Uint16BufferAttribute,
-    DoubleSide,
     FrontSide,
     RepeatWrapping,
     LinearFilter,
@@ -33,13 +32,11 @@ import {
     Group,
     ShadowMaterial,
     PCFSoftShadowMap,
-    Line,
-    LineBasicMaterial,
-    BufferGeometry,
+    Raycaster,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
-// OrbitControls import from Three.js examples
 import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/3D-text-rug.js"
+
 
 // ============================================================================
 // TYPES
@@ -97,6 +94,8 @@ interface StickerProps {
     castShadowOpacity: number
     // Refresh toggle to force re-initialization
     refresh: boolean
+    // Debug mode - shows coordinate debug panel
+    debug: boolean
     // Style (always last)
     style?: React.CSSProperties
 }
@@ -337,6 +336,7 @@ export default function Sticker({
     shadowBgColor = "rgba(0, 0, 0, 0)",
     castShadowOpacity = 0.3,
     refresh = false,
+    debug = false,
     style,
 }: StickerProps) {
     // Refs
@@ -389,9 +389,34 @@ export default function Sticker({
     const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
+    const raycasterRef = useRef<any>(null) // Raycaster for mouse detection
+    const raycasterMouseRef = useRef<any>(null) // Reusable Vector2 for raycaster
     const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
+    const pendingUpdateRef = useRef<boolean>(false) // Flag to batch bone updates into single RAF
     const lastRetryAttemptRef = useRef<number>(0) // Track last retry attempt to prevent rapid retries
     const previousRefreshRef = useRef<boolean | undefined>(undefined) // Track previous refresh value to detect changes
+    
+    // Debug state for coordinate tracking
+    const [debugInfo, setDebugInfo] = useState<{
+        screenX: number
+        screenY: number
+        containerOffsetX?: number
+        containerOffsetY?: number
+        canvasX: number
+        canvasY: number
+        ndcX?: number
+        ndcY?: number
+        intersectionCount?: number
+        stickerX: number
+        stickerY: number
+        imageX: number
+        imageY: number
+        isOverSticker: boolean
+        canvasRect: DOMRect | null
+        containerSize: { width: number; height: number } | null
+        stickerSize: { width: number; height: number } | null
+        parentTransform: string | null
+    } | null>(null)
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
@@ -1613,21 +1638,32 @@ export default function Sticker({
         renderFrame()
     }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
     
-    // Set up motion value event listeners to sync with refs and update bones
+    // Batched bone update - only runs once per frame even if multiple values change
+    // This prevents 3x redundant updateBones() calls when all 3 motion values animate together
+    const scheduleBoneUpdate = useCallback(() => {
+        if (pendingUpdateRef.current) return // Already scheduled
+        pendingUpdateRef.current = true
+        requestAnimationFrame(() => {
+            pendingUpdateRef.current = false
+            updateBones()
+        })
+    }, [updateBones])
+    
+    // Set up motion value event listeners to sync with refs and schedule batched update
     // These must be after updateBones is defined
     useMotionValueEvent(curlAmountMotion, "change", (latest) => {
         animatedCurlRef.current.amount = latest
-        updateBones()
+        scheduleBoneUpdate()
     })
     
     useMotionValueEvent(curlStartMotion, "change", (latest) => {
         animatedCurlStartRef.current.start = latest
-        updateBones()
+        scheduleBoneUpdate()
     })
     
     useMotionValueEvent(curlRadiusMotion, "change", (latest) => {
         animatedCurlRadiusRef.current.radius = latest
-        updateBones()
+        scheduleBoneUpdate()
     })
 
     // ========================================================================
@@ -1635,85 +1671,207 @@ export default function Sticker({
     // ========================================================================
 
     // Check if mouse is over non-transparent part of sticker
+    // RAYCASTER APPROACH: Uses Three.js Raycaster to handle 3D transforms on parent layers
+    // Uses offsetX/offsetY which are transform-aware, then maps to canvas coordinates
     const checkMouseOverSticker = useCallback(
         (event: React.MouseEvent<HTMLDivElement>) => {
             if (
                 !canvasRef.current ||
                 !containerRef.current ||
+                !cameraRef.current ||
+                !meshRef.current ||
                 !loadedImageRef.current
             ) {
+                if (debug) {
+                    setDebugInfo({
+                        screenX: event.clientX,
+                        screenY: event.clientY,
+                        canvasX: 0,
+                        canvasY: 0,
+                        stickerX: 0,
+                        stickerY: 0,
+                        imageX: 0,
+                        imageY: 0,
+                        isOverSticker: false,
+                        canvasRect: null,
+                        containerSize: null,
+                        stickerSize: null,
+                        parentTransform: null,
+                    })
+                }
                 return false
             }
 
             const canvas = canvasRef.current
             const container = containerRef.current
+            const camera = cameraRef.current
+            const mesh = meshRef.current
             const img = loadedImageRef.current
-            const rect = canvas.getBoundingClientRect()
-
+            
+            // Get parent transform for debugging
+            const parentElement = container.parentElement
+            const parentTransform = parentElement 
+                ? window.getComputedStyle(parentElement).transform 
+                : null
+            
+            const mouseX = event.clientX
+            const mouseY = event.clientY
+            
+            // Use offsetX/offsetY which are TRANSFORM-AWARE
+            // These give coordinates relative to the target element, accounting for CSS 3D transforms!
+            // Since all children have pointerEvents: none, the target is always the container
+            const containerX = event.nativeEvent.offsetX
+            const containerY = event.nativeEvent.offsetY
+            
             // Get container dimensions
-            const containerWidth =
-                container.clientWidth || container.offsetWidth || 1
-            const containerHeight =
-                container.clientHeight || container.offsetHeight || 1
-
-            // Calculate contained dimensions (actual sticker size)
-            const contained = calculateContainedDimensions(
-                containerWidth,
-                containerHeight,
-                imageAspectRatioRef.current
-            )
-            const stickerWidth = contained.width
-            const stickerHeight = contained.height
-
-            // Calculate mouse position relative to canvas
-            const canvasX = event.clientX - rect.left
-            const canvasY = event.clientY - rect.top
-
-            // Account for canvas scale offset (canvas is larger than container)
-            const canvasOffsetX = (rect.width - containerWidth) / 2
-            const canvasOffsetY = (rect.height - containerHeight) / 2
-
-            // Account for sticker centering within container (contained dimensions are smaller)
-            const stickerOffsetX = (containerWidth - stickerWidth) / 2
-            const stickerOffsetY = (containerHeight - stickerHeight) / 2
-
-            // Convert to sticker-relative coordinates
-            const stickerX = canvasX - canvasOffsetX - stickerOffsetX
-            const stickerY = canvasY - canvasOffsetY - stickerOffsetY
-
-            // Check if mouse is within sticker bounds
-            if (
-                stickerX < 0 ||
-                stickerX > stickerWidth ||
-                stickerY < 0 ||
-                stickerY > stickerHeight
-            ) {
-                return false
+            const containerWidth = container.clientWidth || container.offsetWidth || 1
+            const containerHeight = container.clientHeight || container.offsetHeight || 1
+            
+            // Canvas is CANVAS_SCALE (2.5) times larger than container and centered
+            // The canvas is offset by -75% from container origin (for CANVAS_SCALE = 2.5)
+            const canvasWidth = containerWidth * CANVAS_SCALE
+            const canvasHeight = containerHeight * CANVAS_SCALE
+            
+            // Map container coordinates to canvas coordinates
+            // Container (0,0) corresponds to canvas position at (offsetX, offsetY)
+            const offsetX = ((CANVAS_SCALE - 1) / 2) * containerWidth
+            const offsetY = ((CANVAS_SCALE - 1) / 2) * containerHeight
+            
+            const canvasX = containerX + offsetX
+            const canvasY = containerY + offsetY
+            
+            // Convert canvas coordinates to NDC (-1 to 1)
+            // NDC x: -1 at left edge, +1 at right edge
+            // NDC y: +1 at top edge, -1 at bottom edge (WebGL convention, Y is inverted from DOM)
+            const ndcX = (canvasX / canvasWidth) * 2 - 1
+            const ndcY = 1 - (canvasY / canvasHeight) * 2
+            
+            // Initialize raycaster and mouse vector if needed
+            if (!raycasterRef.current) {
+                raycasterRef.current = new Raycaster()
+            }
+            if (!raycasterMouseRef.current) {
+                raycasterMouseRef.current = new Vector2()
+            }
+            
+            const raycaster = raycasterRef.current
+            const mouseVec = raycasterMouseRef.current
+            mouseVec.set(ndcX, ndcY)
+            
+            // Set up raycaster from camera through mouse position in NDC
+            raycaster.setFromCamera(mouseVec, camera)
+            
+            // Check intersection with the mesh (including children like bones)
+            // Note: For SkinnedMesh, raycasting works on the base geometry, not the deformed version
+            // This is fine for our use case since we mainly care about the flat visible area
+            const intersects = raycaster.intersectObject(mesh, true)
+            
+            let isOverSticker = false
+            let stickerX = 0
+            let stickerY = 0
+            let imageX = 0
+            let imageY = 0
+            let intersectionUV: { x: number; y: number } | null = null
+            
+            if (intersects.length > 0) {
+                // Get the first (closest) intersection
+                const intersection = intersects[0]
+                
+                // Get UV coordinates from the intersection point
+                // UV coords tell us exactly where on the texture the ray hit
+                if (intersection.uv) {
+                    intersectionUV = { x: intersection.uv.x, y: intersection.uv.y }
+                    const uv = intersection.uv
+                    
+                    // Convert UV to image pixel coordinates
+                    // UV: (0,0) is typically bottom-left in Three.js textures
+                    // Image: (0,0) is top-left
+                    // Standard BoxGeometry front face (+Z) has UV (0,0) at bottom-left
+                    imageX = Math.floor(uv.x * img.width)
+                    imageY = Math.floor((1 - uv.y) * img.height) // Flip Y for image coordinates
+                    
+                    // Clamp to image bounds
+                    const clampedX = Math.max(0, Math.min(img.width - 1, imageX))
+                    const clampedY = Math.max(0, Math.min(img.height - 1, imageY))
+                    
+                    // Sample the image to check alpha at the intersection point
+                    const tempCanvas = document.createElement("canvas")
+                    tempCanvas.width = img.width
+                    tempCanvas.height = img.height
+                    const ctx = tempCanvas.getContext("2d")
+                    
+                    if (ctx) {
+                        ctx.drawImage(img, 0, 0)
+                        const imageData = ctx.getImageData(clampedX, clampedY, 1, 1)
+                        const alpha = imageData.data[3]
+                        
+                        // Consider it "over sticker" if alpha is above threshold
+                        isOverSticker = alpha > 10
+                    }
+                    
+                    // Calculate sticker coordinates for debug display
+                    const contained = calculateContainedDimensions(
+                        containerWidth,
+                        containerHeight,
+                        imageAspectRatioRef.current
+                    )
+                    stickerX = uv.x * contained.width
+                    stickerY = (1 - uv.y) * contained.height
+                }
             }
 
-            // Map sticker coordinates to image coordinates
-            const imageX = Math.floor((stickerX / stickerWidth) * img.width)
-            const imageY = Math.floor((stickerY / stickerHeight) * img.height)
+            // Debug logging and state update
+            if (debug) {
+                const contained = calculateContainedDimensions(
+                    containerWidth,
+                    containerHeight,
+                    imageAspectRatioRef.current
+                )
+                const canvasRect = canvas.getBoundingClientRect()
+                
+                const debugData = {
+                    screenX: mouseX,
+                    screenY: mouseY,
+                    containerOffsetX: containerX,
+                    containerOffsetY: containerY,
+                    canvasX,
+                    canvasY,
+                    ndcX,
+                    ndcY,
+                    intersectionCount: intersects.length,
+                    stickerX,
+                    stickerY,
+                    imageX,
+                    imageY,
+                    isOverSticker,
+                    canvasRect: canvasRect,
+                    containerSize: { width: containerWidth, height: containerHeight },
+                    stickerSize: { width: contained.width, height: contained.height },
+                    parentTransform,
+                }
+                setDebugInfo(debugData)
+                
+                // Console logging with detailed breakdown
+                console.group("🎯 Raycaster Mouse Detection Debug")
+                console.log("Screen Coords:", { x: mouseX, y: mouseY })
+                console.log("Container Offset (transform-aware):", { x: containerX.toFixed(1), y: containerY.toFixed(1) })
+                console.log("Canvas Coords:", { x: canvasX.toFixed(1), y: canvasY.toFixed(1) })
+                console.log("NDC (Normalized Device Coords):", { x: ndcX.toFixed(3), y: ndcY.toFixed(3) })
+                console.log("Intersections found:", intersects.length)
+                if (intersectionUV) {
+                    console.log("Intersection UV:", { x: intersectionUV.x.toFixed(3), y: intersectionUV.y.toFixed(3) })
+                    console.log("Image Coords:", { x: imageX, y: imageY })
+                }
+                console.log("Is Over Sticker:", isOverSticker)
+                console.log("Parent Transform:", parentTransform)
+                console.log("Container Size:", { width: containerWidth, height: containerHeight })
+                console.log("Sticker Size:", { width: contained.width, height: contained.height })
+                console.groupEnd()
+            }
 
-            // Clamp coordinates to image bounds
-            const clampedX = Math.max(0, Math.min(img.width - 1, imageX))
-            const clampedY = Math.max(0, Math.min(img.height - 1, imageY))
-
-            // Create temporary canvas to read pixel data
-            const tempCanvas = document.createElement("canvas")
-            tempCanvas.width = img.width
-            tempCanvas.height = img.height
-            const ctx = tempCanvas.getContext("2d")
-            if (!ctx) return false
-
-            ctx.drawImage(img, 0, 0)
-            const imageData = ctx.getImageData(clampedX, clampedY, 1, 1)
-            const alpha = imageData.data[3]
-
-            // Return true if pixel is not transparent (alpha > threshold)
-            return alpha > 10
+            return isOverSticker
         },
-        []
+        [debug]
     )
 
     // Store animation controls refs to allow cancellation
@@ -1765,19 +1923,23 @@ export default function Sticker({
         return config
     }, [animationDuration])
 
-    // Mouse move handler: check if over sticker and trigger animations
+    // Mouse move handler: check if over sticker and trigger animation START only
+    // Animation REVERSAL is handled by handleMouseLeave (container exit), not sticker surface exit
     const handleMouseMove = useCallback(
         (event: React.MouseEvent<HTMLDivElement>) => {
             const isOverSticker = checkMouseOverSticker(event)
             const wasHovering = isHoveringRef.current
 
+            // Update cursor based on sticker surface detection
+            if (containerRef.current) {
+                containerRef.current.style.cursor = isOverSticker ? "pointer" : "auto"
+            }
+
+            // Only START animation when entering sticker surface (not already hovering)
+            // Reverse animation is handled by handleMouseLeave (container exit)
             if (isOverSticker && !wasHovering) {
                 // Entering sticker: animate to end values from animation object
                 isHoveringRef.current = true
-
-                if(containerRef.current && isOverSticker){
-                    containerRef.current.style.cursor= "pointer"
-                }
                 
                 // Stop any existing animations
                 if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
@@ -1805,41 +1967,11 @@ export default function Sticker({
                     animation.curlRadiusEnd,
                     transitionConfig
                 )
-            } else if (!isOverSticker && wasHovering) {
-                // Leaving sticker: animate back to start values from animation object
-                isHoveringRef.current = false
-
-                containerRef.current && !isOverSticker && (containerRef.current.style.cursor = "auto")
-                
-                // Stop any existing animations
-                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
-                
-                // Build transition config from ControlType.Transition
-                const transitionConfig = buildTransitionConfig(transition)
-                
-                // Animate all values back to their start states simultaneously
-                animationControlsRef.current.curlAmount = animate(
-                    curlAmountMotion,
-                    animation.curlAmountStart,
-                    transitionConfig
-                )
-                
-                animationControlsRef.current.curlStart = animate(
-                    curlStartMotion,
-                    animation.curlStartStart,
-                    transitionConfig
-                )
-                
-                animationControlsRef.current.curlRadius = animate(
-                    curlRadiusMotion,
-                    animation.curlRadiusStart,
-                    transitionConfig
-                )
             }
+            // Note: We intentionally do NOT reverse animation here when leaving sticker surface
+            // The animation only reverses when mouse leaves the container (handleMouseLeave)
         },
-        [checkMouseOverSticker, animation, transition, animationDuration, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig]
+        [checkMouseOverSticker, animation, transition, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig]
     )
 
     // Mouse leave handler: always reset when leaving canvas
@@ -2868,6 +3000,163 @@ export default function Sticker({
                     opacity: isReady ? 1 : 0,
                 }}
             />
+            {debug && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: 10,
+                        left: -400,
+                        background: "rgba(0, 0, 0, 0.85)",
+                        color: "#fff",
+                        padding: "12px",
+                        borderRadius: "8px",
+                        fontFamily: "monospace",
+                        fontSize: "11px",
+                        lineHeight: "1.5",
+                        zIndex: 10000,
+                        maxWidth: "320px",
+                        pointerEvents: "none",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                    }}
+                >
+                    <div style={{ fontWeight: "bold", marginBottom: "8px", color: "#4CAF50" }}>
+                        🎯 Raycaster Detection Debug
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Screen Coords</div>
+                        <div>
+                            {debugInfo ? (
+                                <>x: {debugInfo.screenX.toFixed(1)}, y: {debugInfo.screenY.toFixed(1)}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>Move mouse over sticker</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Container Offset (transform-aware)</div>
+                        <div style={{ color: "#FF9800" }}>
+                            {debugInfo?.containerOffsetX !== undefined && debugInfo?.containerOffsetY !== undefined ? (
+                                <>x: {debugInfo.containerOffsetX.toFixed(1)}, y: {debugInfo.containerOffsetY.toFixed(1)}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Canvas BoundingRect</div>
+                        <div>
+                            {debugInfo?.canvasRect ? (
+                                <>
+                                    L: {debugInfo.canvasRect.left.toFixed(1)}, T: {debugInfo.canvasRect.top.toFixed(1)}
+                                    <br />
+                                    W: {debugInfo.canvasRect.width.toFixed(1)}, H: {debugInfo.canvasRect.height.toFixed(1)}
+                                </>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Canvas Coords (mapped)</div>
+                        <div>
+                            {debugInfo ? (
+                                <>x: {debugInfo.canvasX.toFixed(1)}, y: {debugInfo.canvasY.toFixed(1)}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>NDC (Normalized Device Coords)</div>
+                        <div>
+                            {debugInfo?.ndcX !== undefined && debugInfo?.ndcY !== undefined ? (
+                                <>x: {debugInfo.ndcX.toFixed(3)}, y: {debugInfo.ndcY.toFixed(3)}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Ray Intersections</div>
+                        <div style={{ color: debugInfo?.intersectionCount ? "#4CAF50" : "#888" }}>
+                            {debugInfo?.intersectionCount !== undefined ? (
+                                <>{debugInfo.intersectionCount} hit{debugInfo.intersectionCount !== 1 ? 's' : ''}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Sticker Coords (from UV)</div>
+                        <div>
+                            {debugInfo ? (
+                                <>x: {debugInfo.stickerX.toFixed(1)}, y: {debugInfo.stickerY.toFixed(1)}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Image Coords</div>
+                        <div>
+                            {debugInfo ? (
+                                <>x: {debugInfo.imageX}, y: {debugInfo.imageY}</>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Sizes</div>
+                        <div>
+                            {debugInfo?.containerSize ? (
+                                <>
+                                    Container: {debugInfo.containerSize.width.toFixed(0)} × {debugInfo.containerSize.height.toFixed(0)}
+                                    <br />
+                                    Sticker: {debugInfo.stickerSize?.width.toFixed(0)} × {debugInfo.stickerSize?.height.toFixed(0)}
+                                </>
+                            ) : (
+                                <span style={{ color: "#888" }}>N/A</span>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Parent Transform</div>
+                        <div style={{ 
+                            fontSize: "9px", 
+                            wordBreak: "break-all",
+                            color: debugInfo?.parentTransform && debugInfo.parentTransform !== "none" ? "#FF9800" : "#4CAF50"
+                        }}>
+                            {debugInfo?.parentTransform || "none"}
+                        </div>
+                    </div>
+                    
+                    <div style={{ 
+                        marginTop: "8px", 
+                        paddingTop: "8px", 
+                        borderTop: "1px solid rgba(255, 255, 255, 0.2)",
+                        fontWeight: "bold",
+                        color: debugInfo?.isOverSticker ? "#4CAF50" : "#f44336"
+                    }}>
+                        {debugInfo ? (
+                            debugInfo.isOverSticker ? "✅ Over Sticker" : "❌ Not Over Sticker"
+                        ) : (
+                            <span style={{ color: "#888" }}>Waiting for mouse movement...</span>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
@@ -2884,6 +3173,14 @@ addPropertyControls(Sticker, {
         enabledTitle:"•",
         disabledTitle:"•",
         description:"Toggle if the sticker is showing an error to see it again",
+    },
+    debug: {
+        type: ControlType.Boolean,
+        title: "Debug",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+        description: "Enable debug panel to see mouse coordinate transformations. Useful for diagnosing 3D transform issues.",
     },
     image: {
         type: ControlType.ResponsiveImage,
