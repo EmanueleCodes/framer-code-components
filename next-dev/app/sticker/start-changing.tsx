@@ -123,7 +123,7 @@ const CAMERA_FAR = 2000
 const STICKER_DEPTH = 0.003
 
 // Canvas scale - small padding for shadows while staying responsive
-const CANVAS_SCALE = 1.2 // 20% extra space for shadows
+const CANVAS_SCALE = 2.5 // 250% extra space for shadows
 
 // 2D Bone Grid settings
 const BONE_GRID_X =60 // Performance-safe bone count for hardware skinning
@@ -1636,7 +1636,7 @@ export default function Sticker({
 
     // Check if mouse is over non-transparent part of sticker
     const checkMouseOverSticker = useCallback(
-        (event: React.MouseEvent<HTMLCanvasElement>) => {
+        (event: React.MouseEvent<HTMLDivElement>) => {
             if (
                 !canvasRef.current ||
                 !containerRef.current ||
@@ -1767,13 +1767,17 @@ export default function Sticker({
 
     // Mouse move handler: check if over sticker and trigger animations
     const handleMouseMove = useCallback(
-        (event: React.MouseEvent<HTMLCanvasElement>) => {
+        (event: React.MouseEvent<HTMLDivElement>) => {
             const isOverSticker = checkMouseOverSticker(event)
             const wasHovering = isHoveringRef.current
 
             if (isOverSticker && !wasHovering) {
                 // Entering sticker: animate to end values from animation object
                 isHoveringRef.current = true
+
+                if(containerRef.current && isOverSticker){
+                    containerRef.current.style.cursor= "pointer"
+                }
                 
                 // Stop any existing animations
                 if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
@@ -1804,6 +1808,8 @@ export default function Sticker({
             } else if (!isOverSticker && wasHovering) {
                 // Leaving sticker: animate back to start values from animation object
                 isHoveringRef.current = false
+
+                containerRef.current && !isOverSticker && (containerRef.current.style.cursor = "auto")
                 
                 // Stop any existing animations
                 if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
@@ -2814,16 +2820,21 @@ export default function Sticker({
 
     return (
         <div
+            data-hello="YES"
             ref={containerRef}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
             style={{
                 ...style,
                 position: "relative",
                 width: "100%",
                 height: "100%",
+                border:"1px solid red",
                 overflow: "visible",
                 display: "block",
                 margin: 0,
                 padding: 0,
+                
             }}
         >
             <div
@@ -2838,10 +2849,11 @@ export default function Sticker({
             />
             <canvas
                 ref={canvasRef}
-                onMouseMove={handleMouseMove}
-                onMouseLeave={handleMouseLeave}
+                
+             
                 style={{
                     position: "absolute",
+                   
                     top: `-${offsetPercent}%`,
                     left: `-${offsetPercent}%`,
                     // In canvas mode, use explicit dimensions for better responsiveness
@@ -2851,7 +2863,8 @@ export default function Sticker({
                         height: `${CANVAS_SCALE * 100}%`,
                     } : {}),
                     display: "block",
-                    cursor: "pointer",
+                    pointerEvents: "none",
+                    cursor:"auto",
                     opacity: isReady ? 1 : 0,
                 }}
             />
