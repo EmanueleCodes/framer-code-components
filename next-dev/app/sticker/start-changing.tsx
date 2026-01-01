@@ -13,7 +13,6 @@ import {
     MeshStandardMaterial,
     Texture,
     Vector3,
-    Vector2,
     Quaternion,
     Bone,
     Skeleton,
@@ -32,7 +31,6 @@ import {
     Group,
     ShadowMaterial,
     PCFSoftShadowMap,
-    Raycaster,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
 import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/3D-text-rug.js"
@@ -336,7 +334,7 @@ export default function Sticker({
     shadowBgColor = "rgba(0, 0, 0, 0)",
     castShadowOpacity = 0.3,
     refresh = false,
-    debug = false,
+    debug = true,
     style,
 }: StickerProps) {
     // Refs
@@ -389,8 +387,6 @@ export default function Sticker({
     const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
     const debugLineRef = useRef<any>(null) // Debug line for curlStart
-    const raycasterRef = useRef<any>(null) // Raycaster for mouse detection
-    const raycasterMouseRef = useRef<any>(null) // Reusable Vector2 for raycaster
     const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
     const pendingUpdateRef = useRef<boolean>(false) // Flag to batch bone updates into single RAF
     const lastRetryAttemptRef = useRef<number>(0) // Track last retry attempt to prevent rapid retries
@@ -416,6 +412,16 @@ export default function Sticker({
         containerSize: { width: number; height: number } | null
         stickerSize: { width: number; height: number } | null
         parentTransform: string | null
+        hoverState?: "idle" | "entering" | "hovering" | "leaving"
+        wasHovering?: boolean
+        eventReceived?: boolean
+        raycasterError?: string
+        skeletonError?: string
+        renderError?: string
+        updateBonesError?: string
+        skeletonReady?: boolean
+        errorLocation?: string
+        errorStack?: string
     } | null>(null)
 
     // State
@@ -875,18 +881,38 @@ export default function Sticker({
                     })
                 }
                 meshRef.current.skeleton.update()
-            } catch (error) {
-                // Silently handle errors during render to prevent console spam
-                // This can happen during component unmount or context loss
+            } catch (error: any) {
+                // Track error for debugging
+                if (debug) {
+                    const errorMsg = error?.message || "Unknown error"
+                    const errorStack = error?.stack || "No stack trace"
+                    console.error("❌ renderFrame skeleton update error:", errorMsg, errorStack)
+                    setDebugInfo(prev => prev ? {
+                        ...prev,
+                        skeletonError: errorMsg,
+                        errorLocation: "renderFrame.skeleton.update",
+                        errorStack: errorStack.substring(0, 500), // Limit stack trace length
+                    } : null)
+                }
                 return
             }
         }
         
         try {
             rendererRef.current.render(sceneRef.current, cameraRef.current)
-        } catch (error) {
-            // Silently handle render errors (context loss, etc.)
-            // Don't update state here to avoid render loops
+        } catch (error: any) {
+            // Track render errors for debugging
+            if (debug) {
+                const errorMsg = error?.message || "Unknown error"
+                const errorStack = error?.stack || "No stack trace"
+                console.error("❌ renderFrame render error:", errorMsg, errorStack)
+                setDebugInfo(prev => prev ? {
+                    ...prev,
+                    renderError: errorMsg,
+                    errorLocation: "renderFrame.render",
+                    errorStack: errorStack.substring(0, 500),
+                } : null)
+            }
         }
     }, [])
 
@@ -1471,10 +1497,6 @@ export default function Sticker({
     // BONE ANIMATION (2D Bone Grid with Fold Line)
     // ========================================================================
 
-    // ========================================================================
-    // BONE ANIMATION (2D Bone Grid with Fold Line)
-    // ========================================================================
-
     const updateBones = useCallback(() => {
         if (!bonesRef.current.length || !meshRef.current || !bonesInitialPositionsRef.current.length) return
         
@@ -1497,8 +1519,19 @@ export default function Sticker({
             })
             
             meshRef.current.skeleton.update()
-        } catch (error) {
-            // Silently handle errors during bone updates
+        } catch (error: any) {
+            // Track error for debugging
+            if (debug) {
+                const errorMsg = error?.message || "Unknown error"
+                const errorStack = error?.stack || "No stack trace"
+                console.error("❌ updateBones skeleton update error:", errorMsg, errorStack)
+                setDebugInfo(prev => prev ? {
+                    ...prev,
+                    updateBonesError: errorMsg,
+                    errorLocation: "updateBones.skeleton.update",
+                    errorStack: errorStack.substring(0, 500),
+                } : null)
+            }
             return
         }
 
@@ -1670,210 +1703,6 @@ export default function Sticker({
     // HOVER ANIMATION WITH FRAMER MOTION
     // ========================================================================
 
-    // Check if mouse is over non-transparent part of sticker
-    // RAYCASTER APPROACH: Uses Three.js Raycaster to handle 3D transforms on parent layers
-    // Uses offsetX/offsetY which are transform-aware, then maps to canvas coordinates
-    const checkMouseOverSticker = useCallback(
-        (event: React.MouseEvent<HTMLDivElement>) => {
-            if (
-                !canvasRef.current ||
-                !containerRef.current ||
-                !cameraRef.current ||
-                !meshRef.current ||
-                !loadedImageRef.current
-            ) {
-                if (debug) {
-                    setDebugInfo({
-                        screenX: event.clientX,
-                        screenY: event.clientY,
-                        canvasX: 0,
-                        canvasY: 0,
-                        stickerX: 0,
-                        stickerY: 0,
-                        imageX: 0,
-                        imageY: 0,
-                        isOverSticker: false,
-                        canvasRect: null,
-                        containerSize: null,
-                        stickerSize: null,
-                        parentTransform: null,
-                    })
-                }
-                return false
-            }
-
-            const canvas = canvasRef.current
-            const container = containerRef.current
-            const camera = cameraRef.current
-            const mesh = meshRef.current
-            const img = loadedImageRef.current
-            
-            // Get parent transform for debugging
-            const parentElement = container.parentElement
-            const parentTransform = parentElement 
-                ? window.getComputedStyle(parentElement).transform 
-                : null
-            
-            const mouseX = event.clientX
-            const mouseY = event.clientY
-            
-            // Use offsetX/offsetY which are TRANSFORM-AWARE
-            // These give coordinates relative to the target element, accounting for CSS 3D transforms!
-            // Since all children have pointerEvents: none, the target is always the container
-            const containerX = event.nativeEvent.offsetX
-            const containerY = event.nativeEvent.offsetY
-            
-            // Get container dimensions
-            const containerWidth = container.clientWidth || container.offsetWidth || 1
-            const containerHeight = container.clientHeight || container.offsetHeight || 1
-            
-            // Canvas is CANVAS_SCALE (2.5) times larger than container and centered
-            // The canvas is offset by -75% from container origin (for CANVAS_SCALE = 2.5)
-            const canvasWidth = containerWidth * CANVAS_SCALE
-            const canvasHeight = containerHeight * CANVAS_SCALE
-            
-            // Map container coordinates to canvas coordinates
-            // Container (0,0) corresponds to canvas position at (offsetX, offsetY)
-            const offsetX = ((CANVAS_SCALE - 1) / 2) * containerWidth
-            const offsetY = ((CANVAS_SCALE - 1) / 2) * containerHeight
-            
-            const canvasX = containerX + offsetX
-            const canvasY = containerY + offsetY
-            
-            // Convert canvas coordinates to NDC (-1 to 1)
-            // NDC x: -1 at left edge, +1 at right edge
-            // NDC y: +1 at top edge, -1 at bottom edge (WebGL convention, Y is inverted from DOM)
-            const ndcX = (canvasX / canvasWidth) * 2 - 1
-            const ndcY = 1 - (canvasY / canvasHeight) * 2
-            
-            // Initialize raycaster and mouse vector if needed
-            if (!raycasterRef.current) {
-                raycasterRef.current = new Raycaster()
-            }
-            if (!raycasterMouseRef.current) {
-                raycasterMouseRef.current = new Vector2()
-            }
-            
-            const raycaster = raycasterRef.current
-            const mouseVec = raycasterMouseRef.current
-            mouseVec.set(ndcX, ndcY)
-            
-            // Set up raycaster from camera through mouse position in NDC
-            raycaster.setFromCamera(mouseVec, camera)
-            
-            // Check intersection with the mesh (including children like bones)
-            // Note: For SkinnedMesh, raycasting works on the base geometry, not the deformed version
-            // This is fine for our use case since we mainly care about the flat visible area
-            const intersects = raycaster.intersectObject(mesh, true)
-            
-            let isOverSticker = false
-            let stickerX = 0
-            let stickerY = 0
-            let imageX = 0
-            let imageY = 0
-            let intersectionUV: { x: number; y: number } | null = null
-            
-            if (intersects.length > 0) {
-                // Get the first (closest) intersection
-                const intersection = intersects[0]
-                
-                // Get UV coordinates from the intersection point
-                // UV coords tell us exactly where on the texture the ray hit
-                if (intersection.uv) {
-                    intersectionUV = { x: intersection.uv.x, y: intersection.uv.y }
-                    const uv = intersection.uv
-                    
-                    // Convert UV to image pixel coordinates
-                    // UV: (0,0) is typically bottom-left in Three.js textures
-                    // Image: (0,0) is top-left
-                    // Standard BoxGeometry front face (+Z) has UV (0,0) at bottom-left
-                    imageX = Math.floor(uv.x * img.width)
-                    imageY = Math.floor((1 - uv.y) * img.height) // Flip Y for image coordinates
-                    
-                    // Clamp to image bounds
-                    const clampedX = Math.max(0, Math.min(img.width - 1, imageX))
-                    const clampedY = Math.max(0, Math.min(img.height - 1, imageY))
-                    
-                    // Sample the image to check alpha at the intersection point
-                    const tempCanvas = document.createElement("canvas")
-                    tempCanvas.width = img.width
-                    tempCanvas.height = img.height
-                    const ctx = tempCanvas.getContext("2d")
-                    
-                    if (ctx) {
-                        ctx.drawImage(img, 0, 0)
-                        const imageData = ctx.getImageData(clampedX, clampedY, 1, 1)
-                        const alpha = imageData.data[3]
-                        
-                        // Consider it "over sticker" if alpha is above threshold
-                        isOverSticker = alpha > 10
-                    }
-                    
-                    // Calculate sticker coordinates for debug display
-                    const contained = calculateContainedDimensions(
-                        containerWidth,
-                        containerHeight,
-                        imageAspectRatioRef.current
-                    )
-                    stickerX = uv.x * contained.width
-                    stickerY = (1 - uv.y) * contained.height
-                }
-            }
-
-            // Debug logging and state update
-            if (debug) {
-                const contained = calculateContainedDimensions(
-                    containerWidth,
-                    containerHeight,
-                    imageAspectRatioRef.current
-                )
-                const canvasRect = canvas.getBoundingClientRect()
-                
-                const debugData = {
-                    screenX: mouseX,
-                    screenY: mouseY,
-                    containerOffsetX: containerX,
-                    containerOffsetY: containerY,
-                    canvasX,
-                    canvasY,
-                    ndcX,
-                    ndcY,
-                    intersectionCount: intersects.length,
-                    stickerX,
-                    stickerY,
-                    imageX,
-                    imageY,
-                    isOverSticker,
-                    canvasRect: canvasRect,
-                    containerSize: { width: containerWidth, height: containerHeight },
-                    stickerSize: { width: contained.width, height: contained.height },
-                    parentTransform,
-                }
-                setDebugInfo(debugData)
-                
-                // Console logging with detailed breakdown
-                console.group("🎯 Raycaster Mouse Detection Debug")
-                console.log("Screen Coords:", { x: mouseX, y: mouseY })
-                console.log("Container Offset (transform-aware):", { x: containerX.toFixed(1), y: containerY.toFixed(1) })
-                console.log("Canvas Coords:", { x: canvasX.toFixed(1), y: canvasY.toFixed(1) })
-                console.log("NDC (Normalized Device Coords):", { x: ndcX.toFixed(3), y: ndcY.toFixed(3) })
-                console.log("Intersections found:", intersects.length)
-                if (intersectionUV) {
-                    console.log("Intersection UV:", { x: intersectionUV.x.toFixed(3), y: intersectionUV.y.toFixed(3) })
-                    console.log("Image Coords:", { x: imageX, y: imageY })
-                }
-                console.log("Is Over Sticker:", isOverSticker)
-                console.log("Parent Transform:", parentTransform)
-                console.log("Container Size:", { width: containerWidth, height: containerHeight })
-                console.log("Sticker Size:", { width: contained.width, height: contained.height })
-                console.groupEnd()
-            }
-
-            return isOverSticker
-        },
-        [debug]
-    )
-
     // Store animation controls refs to allow cancellation
     const animationControlsRef = useRef<{
         curlAmount?: ReturnType<typeof animate>
@@ -1923,83 +1752,72 @@ export default function Sticker({
         return config
     }, [animationDuration])
 
-    // Mouse move handler: check if over sticker and trigger animation START only
-    // Animation REVERSAL is handled by handleMouseLeave (container exit), not sticker surface exit
-    const handleMouseMove = useCallback(
-        (event: React.MouseEvent<HTMLDivElement>) => {
-            const isOverSticker = checkMouseOverSticker(event)
-            const wasHovering = isHoveringRef.current
-
-            // Update cursor based on sticker surface detection
+    // Pointer enter handler: trigger animation forward when mouse enters container
+    const handleMouseEnter = useCallback(() => {
+        if (!isHoveringRef.current) {
+            isHoveringRef.current = true
+            
+            // Update cursor
             if (containerRef.current) {
-                containerRef.current.style.cursor = isOverSticker ? "pointer" : "auto"
+                containerRef.current.style.cursor = "pointer"
             }
-
-            // Only START animation when entering sticker surface (not already hovering)
-            // Reverse animation is handled by handleMouseLeave (container exit)
-            if (isOverSticker && !wasHovering) {
-                // Entering sticker: animate to end values from animation object
-                isHoveringRef.current = true
-                
-                // Stop any existing animations
-                if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
-                if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
-                if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
-                
-                // Build transition config from ControlType.Transition
-                const transitionConfig = buildTransitionConfig(transition)
-                
-                // Animate all values to their end states simultaneously
-                animationControlsRef.current.curlAmount = animate(
-                    curlAmountMotion,
-                    animation.curlAmountEnd,
-                    transitionConfig
-                )
-                
-                animationControlsRef.current.curlStart = animate(
-                    curlStartMotion,
-                    animation.curlStartEnd,
-                    transitionConfig
-                )
-                
-                animationControlsRef.current.curlRadius = animate(
-                    curlRadiusMotion,
-                    animation.curlRadiusEnd,
-                    transitionConfig
-                )
-            }
-            // Note: We intentionally do NOT reverse animation here when leaving sticker surface
-            // The animation only reverses when mouse leaves the container (handleMouseLeave)
-        },
-        [checkMouseOverSticker, animation, transition, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig]
-    )
-
-    // Mouse leave handler: always reset when leaving canvas
-    const handleMouseLeave = useCallback(() => {
-        if (isHoveringRef.current) {
-            isHoveringRef.current = false
             
             // Stop any existing animations
             if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
             if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
             if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
             
-            // Build transition config from ControlType.Transition (use easeOut for mouse leave)
+            // Build transition config
+            const transitionConfig = buildTransitionConfig(transition)
+            
+            // Animate to end states
+            animationControlsRef.current.curlAmount = animate(
+                curlAmountMotion,
+                animation.curlAmountEnd,
+                transitionConfig
+            )
+            animationControlsRef.current.curlStart = animate(
+                curlStartMotion,
+                animation.curlStartEnd,
+                transitionConfig
+            )
+            animationControlsRef.current.curlRadius = animate(
+                curlRadiusMotion,
+                animation.curlRadiusEnd,
+                transitionConfig
+            )
+        }
+    }, [animation, transition, curlAmountMotion, curlStartMotion, curlRadiusMotion, buildTransitionConfig])
+
+    // Pointer leave handler: reverse animation when leaving container
+    const handleMouseLeave = useCallback(() => {
+        if (isHoveringRef.current) {
+            isHoveringRef.current = false
+            
+            // Update cursor
+            if (containerRef.current) {
+                containerRef.current.style.cursor = "auto"
+            }
+            
+            // Stop any existing animations
+            if (animationControlsRef.current.curlAmount) animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart) animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius) animationControlsRef.current.curlRadius.stop()
+            
+            // Build transition config (use easeOut for mouse leave)
             const transitionConfig = buildTransitionConfig(transition, animationDuration, "easeOut")
             
-            // Animate all values back to their start states simultaneously
+            // Animate back to start states
             animationControlsRef.current.curlAmount = animate(
                 curlAmountMotion,
                 animation.curlAmountStart,
                 transitionConfig
             )
-            
             animationControlsRef.current.curlStart = animate(
                 curlStartMotion,
                 animation.curlStartStart,
                 transitionConfig
             )
-            
             animationControlsRef.current.curlRadius = animate(
                 curlRadiusMotion,
                 animation.curlRadiusStart,
@@ -2952,23 +2770,25 @@ export default function Sticker({
 
     return (
         <div
-            data-hello="YES"
             ref={containerRef}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={handleMouseLeave}
+            onPointerEnter={handleMouseEnter}
+            onPointerLeave={handleMouseLeave}
             style={{
                 ...style,
                 position: "relative",
+                borderRadius:"24px",
                 width: "100%",
                 height: "100%",
-                border:"1px solid red",
                 overflow: "visible",
-                display: "block",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
                 margin: 0,
                 padding: 0,
-                
+                //border:"1px solid red",
             }}
         >
+
             <div
                 ref={zoomProbeRef}
                 style={{
@@ -3142,6 +2962,70 @@ export default function Sticker({
                         </div>
                     </div>
                     
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Hover State</div>
+                        <div style={{ 
+                            fontWeight: "bold",
+                            color: debugInfo?.hoverState === "hovering" ? "#4CAF50" 
+                                : debugInfo?.hoverState === "entering" ? "#FF9800"
+                                : debugInfo?.hoverState === "leaving" ? "#FF5722"
+                                : "#888"
+                        }}>
+                            {debugInfo?.hoverState || "idle"}
+                            {debugInfo?.wasHovering !== undefined && (
+                                <span style={{ fontSize: "9px", fontWeight: "normal", marginLeft: "8px", color: "#888" }}>
+                                    (was: {debugInfo.wasHovering ? "true" : "false"})
+                                </span>
+                            )}
+                        </div>
+                        <div style={{ fontSize: "9px", color: "#888", marginTop: "2px" }}>
+                            Event received: {debugInfo?.eventReceived ? "✅ Yes" : "❌ No"}
+                        </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: "6px" }}>
+                        <div style={{ color: "#888", fontSize: "10px" }}>Raycaster Status</div>
+                        <div style={{ fontSize: "9px", marginTop: "2px" }}>
+                            Skeleton: {debugInfo?.skeletonReady !== undefined 
+                                ? (debugInfo.skeletonReady ? <span style={{ color: "#4CAF50" }}>✅ Ready</span> : <span style={{ color: "#f44336" }}>❌ Not Ready</span>)
+                                : <span style={{ color: "#888" }}>N/A</span>}
+                        </div>
+                        {debugInfo?.errorLocation && (
+                            <div style={{ fontSize: "9px", color: "#FF9800", marginTop: "4px", fontWeight: "bold" }}>
+                                Error Location: {debugInfo.errorLocation}
+                            </div>
+                        )}
+                        {debugInfo?.raycasterError && (
+                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
+                                <div style={{ fontWeight: "bold" }}>Raycaster Error:</div>
+                                <div>{debugInfo.raycasterError}</div>
+                            </div>
+                        )}
+                        {debugInfo?.skeletonError && (
+                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
+                                <div style={{ fontWeight: "bold" }}>Skeleton Error:</div>
+                                <div>{debugInfo.skeletonError}</div>
+                            </div>
+                        )}
+                        {debugInfo?.renderError && (
+                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
+                                <div style={{ fontWeight: "bold" }}>Render Error:</div>
+                                <div>{debugInfo.renderError}</div>
+                            </div>
+                        )}
+                        {debugInfo?.updateBonesError && (
+                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
+                                <div style={{ fontWeight: "bold" }}>Update Bones Error:</div>
+                                <div>{debugInfo.updateBonesError}</div>
+                            </div>
+                        )}
+                        {debugInfo?.errorStack && (
+                            <div style={{ fontSize: "8px", color: "#888", marginTop: "4px", wordBreak: "break-word", fontFamily: "monospace", maxHeight: "100px", overflow: "auto" }}>
+                                <div style={{ fontWeight: "bold", marginBottom: "2px" }}>Stack Trace:</div>
+                                <div style={{ whiteSpace: "pre-wrap" }}>{debugInfo.errorStack}</div>
+                            </div>
+                        )}
+                    </div>
                     <div style={{ 
                         marginTop: "8px", 
                         paddingTop: "8px", 
@@ -3174,14 +3058,14 @@ addPropertyControls(Sticker, {
         disabledTitle:"•",
         description:"Toggle if the sticker is showing an error to see it again",
     },
-    debug: {
-        type: ControlType.Boolean,
-        title: "Debug",
-        defaultValue: false,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-        description: "Enable debug panel to see mouse coordinate transformations. Useful for diagnosing 3D transform issues.",
-    },
+    // debug: {
+    //     type: ControlType.Boolean,
+    //     title: "Debug",
+    //     defaultValue: false,
+    //     enabledTitle: "On",
+    //     disabledTitle: "Off",
+    //     description: "Enable debug panel to see mouse coordinate transformations. Useful for diagnosing 3D transform issues.",
+    // },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
