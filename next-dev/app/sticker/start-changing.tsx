@@ -91,11 +91,11 @@ interface StickerProps {
     shadowBgColor: string
     castShadowOpacity: number
     // Refresh toggle to force re-initialization
-    refresh: boolean
-    // Debug mode - shows coordinate debug panel
-    debug: boolean
+    refresh: boolean    
     // Style (always last)
     style?: React.CSSProperties
+    borderRadius:string
+    backgroundColor:string
 }
 
 // Simple image source resolution
@@ -334,8 +334,9 @@ export default function Sticker({
     shadowBgColor = "rgba(0, 0, 0, 0)",
     castShadowOpacity = 0.3,
     refresh = false,
-    debug = true,
     style,
+    borderRadius,
+    backgroundColor
 }: StickerProps) {
     // Refs
     const containerRef = useRef<HTMLDivElement>(null)
@@ -386,43 +387,11 @@ export default function Sticker({
     const backgroundPlaneRef = useRef<any>(null)
     const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
-    const debugLineRef = useRef<any>(null) // Debug line for curlStart
     const lastMeshDimensionsRef = useRef<{ width: number; height: number } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
     const pendingUpdateRef = useRef<boolean>(false) // Flag to batch bone updates into single RAF
     const lastRetryAttemptRef = useRef<number>(0) // Track last retry attempt to prevent rapid retries
     const previousRefreshRef = useRef<boolean | undefined>(undefined) // Track previous refresh value to detect changes
     
-    // Debug state for coordinate tracking
-    const [debugInfo, setDebugInfo] = useState<{
-        screenX: number
-        screenY: number
-        containerOffsetX?: number
-        containerOffsetY?: number
-        canvasX: number
-        canvasY: number
-        ndcX?: number
-        ndcY?: number
-        intersectionCount?: number
-        stickerX: number
-        stickerY: number
-        imageX: number
-        imageY: number
-        isOverSticker: boolean
-        canvasRect: DOMRect | null
-        containerSize: { width: number; height: number } | null
-        stickerSize: { width: number; height: number } | null
-        parentTransform: string | null
-        hoverState?: "idle" | "entering" | "hovering" | "leaving"
-        wasHovering?: boolean
-        eventReceived?: boolean
-        raycasterError?: string
-        skeletonError?: string
-        renderError?: string
-        updateBonesError?: string
-        skeletonReady?: boolean
-        errorLocation?: string
-        errorStack?: string
-    } | null>(null)
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
@@ -868,52 +837,25 @@ export default function Sticker({
         // Ensure world matrices and skeleton are updated before rendering
         // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
         if (meshRef.current && meshRef.current.skeleton) {
-            try {
-                meshRef.current.updateMatrixWorld(true)
-                // Ensure all bones have valid matrices before skeleton update
-                const bones = meshRef.current.skeleton.bones
-                if (bones && bones.length > 0) {
-                    // Update bone matrices individually to ensure they're ready
-                    bones.forEach((bone: any) => {
-                        if (bone && typeof bone.updateMatrixWorld === 'function') {
-                            bone.updateMatrixWorld(true)
-                        }
-                    })
-                }
-                meshRef.current.skeleton.update()
-            } catch (error: any) {
-                // Track error for debugging
-                if (debug) {
-                    const errorMsg = error?.message || "Unknown error"
-                    const errorStack = error?.stack || "No stack trace"
-                    console.error("❌ renderFrame skeleton update error:", errorMsg, errorStack)
-                    setDebugInfo(prev => prev ? {
-                        ...prev,
-                        skeletonError: errorMsg,
-                        errorLocation: "renderFrame.skeleton.update",
-                        errorStack: errorStack.substring(0, 500), // Limit stack trace length
-                    } : null)
-                }
-                return
+            
+            meshRef.current.updateMatrixWorld(true)
+            // Ensure all bones have valid matrices before skeleton update
+            const bones = meshRef.current.skeleton.bones
+            if (bones && bones.length > 0) {
+                // Update bone matrices individually to ensure they're ready
+                bones.forEach((bone: any) => {
+                    if (bone && typeof bone.updateMatrixWorld === 'function') {
+                        bone.updateMatrixWorld(true)
+                    }
+                })
             }
+            meshRef.current.skeleton.update()
         }
         
-        try {
-            rendererRef.current.render(sceneRef.current, cameraRef.current)
-        } catch (error: any) {
-            // Track render errors for debugging
-            if (debug) {
-                const errorMsg = error?.message || "Unknown error"
-                const errorStack = error?.stack || "No stack trace"
-                console.error("❌ renderFrame render error:", errorMsg, errorStack)
-                setDebugInfo(prev => prev ? {
-                    ...prev,
-                    renderError: errorMsg,
-                    errorLocation: "renderFrame.render",
-                    errorStack: errorStack.substring(0, 500),
-                } : null)
-            }
-        }
+       
+        rendererRef.current.render(sceneRef.current, cameraRef.current)
+        
+        
     }, [])
 
     // ========================================================================
@@ -1505,35 +1447,22 @@ export default function Sticker({
         const skeletonBones = meshRef.current.skeleton.bones
         if (!skeletonBones || skeletonBones.length === 0) return
         
-        try {
-            // Force computation of world matrices BEFORE modifying bones
-            // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
-            // especially when curlRotation != 0 and bones have quaternion rotations
-            meshRef.current.updateMatrixWorld(true)
-            
-            // Ensure all bones have valid matrices before skeleton update
-            skeletonBones.forEach((bone: any) => {
-                if (bone && typeof bone.updateMatrixWorld === 'function') {
-                    bone.updateMatrixWorld(true)
-                }
-            })
-            
-            meshRef.current.skeleton.update()
-        } catch (error: any) {
-            // Track error for debugging
-            if (debug) {
-                const errorMsg = error?.message || "Unknown error"
-                const errorStack = error?.stack || "No stack trace"
-                console.error("❌ updateBones skeleton update error:", errorMsg, errorStack)
-                setDebugInfo(prev => prev ? {
-                    ...prev,
-                    updateBonesError: errorMsg,
-                    errorLocation: "updateBones.skeleton.update",
-                    errorStack: errorStack.substring(0, 500),
-                } : null)
+
+        // Force computation of world matrices BEFORE modifying bones
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        // especially when curlRotation != 0 and bones have quaternion rotations
+        meshRef.current.updateMatrixWorld(true)
+        
+        // Ensure all bones have valid matrices before skeleton update
+        skeletonBones.forEach((bone: any) => {
+            if (bone && typeof bone.updateMatrixWorld === 'function') {
+                bone.updateMatrixWorld(true)
             }
-            return
-        }
+        })
+        
+        meshRef.current.skeleton.update()
+        
+        
 
         const bones = bonesRef.current
         const initialPositions = bonesInitialPositionsRef.current
@@ -1643,30 +1572,6 @@ export default function Sticker({
         if (meshRef.current.skeleton) {
             meshRef.current.skeleton.update()
         }
-
-        // Draw debug line along the fold line (commented out)
-        // if (groupRef.current) {
-        //     if (debugLineRef.current) {
-        //         groupRef.current.remove(debugLineRef.current)
-        //         debugLineRef.current.geometry.dispose()
-        //         debugLineRef.current.material.dispose()
-        //     }
-
-        //     const centerX = foldOffset * dirX
-        //     const centerY = foldOffset * dirY
-
-        //     // Use maxDistAlongDir for debug line to match fold line bounds
-        //     const lineHalfLen = maxDistAlongDir * 1.5
-        //     const points = [
-        //         new Vector3(centerX - axisX * lineHalfLen, centerY - axisY * lineHalfLen, 0.1),
-        //         new Vector3(centerX + axisX * lineHalfLen, centerY + axisY * lineHalfLen, 0.1),
-        //     ]
-        //     const lineGeometry = new BufferGeometry().setFromPoints(points)
-        //     const lineMaterial = new LineBasicMaterial({ color: 0x0000ff })
-        //     const line = new Line(lineGeometry, lineMaterial)
-        //     debugLineRef.current = line
-        //     groupRef.current.add(line)
-        // }
 
         renderFrame()
     }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
@@ -2776,7 +2681,7 @@ export default function Sticker({
             style={{
                 ...style,
                 position: "relative",
-                borderRadius:"24px",
+               
                 width: "100%",
                 height: "100%",
                 overflow: "visible",
@@ -2785,7 +2690,8 @@ export default function Sticker({
                 alignItems: "center",
                 margin: 0,
                 padding: 0,
-                //border:"1px solid red",
+                borderRadius:borderRadius,
+                backgroundColor: backgroundColor || "transparent",
             }}
         >
 
@@ -2820,227 +2726,7 @@ export default function Sticker({
                     opacity: isReady ? 1 : 0,
                 }}
             />
-            {debug && (
-                <div
-                    style={{
-                        position: "absolute",
-                        top: 10,
-                        left: -400,
-                        background: "rgba(0, 0, 0, 0.85)",
-                        color: "#fff",
-                        padding: "12px",
-                        borderRadius: "8px",
-                        fontFamily: "monospace",
-                        fontSize: "11px",
-                        lineHeight: "1.5",
-                        zIndex: 10000,
-                        maxWidth: "320px",
-                        pointerEvents: "none",
-                        border: "1px solid rgba(255, 255, 255, 0.2)",
-                        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
-                    }}
-                >
-                    <div style={{ fontWeight: "bold", marginBottom: "8px", color: "#4CAF50" }}>
-                        🎯 Raycaster Detection Debug
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Screen Coords</div>
-                        <div>
-                            {debugInfo ? (
-                                <>x: {debugInfo.screenX.toFixed(1)}, y: {debugInfo.screenY.toFixed(1)}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>Move mouse over sticker</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Container Offset (transform-aware)</div>
-                        <div style={{ color: "#FF9800" }}>
-                            {debugInfo?.containerOffsetX !== undefined && debugInfo?.containerOffsetY !== undefined ? (
-                                <>x: {debugInfo.containerOffsetX.toFixed(1)}, y: {debugInfo.containerOffsetY.toFixed(1)}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Canvas BoundingRect</div>
-                        <div>
-                            {debugInfo?.canvasRect ? (
-                                <>
-                                    L: {debugInfo.canvasRect.left.toFixed(1)}, T: {debugInfo.canvasRect.top.toFixed(1)}
-                                    <br />
-                                    W: {debugInfo.canvasRect.width.toFixed(1)}, H: {debugInfo.canvasRect.height.toFixed(1)}
-                                </>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Canvas Coords (mapped)</div>
-                        <div>
-                            {debugInfo ? (
-                                <>x: {debugInfo.canvasX.toFixed(1)}, y: {debugInfo.canvasY.toFixed(1)}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>NDC (Normalized Device Coords)</div>
-                        <div>
-                            {debugInfo?.ndcX !== undefined && debugInfo?.ndcY !== undefined ? (
-                                <>x: {debugInfo.ndcX.toFixed(3)}, y: {debugInfo.ndcY.toFixed(3)}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Ray Intersections</div>
-                        <div style={{ color: debugInfo?.intersectionCount ? "#4CAF50" : "#888" }}>
-                            {debugInfo?.intersectionCount !== undefined ? (
-                                <>{debugInfo.intersectionCount} hit{debugInfo.intersectionCount !== 1 ? 's' : ''}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Sticker Coords (from UV)</div>
-                        <div>
-                            {debugInfo ? (
-                                <>x: {debugInfo.stickerX.toFixed(1)}, y: {debugInfo.stickerY.toFixed(1)}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Image Coords</div>
-                        <div>
-                            {debugInfo ? (
-                                <>x: {debugInfo.imageX}, y: {debugInfo.imageY}</>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Sizes</div>
-                        <div>
-                            {debugInfo?.containerSize ? (
-                                <>
-                                    Container: {debugInfo.containerSize.width.toFixed(0)} × {debugInfo.containerSize.height.toFixed(0)}
-                                    <br />
-                                    Sticker: {debugInfo.stickerSize?.width.toFixed(0)} × {debugInfo.stickerSize?.height.toFixed(0)}
-                                </>
-                            ) : (
-                                <span style={{ color: "#888" }}>N/A</span>
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Parent Transform</div>
-                        <div style={{ 
-                            fontSize: "9px", 
-                            wordBreak: "break-all",
-                            color: debugInfo?.parentTransform && debugInfo.parentTransform !== "none" ? "#FF9800" : "#4CAF50"
-                        }}>
-                            {debugInfo?.parentTransform || "none"}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Hover State</div>
-                        <div style={{ 
-                            fontWeight: "bold",
-                            color: debugInfo?.hoverState === "hovering" ? "#4CAF50" 
-                                : debugInfo?.hoverState === "entering" ? "#FF9800"
-                                : debugInfo?.hoverState === "leaving" ? "#FF5722"
-                                : "#888"
-                        }}>
-                            {debugInfo?.hoverState || "idle"}
-                            {debugInfo?.wasHovering !== undefined && (
-                                <span style={{ fontSize: "9px", fontWeight: "normal", marginLeft: "8px", color: "#888" }}>
-                                    (was: {debugInfo.wasHovering ? "true" : "false"})
-                                </span>
-                            )}
-                        </div>
-                        <div style={{ fontSize: "9px", color: "#888", marginTop: "2px" }}>
-                            Event received: {debugInfo?.eventReceived ? "✅ Yes" : "❌ No"}
-                        </div>
-                    </div>
-                    
-                    <div style={{ marginBottom: "6px" }}>
-                        <div style={{ color: "#888", fontSize: "10px" }}>Raycaster Status</div>
-                        <div style={{ fontSize: "9px", marginTop: "2px" }}>
-                            Skeleton: {debugInfo?.skeletonReady !== undefined 
-                                ? (debugInfo.skeletonReady ? <span style={{ color: "#4CAF50" }}>✅ Ready</span> : <span style={{ color: "#f44336" }}>❌ Not Ready</span>)
-                                : <span style={{ color: "#888" }}>N/A</span>}
-                        </div>
-                        {debugInfo?.errorLocation && (
-                            <div style={{ fontSize: "9px", color: "#FF9800", marginTop: "4px", fontWeight: "bold" }}>
-                                Error Location: {debugInfo.errorLocation}
-                            </div>
-                        )}
-                        {debugInfo?.raycasterError && (
-                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
-                                <div style={{ fontWeight: "bold" }}>Raycaster Error:</div>
-                                <div>{debugInfo.raycasterError}</div>
-                            </div>
-                        )}
-                        {debugInfo?.skeletonError && (
-                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
-                                <div style={{ fontWeight: "bold" }}>Skeleton Error:</div>
-                                <div>{debugInfo.skeletonError}</div>
-                            </div>
-                        )}
-                        {debugInfo?.renderError && (
-                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
-                                <div style={{ fontWeight: "bold" }}>Render Error:</div>
-                                <div>{debugInfo.renderError}</div>
-                            </div>
-                        )}
-                        {debugInfo?.updateBonesError && (
-                            <div style={{ fontSize: "9px", color: "#f44336", marginTop: "4px", wordBreak: "break-word" }}>
-                                <div style={{ fontWeight: "bold" }}>Update Bones Error:</div>
-                                <div>{debugInfo.updateBonesError}</div>
-                            </div>
-                        )}
-                        {debugInfo?.errorStack && (
-                            <div style={{ fontSize: "8px", color: "#888", marginTop: "4px", wordBreak: "break-word", fontFamily: "monospace", maxHeight: "100px", overflow: "auto" }}>
-                                <div style={{ fontWeight: "bold", marginBottom: "2px" }}>Stack Trace:</div>
-                                <div style={{ whiteSpace: "pre-wrap" }}>{debugInfo.errorStack}</div>
-                            </div>
-                        )}
-                    </div>
-                    <div style={{ 
-                        marginTop: "8px", 
-                        paddingTop: "8px", 
-                        borderTop: "1px solid rgba(255, 255, 255, 0.2)",
-                        fontWeight: "bold",
-                        color: debugInfo?.isOverSticker ? "#4CAF50" : "#f44336"
-                    }}>
-                        {debugInfo ? (
-                            debugInfo.isOverSticker ? "✅ Over Sticker" : "❌ Not Over Sticker"
-                        ) : (
-                            <span style={{ color: "#888" }}>Waiting for mouse movement...</span>
-                        )}
-                    </div>
-                </div>
-            )}
+            
         </div>
     )
 }
@@ -3058,14 +2744,6 @@ addPropertyControls(Sticker, {
         disabledTitle:"•",
         description:"Toggle if the sticker is showing an error to see it again",
     },
-    // debug: {
-    //     type: ControlType.Boolean,
-    //     title: "Debug",
-    //     defaultValue: false,
-    //     enabledTitle: "On",
-    //     disabledTitle: "Off",
-    //     description: "Enable debug panel to see mouse coordinate transformations. Useful for diagnosing 3D transform issues.",
-    // },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
@@ -3189,6 +2867,18 @@ addPropertyControls(Sticker, {
         type: ControlType.Color,
         title: "Back Color",
         defaultValue: "rgba(255, 255, 255, 1)",
+    },
+    borderRadius: {
+        //@ts-ignore - BorderRadius exists in the latest versions of Framer
+        type: ControlType.BorderRadius,
+        defaultValue: "16px",
+        title: "Radius",
+    },
+    backgroundColor:{
+        type:ControlType.Color,
+        title: "Background",
+        defaultValue: "rgba(0,0,0,0.1)",
+        optional:true,
     },
     transition: {
         type: ControlType.Transition,
