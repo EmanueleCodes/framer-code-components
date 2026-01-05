@@ -1,0 +1,11 @@
+Bottom Page Link - Property Controls
+
+URL
+The destination URL to navigate to when the bottom of the page is reached. Can be an internal Framer page link or an external URL. For internal navigation, use the page path. For external links, use the full URL.
+
+New Tab
+Controls whether the link opens in a new browser tab or navigates in the current tab. "Yes" opens the link in a new tab. "No" navigates in the current tab.
+
+Delay (s)
+Controls the delay in seconds before navigation occurs after reaching the bottom of the page. Higher values create a longer wait time. Set to 0 for immediate navigation.
+

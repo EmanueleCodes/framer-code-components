@@ -1,0 +1,17 @@
+Line Connections - Property Controls
+
+Connection Mode
+Controls how elements are connected with lines. "All" connects every element to every other element. "Closer" connects each element only to its nearest neighbors.
+
+Count
+Controls how many connections each element has when Connection Mode is set to "Closer". Higher values create more connections per element. This control is only visible when Connection Mode is set to "Closer".
+
+Z-Index
+Controls the stacking order of the connection lines. Higher values place lines above other elements. Negative values place lines behind other elements. Use this to control whether lines appear above or below connected elements.
+
+Color
+Controls the color of the connection lines. Supports hex colors, rgba colors, and Framer color tokens (CSS variables).
+
+Thickness
+Controls the width of the connection lines. Higher values create thicker, more visible lines. Lower values create thinner, more subtle lines.
+

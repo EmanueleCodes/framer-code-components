@@ -7,6 +7,9 @@ interface LineConnectionsProps {
     zIndex?: number
     strokeColor?: string
     strokeWidth?: number
+    dashLength?: number
+    gapLength?: number
+    linecap?: "butt" | "round" | "square"
 }
 
 // CSS variable token and color parsing (hex/rgba/var())
@@ -117,6 +120,9 @@ export default function LineConnections({
     zIndex = 0,
     strokeColor = "#ffffff",
     strokeWidth = 1,
+    dashLength = 0,
+    gapLength = 0,
+    linecap = "butt",
 }: LineConnectionsProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const svgRef = useRef<SVGElement | null>(null)
@@ -126,7 +132,7 @@ export default function LineConnections({
     const zoomProbeRef = useRef<HTMLDivElement | null>(null)
     
     // Store props in refs so they're always current in the animation loop
-    const propsRef = useRef({ connectionMode, connectionsCount, strokeColor, strokeWidth })
+    const propsRef = useRef({ connectionMode, connectionsCount, strokeColor, strokeWidth, dashLength, gapLength, linecap })
     
     // Store computed connections for "closer" mode (computed once on mount)
     const connectionsRef = useRef<Set<string> | null>(null)
@@ -134,12 +140,12 @@ export default function LineConnections({
     
     // Update refs when props change
     useEffect(() => {
-        propsRef.current = { connectionMode, connectionsCount, strokeColor, strokeWidth }
+        propsRef.current = { connectionMode, connectionsCount, strokeColor, strokeWidth, dashLength, gapLength, linecap }
         // Reset connections when mode or count changes
         if (connectionMode === "closer") {
             connectionsRef.current = null
         }
-    }, [connectionMode, connectionsCount, strokeColor, strokeWidth])
+    }, [connectionMode, connectionsCount, strokeColor, strokeWidth, dashLength, gapLength, linecap])
 
     // Update SVG z-index when prop changes
     useEffect(() => {
@@ -156,6 +162,17 @@ export default function LineConnections({
         const probeRect = probe.getBoundingClientRect()
         const zoom = probeRect.width / 20 // 20 is the fixed width of the probe
         return Math.max(zoom, 0.0001) // Prevent division by zero
+    }
+
+    // Check if element contains a child (at any depth) with data-proximity-effects="true"
+    const hasProximityEffects = (element: Element): boolean => {
+        // Check if element itself has the attribute
+        if (element.hasAttribute("data-proximity-effects") && element.getAttribute("data-proximity-effects") === "true") {
+            return true
+        }
+        // Check if any descendant has the attribute
+        const proximityChild = element.querySelector('[data-proximity-effects="true"]')
+        return proximityChild !== null
     }
 
     // Calculate center positions of all sibling elements
@@ -176,6 +193,8 @@ export default function LineConnections({
             if (child === zoomProbeRef.current) return false
             // Exclude any element that is our component's wrapper (check if it contains our container)
             if (container && child.contains && child.contains(container)) return false
+            // Exclude proximity effects component and any elements (or their parents) with data-proximity-effects="true"
+            if (hasProximityEffects(child)) return false
             
             // Only include visible, non-hidden elements
             const htmlChild = child as HTMLElement
@@ -270,7 +289,7 @@ export default function LineConnections({
         svg.setAttribute("height", (parentRect.height / zoom).toString())
 
         // Use current prop values from ref
-        const { connectionMode, connectionsCount, strokeColor: currentStrokeColor, strokeWidth: currentStrokeWidth } = propsRef.current
+        const { connectionMode, connectionsCount, strokeColor: currentStrokeColor, strokeWidth: currentStrokeWidth, dashLength: currentDashLength, gapLength: currentGapLength, linecap: currentLinecap } = propsRef.current
 
         // Compute connections if needed (for "closer" mode, only once or when element count changes)
         if (connectionMode === "closer" && centers.length > 0) {
@@ -302,6 +321,10 @@ export default function LineConnections({
                     line.setAttribute("y2", centers[j].y.toString())
                     line.setAttribute("stroke", cssColor)
                     line.setAttribute("stroke-width", currentStrokeWidth.toString())
+                    line.setAttribute("stroke-linecap", currentLinecap)
+                    if (currentDashLength > 0 && currentGapLength > 0) {
+                        line.setAttribute("stroke-dasharray", `${currentDashLength} ${currentGapLength}`)
+                    }
                     svg.appendChild(line)
                 }
             }
@@ -317,6 +340,10 @@ export default function LineConnections({
                     line.setAttribute("y2", centers[j].y.toString())
                     line.setAttribute("stroke", cssColor)
                     line.setAttribute("stroke-width", currentStrokeWidth.toString())
+                    line.setAttribute("stroke-linecap", currentLinecap)
+                    if (currentDashLength > 0 && currentGapLength > 0) {
+                        line.setAttribute("stroke-dasharray", `${currentDashLength} ${currentGapLength}`)
+                    }
                     svg.appendChild(line)
                 }
             })
@@ -371,6 +398,8 @@ export default function LineConnections({
                 if (child === zoomProbe) return false
                 // Exclude any element that is our component's wrapper
                 if (container && child.contains && child.contains(container)) return false
+                // Exclude proximity effects component and any elements (or their parents) with data-proximity-effects="true"
+                if (hasProximityEffects(child)) return false
                 return true
             }) as HTMLElement[]
             
@@ -430,6 +459,7 @@ export default function LineConnections({
                 overflow: "hidden",
             }}
             aria-hidden="true"
+            data-line-connections="true"
         />
     )
 }
@@ -461,13 +491,35 @@ addPropertyControls(LineConnections, {
         min: -100,
         max: 100,
         step: 1,
-        
     },
     strokeColor: {
         type: ControlType.Color,
         title: "Color",
         defaultValue: "#ffffff",
 
+    },
+    dashLength: {
+        type: ControlType.Number,
+        title: "Dash Length",
+        defaultValue: 0,
+        min: 0,
+        max: 50,
+        step: 1,
+    },
+    gapLength: {
+        type: ControlType.Number,
+        title: "Gap Length",
+        defaultValue: 0,
+        min: 0,
+        max: 50,
+        step: 1,
+    },
+    linecap: {
+        type: ControlType.Enum,
+        title: "Line Cap",
+        options: ["butt", "round", "square"],
+        optionTitles: ["Butt", "Round", "Square"],
+        defaultValue: "butt",
     },
     strokeWidth: {
         type: ControlType.Number,
@@ -478,6 +530,7 @@ addPropertyControls(LineConnections, {
         step: 0.5,
         description: "More components at [Framer University](https://frameruni.link/cc).",
     },
+    
 })
 
 LineConnections.displayName = "Line Connections"

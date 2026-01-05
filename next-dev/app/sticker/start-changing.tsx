@@ -120,7 +120,7 @@ const CAMERA_FAR = 2000
 const STICKER_DEPTH = 0.003
 
 // Canvas scale - small padding for shadows while staying responsive
-const CANVAS_SCALE = 2.5 // 250% extra space for shadows
+const CANVAS_SCALE = 4 // 400% extra space for shadows
 
 // 2D Bone Grid settings
 const BONE_GRID_X =60 // Performance-safe bone count for hardware skinning
@@ -336,7 +336,7 @@ export default function Sticker({
     refresh = false,
     style,
     borderRadius,
-    backgroundColor
+    backgroundColor = "transparent"
 }: StickerProps) {
     // Refs
     const containerRef = useRef<HTMLDivElement>(null)
@@ -398,6 +398,8 @@ export default function Sticker({
     // Track WebGL context loss (happens when too many WebGL contexts are active)
     // Browser limit is typically 8-16 contexts depending on the browser and hardware
     const [contextLost, setContextLost] = useState(false)
+    // Track when scene is ready to trigger re-renders (refs don't trigger re-renders)
+    const [sceneReady, setSceneReady] = useState(false)
     const hasContent = !!resolvedImageUrl
 
     // ========================================================================
@@ -769,11 +771,19 @@ export default function Sticker({
         directionalLight.shadow.camera.near = 1
         directionalLight.shadow.camera.far = 2000
         // Shadow camera bounds need to account for:
-        // 1. Container size
+        // 1. Canvas size (which includes CANVAS_SCALE padding for shadows)
         // 2. Light position offset (shadowPositionX/Y can be -500 to 500)
         // 3. Shadow projection area (shadows extend in the direction opposite to light)
-        // 4. Canvas scale (CANVAS_SCALE = 1.2 for shadow padding)
-        const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+        // Use canvas dimensions to ensure shadows don't clip
+        // Shadow camera should be at least as large as the canvas to prevent clipping
+        // The 3.5 multiplier provides padding for light offsets, but it was relative to container
+        // Now we scale it relative to canvas: use canvas size * (3.5 / CANVAS_SCALE) to maintain same padding ratio
+        // But to prevent clipping, ensure it's at least canvas size
+        const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+        const shadowCameraSize = Math.max(
+            baseShadowSize, // At least as large as canvas
+            baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding (maintains same absolute padding)
+        )
         const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
         const shadowOffsetY = shadowPositionY * 0.3
         directionalLight.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
@@ -797,7 +807,8 @@ export default function Sticker({
 
         // Create plane sized to cover shadow camera area (larger to prevent clipping)
         // Match shadow camera bounds to ensure all shadows are captured
-        const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+        // Use same calculation as shadow camera to ensure plane covers all shadows
+        const planeSize = shadowCameraSize
         const planeGeometry = new PlaneGeometry(planeSize, planeSize)
         const backgroundPlane = new Mesh(planeGeometry, shadowMat)
         backgroundPlane.receiveShadow = true
@@ -810,6 +821,9 @@ export default function Sticker({
         if (renderer && scene && camera) {
             renderer.render(scene, camera)
         }
+        
+        // Mark scene as ready to trigger re-render and show canvas
+        setSceneReady(true)
         
         return { scene, camera, renderer, mesh, bones }
     }, [
@@ -1238,8 +1252,38 @@ export default function Sticker({
                 }
             }
 
-            // Always render after mesh recreation to ensure it's visible
-            renderFrame()
+            // Mark scene as ready and render after mesh recreation to ensure it's visible
+            setSceneReady(true)
+            // Use requestAnimationFrame to ensure textures are uploaded to GPU before rendering
+            requestAnimationFrame(() => {
+                if (!meshRef.current) return
+                
+                // Force material updates to ensure textures are ready
+                const meshMaterials = mesh.material as any[]
+                if (Array.isArray(meshMaterials)) {
+                    meshMaterials.forEach((mat: any) => {
+                        if (mat && mat.needsUpdate !== undefined) {
+                            mat.needsUpdate = true
+                        }
+                    })
+                }
+                
+                // Update skeleton and bones to ensure everything is in sync
+                if (mesh.skeleton) {
+                    mesh.updateMatrixWorld(true)
+                    mesh.skeleton.update()
+                }
+                
+                // Render after texture is ready
+                renderFrame()
+                
+                // Second frame: final render to ensure everything is displayed
+                requestAnimationFrame(() => {
+                    if (meshRef.current) {
+                        renderFrame()
+                    }
+                })
+            })
         },
         [
             createStickerGeometry,
@@ -1315,12 +1359,27 @@ export default function Sticker({
             // Check mesh is still valid after potential recreation
             if (!meshRef.current?.material) return
 
-            // Create main texture for front face
-            const texture = new Texture(img)
-            texture.needsUpdate = true
-            texture.minFilter = LinearFilter
-            texture.colorSpace = SRGBColorSpace
-            texture.format = RGBAFormat
+            // Check if textures are already applied (from recreateMeshWithAspectRatio)
+            // If so, we just need to ensure a render happens
+            const materials = meshRef.current.material as any[]
+            const hasTexture = Array.isArray(materials) && materials[4]?.map
+            
+            // Only create new textures if they don't exist yet
+            let texture
+            if (hasTexture && Array.isArray(materials)) {
+                // Reuse existing texture, but ensure it's marked for update
+                texture = materials[4].map
+                if (texture && texture.needsUpdate !== undefined) {
+                    texture.needsUpdate = true
+                }
+            } else {
+                // Create main texture for front face
+                texture = new Texture(img)
+                texture.needsUpdate = true
+                texture.minFilter = LinearFilter
+                texture.colorSpace = SRGBColorSpace
+                texture.format = RGBAFormat
+            }
 
             // Create back face texture: blend backColor with front image
             // If backColor is fully transparent (0% opacity), use front texture directly
@@ -1335,13 +1394,19 @@ export default function Sticker({
                 texture
             )
 
-            // Apply textures to materials
-            const materials = meshRef.current.material as any[]
+            // Apply textures to materials (only if not already applied)
             if (Array.isArray(materials)) {
                 // Front face: image texture, use alphaTest for clean cutout
                 // When using MeshStandardMaterial, also set emissiveMap so colors stay bright
                 if (materials[4]) {
-                    materials[4].map = texture
+                    // Only apply if texture is different or not set
+                    if (materials[4].map !== texture) {
+                        materials[4].map = texture
+                        // Ensure texture is marked for update
+                        if (texture.needsUpdate !== undefined) {
+                            texture.needsUpdate = true
+                        }
+                    }
                     materials[4].transparent = true
                     materials[4].alphaTest = 0.01 // Discard nearly-transparent pixels
                     // If MeshStandardMaterial, use emissiveMap to keep image bright and reduce striations
@@ -1401,15 +1466,55 @@ export default function Sticker({
             }
 
             setTextureLoaded(true)
+            // Ensure scene is marked as ready (triggers re-render to show canvas)
+            setSceneReady(true)
             // Always render after textures are applied (only if still mounted)
+            // Use multiple requestAnimationFrame calls to ensure texture has uploaded to GPU
             if (!imageLoadAbortRef.current && meshRef.current) {
-                renderFrame()
-                // Trigger resize after textures are applied to ensure proper sizing
-                // This ensures component is responsive immediately after image loads
+                // First frame: ensure materials and textures are marked for update
                 requestAnimationFrame(() => {
-                    if (!imageLoadAbortRef.current && triggerResizeRef.current && containerRef.current) {
-                        triggerResizeRef.current()
+                    if (imageLoadAbortRef.current || !meshRef.current) return
+                    
+                    // Force material and texture updates to ensure they're ready
+                    const materials = meshRef.current.material as any[]
+                    if (Array.isArray(materials)) {
+                        materials.forEach((mat: any) => {
+                            if (mat) {
+                                if (mat.needsUpdate !== undefined) {
+                                    mat.needsUpdate = true
+                                }
+                                // Ensure texture is marked for update
+                                if (mat.map && mat.map.needsUpdate !== undefined) {
+                                    mat.map.needsUpdate = true
+                                }
+                            }
+                        })
                     }
+                    
+                    // Update skeleton and bones to ensure everything is in sync
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.updateMatrixWorld(true)
+                        meshRef.current.skeleton.update()
+                    }
+                    
+                    // Second frame: render after texture upload has been triggered
+                    requestAnimationFrame(() => {
+                        if (imageLoadAbortRef.current || !meshRef.current) return
+                        
+                        // Render to trigger texture upload
+                        renderFrame()
+                        
+                        // Third frame: final render to ensure texture is displayed
+                        requestAnimationFrame(() => {
+                            if (!imageLoadAbortRef.current && meshRef.current) {
+                                renderFrame()
+                                // Trigger resize after textures are applied to ensure proper sizing
+                                if (triggerResizeRef.current && containerRef.current) {
+                                    triggerResizeRef.current()
+                                }
+                            }
+                        })
+                    })
                 })
             }
         }
@@ -1825,8 +1930,12 @@ export default function Sticker({
 
             // Update shadow camera (shadows always enabled)
             if (lightRef.current) {
-                // Match shadow camera bounds from setupScene
-                const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+                // Match shadow camera bounds from setupScene - use canvas dimensions
+                const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+                const shadowCameraSize = Math.max(
+                    baseShadowSize, // At least as large as canvas
+                    baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding
+                )
                 const shadowOffsetX = shadowPositionX * 0.3
                 const shadowOffsetY = shadowPositionY * 0.3
                 lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
@@ -1863,6 +1972,7 @@ export default function Sticker({
         const handleContextRestored = () => {
             console.log("WebGL context restored event fired")
             setContextLost(false)
+            setSceneReady(false) // Reset before re-initialization
             // Re-initialize the scene when context is restored
             if (hasContent) {
                 const sceneSetup = setupScene()
@@ -1901,8 +2011,9 @@ export default function Sticker({
             lastRetryAttemptRef.current = now
             
             console.log("Props changed while context lost - attempting to reinitialize...")
-            // Reset context lost state and attempt to reinitialize
+            // Reset context lost state and scene ready state, then attempt to reinitialize
             setContextLost(false)
+            setSceneReady(false)
             imageLoadAbortRef.current = false
             
             // Attempt to recreate the scene with a slight delay to ensure cleanup
@@ -2025,8 +2136,9 @@ export default function Sticker({
         backgroundPlaneRef.current = null
         loadedImageRef.current = null
         
-        // Reset context lost state
+        // Reset context lost state and scene ready state
         setContextLost(false)
+        setSceneReady(false)
         imageLoadAbortRef.current = false
         
         // Reinitialize scene after a brief delay to ensure cleanup is complete
@@ -2047,6 +2159,7 @@ export default function Sticker({
     useEffect(() => {
         if (!hasContent) {
             imageLoadAbortRef.current = true // Mark as aborting
+            setSceneReady(false) // Reset scene ready state
             if (rendererRef.current) {
                 try {
                     rendererRef.current.dispose()
@@ -2129,6 +2242,9 @@ export default function Sticker({
                 cancelAnimationFrame(animationFrameRef.current)
                 animationFrameRef.current = null
             }
+            
+            // Reset scene ready state
+            setSceneReady(false)
             
             // Dispose mesh and all its resources
             if (meshRef.current) {
@@ -2382,11 +2498,17 @@ export default function Sticker({
             lightRef.current.shadow.bias = -0.00001
             lightRef.current.shadow.radius = 8
             
-            // Update shadow camera bounds to account for new light position
+            // Update shadow camera bounds to account for new light position (use canvas dimensions)
             const container = containerRef.current
             const containerWidth = container.clientWidth || container.offsetWidth || 1
             const containerHeight = container.clientHeight || container.offsetHeight || 1
-            const shadowCameraSize = Math.max(containerWidth, containerHeight) * 3.5
+            const canvasWidth = containerWidth * CANVAS_SCALE
+            const canvasHeight = containerHeight * CANVAS_SCALE
+            const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+            const shadowCameraSize = Math.max(
+                baseShadowSize, // At least as large as canvas
+                baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding
+            )
             const shadowOffsetX = shadowPositionX * 0.3
             const shadowOffsetY = shadowPositionY * 0.3
             lightRef.current.shadow.camera.left = -shadowCameraSize / 2 + shadowOffsetX
@@ -2435,11 +2557,17 @@ export default function Sticker({
             material.opacity = castShadowOpacity
             material.needsUpdate = true
 
-            // Update plane size to match shadow camera bounds
+            // Update plane size to match shadow camera bounds (use canvas dimensions)
             const container = containerRef.current
             const containerWidth = container.clientWidth || container.offsetWidth || 1
             const containerHeight = container.clientHeight || container.offsetHeight || 1
-            const planeSize = Math.max(containerWidth, containerHeight) * 3.5
+            const canvasWidth = containerWidth * CANVAS_SCALE
+            const canvasHeight = containerHeight * CANVAS_SCALE
+            const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+            const planeSize = Math.max(
+                baseShadowSize, // At least as large as canvas
+                baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding to match shadow camera
+            )
             
             // Dispose old geometry and create new one with updated size
             const oldGeometry = backgroundPlaneRef.current.geometry
@@ -2616,6 +2744,22 @@ export default function Sticker({
             clearInterval(slowInterval)
         }
     }, [hasContent, contextLost])
+    
+    // If we have content but no scene after a delay, assume context loss
+    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
+    useEffect(() => {
+        if (!hasContent || contextLost || sceneReady) return
+        
+        // After 2 seconds, if still no scene, assume WebGL context issue
+        const checkTimeout = setTimeout(() => {
+            if (!sceneRef.current && !contextLost) {
+                console.warn("Scene failed to initialize after 2 seconds - assuming WebGL context unavailable")
+                setContextLost(true)
+            }
+        }, 2000)
+        
+        return () => clearTimeout(checkTimeout)
+    }, [hasContent, contextLost, sceneReady])
 
     // ========================================================================
     // RENDER
@@ -2636,27 +2780,6 @@ export default function Sticker({
             />
         )
     }
-
-    // Show canvas when scene is initialized (mesh will be visible even before texture loads)
-    // The mesh will show with back color until texture loads
-    // NOTE: This must be before conditional returns for React hooks rules
-    const isReady = sceneRef.current !== null && meshRef.current !== null
-    
-    // If we have content but no scene after a delay, assume context loss
-    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
-    useEffect(() => {
-        if (!hasContent || contextLost || isReady) return
-        
-        // After 2 seconds, if still no scene, assume WebGL context issue
-        const checkTimeout = setTimeout(() => {
-            if (!sceneRef.current && !contextLost) {
-                console.warn("Scene failed to initialize after 2 seconds - assuming WebGL context unavailable")
-                setContextLost(true)
-            }
-        }, 2000)
-        
-        return () => clearTimeout(checkTimeout)
-    }, [hasContent, contextLost, isReady])
 
     // Show error message when WebGL context is lost
     if (contextLost) {
@@ -2691,7 +2814,7 @@ export default function Sticker({
                 margin: 0,
                 padding: 0,
                 borderRadius:borderRadius,
-                backgroundColor: backgroundColor || "transparent",
+                backgroundColor: backgroundColor? backgroundColor : "transparent",
             }}
         >
 
@@ -2707,11 +2830,8 @@ export default function Sticker({
             />
             <canvas
                 ref={canvasRef}
-                
-             
                 style={{
                     position: "absolute",
-                   
                     top: `-${offsetPercent}%`,
                     left: `-${offsetPercent}%`,
                     // In canvas mode, use explicit dimensions for better responsiveness
@@ -2722,8 +2842,8 @@ export default function Sticker({
                     } : {}),
                     display: "block",
                     pointerEvents: "none",
-                    cursor:"auto",
-                    opacity: isReady ? 1 : 0,
+                    cursor: "auto",
+                    opacity: sceneReady ? 1 : 0,
                 }}
             />
             
@@ -2871,13 +2991,13 @@ addPropertyControls(Sticker, {
     borderRadius: {
         //@ts-ignore - BorderRadius exists in the latest versions of Framer
         type: ControlType.BorderRadius,
-        defaultValue: "16px",
+        defaultValue: "0px",
         title: "Radius",
     },
     backgroundColor:{
         type:ControlType.Color,
         title: "Background",
-        defaultValue: "rgba(0,0,0,0.1)",
+       
         optional:true,
     },
     transition: {
