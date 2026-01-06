@@ -740,6 +740,8 @@ addPropertyControls(ParticleSphereRefactor, {
         max: 1,
         step: 0.1,
         defaultValue: 0.5,
+        hidden: (props: ParticleSphereRefactorProps) => !props.drag,
+    
     },
     stopOnHover: {
         type: ControlType.Boolean,
