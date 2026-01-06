@@ -816,6 +816,7 @@ addPropertyControls(ProximityEffects, {
         },
     },
     borderRadius:{
+        description: "More components at [Framer University](https://frameruni.link/cc).",
         type: ControlType.Object,
         title:"Radius",
         controls: {
@@ -836,7 +837,7 @@ addPropertyControls(ProximityEffects, {
                 max: 100,
                 step: 1,
                 unit: "px",
-        description: "More components at [Framer University](https://frameruni.link/cc).",
+        
             },
         },
     },
