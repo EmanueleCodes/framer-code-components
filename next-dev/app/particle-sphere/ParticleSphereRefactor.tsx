@@ -75,11 +75,12 @@ function mapParticleSizeUiToInternal(ui: number): number {
 }
 
 
-// Cursor Strength: UI [0..1] → force multiplier [0..5]
-// Default 0.3 maps to 1.5 (current default behavior)
+// Cursor Strength: UI [0..1] → force multiplier [0..15]
+// Default 0.3 maps to 4.5 (stronger default behavior)
+// Maximum strength (1.0) creates a much larger void around cursor
 function mapCursorStrengthUiToMultiplier(ui: number): number {
     const clamped = Math.max(0, Math.min(1, ui))
-    return mapLinear(clamped, 0, 1.0, 0, 5)
+    return mapLinear(clamped, 0, 1.0, 0, 15)
 }
 
 // Cursor interaction constants (from ref.tsx)
