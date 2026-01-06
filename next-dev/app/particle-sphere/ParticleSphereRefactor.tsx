@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
-import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 import {
     Scene,
     PerspectiveCamera,
@@ -15,8 +14,6 @@ import {
     InstancedMesh,
     Matrix4,
     Group,
-    Raycaster,
-    Vector2,
     Vector3,
     AdditiveBlending,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
@@ -42,6 +39,25 @@ interface ParticleSphereRefactorProps {
     }
     sphereColor: string
     style?: React.CSSProperties
+}
+
+// CSS variable token and color parsing (hex/rgba/var())
+const cssVariableRegex =
+    /var\s*\(\s*(--[\w-]+)(?:\s*,\s*((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*))?\s*\)/
+
+function extractDefaultValue(cssVar: string): string {
+    if (!cssVar || !cssVar.startsWith("var(")) return cssVar
+    const match = cssVariableRegex.exec(cssVar)
+    if (!match) return cssVar
+    const fallback = (match[2] || "").trim()
+    if (fallback.startsWith("var(")) return extractDefaultValue(fallback)
+    return fallback || cssVar
+}
+
+function resolveTokenColor(input: any): any {
+    if (typeof input !== "string") return input
+    if (!input.startsWith("var(")) return input
+    return extractDefaultValue(input)
 }
 
 // Value mapping functions
@@ -232,6 +248,12 @@ export default function ParticleSphereRefactor({
         baseParticlePositionsRef.current = []
         particleDisplacementsRef.current = []
         
+        // Resolve color tokens (CSS variables) and parse color properly
+        const resolvedSphereColor = resolveTokenColor(sphereColor)
+        const baseColorObj = resolvedSphereColor
+            ? new Color(resolvedSphereColor)
+            : new Color(1, 1, 1)
+        
         for (let i = 0; i < particlesCount; i++) {
             // Use golden angle spiral for even distribution
             const y = 1 - (i / (particlesCount - 1)) * 2 // y goes from 1 to -1
@@ -259,14 +281,10 @@ export default function ParticleSphereRefactor({
         if (particleShape === "sphere") {
             // Round particles using actual sphere geometries with InstancedMesh
             // Convert screen-space particle size to world-space radius to match visual size
-            // PointsMaterial size is in screen pixels, SphereGeometry radius is in world units
-            // We need to scale down to match the visual appearance of Points
-            // The conversion: sphere radius should be proportional to point size
-            // Using a factor that makes spheres visually match cube particles
             const sphereRadius = particleSize * 0.15 // Adjust this factor to match visual size
             const sphereGeometry = new SphereGeometry(sphereRadius, 8, 8)
             const sphereMaterial = new MeshBasicMaterial({
-                color: colorObj,
+                color: baseColorObj,
                 blending: AdditiveBlending,
                 transparent: true,
             })
@@ -291,7 +309,7 @@ export default function ParticleSphereRefactor({
             
             const particlesMaterial = new PointsMaterial({
                 size: particleSize,
-                color: colorObj,
+                color: baseColorObj,
                 blending: AdditiveBlending,
                 depthTest: false,
                 transparent: true,
@@ -403,6 +421,11 @@ export default function ParticleSphereRefactor({
                 )
                 needsRender = true
             }
+
+            // Apply rotation to group BEFORE cursor interaction (so matrix is current)
+            particlesGroup.rotation.y = rotation.x
+            particlesGroup.rotation.x = rotation.y
+            particlesGroup.updateMatrixWorld(true)
 
             // Apply cursor repulsion to particles (only if enabled)
             if (cursorConfig.enabled && baseParticlePositionsRef.current.length > 0) {
@@ -518,9 +541,6 @@ export default function ParticleSphereRefactor({
 
             // Render every frame
             if (needsRender || rotationSpeed !== 0 || isDragging) {
-                particlesGroup.rotation.y = rotation.x
-                particlesGroup.rotation.x = rotation.y
-
                 renderer.render(scene, camera)
             }
 
@@ -648,6 +668,8 @@ export default function ParticleSphereRefactor({
                     x: mouseX,
                     y: mouseY,
                 }
+                // Start animation if not running (needed for cursor interaction to work)
+                startAnimation()
             } else {
                 mouseRef.current = null
             }
@@ -671,6 +693,8 @@ export default function ParticleSphereRefactor({
                         x: touchX,
                         y: touchY,
                     }
+                    // Start animation if not running (needed for cursor interaction to work)
+                    startAnimation()
                 } else {
                     mouseRef.current = null
                 }
@@ -930,7 +954,7 @@ addPropertyControls(ParticleSphereRefactor, {
     },
     particlesCount:{
         type: ControlType.Number,
-        title: "Particles Count",
+        title: "Count",
         min: 100,
         max: 10000,
         step: 10,
@@ -1017,6 +1041,7 @@ addPropertyControls(ParticleSphereRefactor, {
     },
     cursorConfig:{
         type: ControlType.Object,
+        title:"Cursor",
         controls: {
             enabled:{
                 type: ControlType.Boolean,
@@ -1024,7 +1049,6 @@ addPropertyControls(ParticleSphereRefactor, {
                 defaultValue: true,
                 enabledTitle: "On",
                 disabledTitle: "Off",
-                description:"Off = no pointer (cursor or touch) interaction"
             },
             radius: {
                 type: ControlType.Number,
@@ -1042,7 +1066,6 @@ addPropertyControls(ParticleSphereRefactor, {
                 max: 1,
                 step: 0.1,
                 defaultValue: 0.3,
-                description: "Controls how strongly particles are repelled (0 = no repulsion, 1 = maximum)",
             },
         },
     },
