@@ -17,6 +17,7 @@ import {
     Group,
     Raycaster,
     Vector2,
+    Vector3,
     AdditiveBlending,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
@@ -33,6 +34,11 @@ interface ParticleSphereRefactorProps {
     particles: {
         scale: number
         shape: "sphere" | "cube"
+    }
+    cursorConfig: {
+        enabled: boolean
+        radius: number
+        strength: number
     }
     sphereColor: string
     style?: React.CSSProperties
@@ -68,6 +74,20 @@ function mapParticleSizeUiToInternal(ui: number): number {
     return mapLinear(clamped, 0.1, 1.0, 0.01, 0.1)
 }
 
+
+// Cursor Strength: UI [0..1] → force multiplier [0..5]
+// Default 0.3 maps to 1.5 (current default behavior)
+function mapCursorStrengthUiToMultiplier(ui: number): number {
+    const clamped = Math.max(0, Math.min(1, ui))
+    return mapLinear(clamped, 0, 1.0, 0, 5)
+}
+
+// Cursor interaction constants (from ref.tsx)
+const CURSOR_PHYSICS = {
+    RETURN_FORCE: 0.02,
+    FRICTION: 0.92,
+} as const
+
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
@@ -86,6 +106,7 @@ export default function ParticleSphereRefactor({
     dragSpeed = 0.5,
     drag = true,
     particles: particlesConfig = { scale: 0.5, shape: "sphere" },
+    cursorConfig = { enabled: true, radius: 150, strength: 0.3 },
     sphereColor = "#ffffff",
     style,
 }: ParticleSphereRefactorProps) {
@@ -100,6 +121,9 @@ export default function ParticleSphereRefactor({
     const animateFnRef = useRef<(() => void) | null>(null)
     const startAnimationRef = useRef<(() => void) | null>(null)
     const lastResizeRef = useRef({ ts: 0, zoom: 0, w: 0, h: 0, aspect: 0 })
+    const mouseRef = useRef<{ x: number; y: number } | null>(null)
+    const baseParticlePositionsRef = useRef<any[]>([])
+    const particleDisplacementsRef = useRef<any[]>([])
 
     // Check canvas mode ONCE at component mount and cache it
     const isCanvasRef = useRef<boolean | null>(null)
@@ -135,6 +159,18 @@ export default function ParticleSphereRefactor({
     const particleSize = React.useMemo(
         () => mapParticleSizeUiToInternal(particlesConfig.scale),
         [particlesConfig.scale]
+    )
+
+    // Cursor radius in pixels (clamped to reasonable range)
+    const cursorRadius = React.useMemo(
+        () => Math.max(0, Math.min(600, cursorConfig.radius)),
+        [cursorConfig.radius]
+    )
+
+    // Map UI cursor strength to force multiplier
+    const cursorStrength = React.useMemo(
+        () => mapCursorStrengthUiToMultiplier(cursorConfig.strength),
+        [cursorConfig.strength]
     )
 
     useEffect(() => {
@@ -191,6 +227,10 @@ export default function ParticleSphereRefactor({
         const baseSphereRadius = 1.0 // Base radius of the particle sphere
         const sphereRadius = baseSphereRadius * scaleMultiplier // Scale the sphere
 
+        // Initialize base positions and displacements for cursor interaction
+        baseParticlePositionsRef.current = []
+        particleDisplacementsRef.current = []
+        
         for (let i = 0; i < particlesCount; i++) {
             // Use golden angle spiral for even distribution
             const y = 1 - (i / (particlesCount - 1)) * 2 // y goes from 1 to -1
@@ -201,7 +241,14 @@ export default function ParticleSphereRefactor({
             const z = Math.sin(theta) * radius
             
             // Scale to sphere surface with scale multiplier
-            vertices.push(x * sphereRadius, y * sphereRadius, z * sphereRadius)
+            const posX = x * sphereRadius
+            const posY = y * sphereRadius
+            const posZ = z * sphereRadius
+            vertices.push(posX, posY, posZ)
+            
+            // Store base position and initialize displacement
+            baseParticlePositionsRef.current.push(new Vector3(posX, posY, posZ))
+            particleDisplacementsRef.current.push(new Vector3(0, 0, 0))
         }
 
         // Create particles based on shape
@@ -356,6 +403,118 @@ export default function ParticleSphereRefactor({
                 needsRender = true
             }
 
+            // Apply cursor repulsion to particles (only if enabled)
+            if (cursorConfig.enabled && baseParticlePositionsRef.current.length > 0) {
+                const containerWidth = containerRef.current?.clientWidth || 400
+                const containerHeight = containerRef.current?.clientHeight || 400
+
+                // Get current camera for projection
+                const currentCamera = cameraRef.current
+                const cursorRadiusSquared = cursorRadius * cursorRadius
+
+                for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+
+                    // Apply repulsion force only if cursor is present and near particle
+                    if (mouseRef.current) {
+                        const mouse = mouseRef.current
+
+                        // Calculate current position: base position + displacement, then rotated by group
+                        const currentLocalPos = new Vector3()
+                        currentLocalPos.copy(basePos)
+                        currentLocalPos.add(displacement)
+
+                        // Transform to world space (apply group rotation)
+                        const worldPos = new Vector3()
+                        worldPos.copy(currentLocalPos)
+                        worldPos.applyMatrix4(particlesGroup.matrixWorld)
+
+                        // Project 3D position to 2D screen space
+                        const projected = worldPos.clone().project(currentCamera)
+                        const screenX = (projected.x * 0.5 + 0.5) * containerWidth
+                        const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
+
+                        // Calculate distance from cursor to particle in screen space
+                        const dx = mouse.x - screenX
+                        const dy = mouse.y - screenY
+                        const distanceSquared = dx * dx + dy * dy
+
+                        if (distanceSquared < cursorRadiusSquared && distanceSquared > 0) {
+                            // Apply repulsion force
+                            const distance = Math.sqrt(distanceSquared)
+                            const force = (cursorRadius - distance) / cursorRadius
+                            const angle = Math.atan2(dy, dx)
+
+                            // Get camera's right and up vectors in world space
+                            const cameraRight = new Vector3()
+                            const cameraUp = new Vector3()
+                            cameraRight.setFromMatrixColumn(currentCamera.matrixWorld, 0).normalize()
+                            cameraUp.setFromMatrixColumn(currentCamera.matrixWorld, 1).normalize()
+
+                            // Calculate repulsion direction in screen space
+                            const repulsion2D = force * cursorStrength * speed * deltaFactor
+                            const repulsionX = -Math.cos(angle) * repulsion2D * 0.01
+                            const repulsionY = Math.sin(angle) * repulsion2D * 0.01
+
+                            // Convert screen space repulsion to world space, then to local space
+                            const worldRepulsion = new Vector3()
+                            worldRepulsion.addScaledVector(cameraRight, repulsionX)
+                            worldRepulsion.addScaledVector(cameraUp, repulsionY)
+
+                            // Transform world repulsion back to local space (inverse of group rotation)
+                            const localRepulsion = new Vector3()
+                            localRepulsion.copy(worldRepulsion)
+                            const inverseGroupMatrix = new Matrix4()
+                            inverseGroupMatrix.copy(particlesGroup.matrixWorld).invert()
+                            localRepulsion.applyMatrix4(inverseGroupMatrix)
+
+                            // Apply to displacement
+                            displacement.add(localRepulsion)
+                        }
+                    }
+
+                    // Always apply friction and return force to decay displacements (even when cursor is gone)
+                    const frictionFactor = Math.pow(CURSOR_PHYSICS.FRICTION, deltaFactor)
+                    const returnForce = CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
+                    // Apply friction (multiplicative decay)
+                    displacement.multiplyScalar(frictionFactor)
+                    // Apply return force (decay towards zero)
+                    displacement.multiplyScalar(1 - returnForce)
+                }
+
+                // Update particle positions
+                const particleShape = particlesConfig.shape || "sphere"
+                if (particleShape === "sphere" && particlesRef.current) {
+                    // Update InstancedMesh positions
+                    const matrix = new Matrix4()
+                    for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
+                        const basePos = baseParticlePositionsRef.current[i]
+                        const displacement = particleDisplacementsRef.current[i]
+                        const finalPos = new Vector3()
+                        finalPos.copy(basePos)
+                        finalPos.add(displacement)
+                        matrix.setPosition(finalPos.x, finalPos.y, finalPos.z)
+                        particlesRef.current.setMatrixAt(i, matrix)
+                    }
+                    particlesRef.current.instanceMatrix.needsUpdate = true
+                } else if (particleShape === "cube" && particlesRef.current) {
+                    // Update Points geometry positions
+                    const positions = particlesRef.current.geometry.attributes.position
+                    for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
+                        const basePos = baseParticlePositionsRef.current[i]
+                        const displacement = particleDisplacementsRef.current[i]
+                        const finalPos = new Vector3()
+                        finalPos.copy(basePos)
+                        finalPos.add(displacement)
+                        positions.setXYZ(i, finalPos.x, finalPos.y, finalPos.z)
+                    }
+                    positions.needsUpdate = true
+                }
+
+                needsRender = true
+            }
+
             // Render every frame
             if (needsRender || rotationSpeed !== 0 || isDragging) {
                 particlesGroup.rotation.y = rotation.x
@@ -370,8 +529,12 @@ export default function ParticleSphereRefactor({
                 Math.abs(velocity.y) > threshold
             const hasLerpDelta =
                 Math.abs(dx) > threshold || Math.abs(dy) > threshold
+            // Check if cursor interaction is active (any non-zero displacements) - only if enabled
+            const hasCursorInteraction = cursorConfig.enabled && particleDisplacementsRef.current.some(
+                (disp) => Math.abs(disp.x) > threshold || Math.abs(disp.y) > threshold || Math.abs(disp.z) > threshold
+            )
             const needsContinue =
-                isDragging || rotationSpeed !== 0 || hasVelocity || hasLerpDelta
+                isDragging || rotationSpeed !== 0 || hasVelocity || hasLerpDelta || hasCursorInteraction
 
             if (needsContinue) {
                 animationFrameId = requestAnimationFrame(animate)
@@ -473,6 +636,59 @@ export default function ParticleSphereRefactor({
             canvas.addEventListener("mousemove", handleMouseMoveHover)
         }
 
+        // Track cursor position for particle repulsion
+        const handleMouseMoveCursor = (event: MouseEvent) => {
+            const rect = canvas.getBoundingClientRect()
+            const mouseX = event.clientX - rect.left
+            const mouseY = event.clientY - rect.top
+            // Only track if mouse is over canvas
+            if (mouseX >= 0 && mouseX <= rect.width && mouseY >= 0 && mouseY <= rect.height) {
+                mouseRef.current = {
+                    x: mouseX,
+                    y: mouseY,
+                }
+            } else {
+                mouseRef.current = null
+            }
+        }
+
+        const handleMouseLeaveCursor = () => {
+            mouseRef.current = null
+        }
+
+        // Track touch position for particle repulsion
+        const handleTouchMove = (event: TouchEvent) => {
+            event.preventDefault() // Prevent scrolling
+            const rect = canvas.getBoundingClientRect()
+            const touch = event.touches[0]
+            if (touch) {
+                const touchX = touch.clientX - rect.left
+                const touchY = touch.clientY - rect.top
+                // Only track if touch is over canvas
+                if (touchX >= 0 && touchX <= rect.width && touchY >= 0 && touchY <= rect.height) {
+                    mouseRef.current = {
+                        x: touchX,
+                        y: touchY,
+                    }
+                } else {
+                    mouseRef.current = null
+                }
+            }
+        }
+
+        const handleTouchEnd = () => {
+            mouseRef.current = null
+        }
+
+        // Only add cursor interaction event listeners if enabled
+        if (cursorConfig.enabled) {
+            canvas.addEventListener("mousemove", handleMouseMoveCursor)
+            canvas.addEventListener("mouseleave", handleMouseLeaveCursor)
+            canvas.addEventListener("touchmove", handleTouchMove, { passive: false })
+            canvas.addEventListener("touchend", handleTouchEnd)
+            canvas.addEventListener("touchcancel", handleTouchEnd)
+        }
+
         // Resize handler
         const handleResize = () => {
             if (!containerRef.current || !cameraRef.current || !rendererRef.current)
@@ -562,6 +778,14 @@ export default function ParticleSphereRefactor({
                 if (stopOnHover) {
                     canvas.removeEventListener("mousemove", handleMouseMoveHover)
                 }
+                // Remove cursor interaction event listeners if they were added
+                if (cursorConfig.enabled) {
+                    canvas.removeEventListener("mousemove", handleMouseMoveCursor)
+                    canvas.removeEventListener("mouseleave", handleMouseLeaveCursor)
+                    canvas.removeEventListener("touchmove", handleTouchMove)
+                    canvas.removeEventListener("touchend", handleTouchEnd)
+                    canvas.removeEventListener("touchcancel", handleTouchEnd)
+                }
                 if (rendererRef.current) {
                     rendererRef.current.dispose()
                     if (containerRef.current && canvas.parentNode) {
@@ -604,6 +828,14 @@ export default function ParticleSphereRefactor({
             if (stopOnHover) {
                 canvas.removeEventListener("mousemove", handleMouseMoveHover)
             }
+            // Remove cursor interaction event listeners if they were added
+            if (cursorConfig.enabled) {
+                canvas.removeEventListener("mousemove", handleMouseMoveCursor)
+                canvas.removeEventListener("mouseleave", handleMouseLeaveCursor)
+                canvas.removeEventListener("touchmove", handleTouchMove)
+                canvas.removeEventListener("touchend", handleTouchEnd)
+                canvas.removeEventListener("touchcancel", handleTouchEnd)
+            }
             if (rendererRef.current) {
                 rendererRef.current.dispose()
                 if (containerRef.current && canvas.parentNode) {
@@ -633,6 +865,9 @@ export default function ParticleSphereRefactor({
         dragSpeed,
         drag,
         particlesConfig,
+        cursorConfig,
+        cursorRadius,
+        cursorStrength,
         sphereColor,
         rotationSpeed,
         scaleMultiplier,
@@ -776,6 +1011,37 @@ addPropertyControls(ParticleSphereRefactor, {
                 max: 1,
                 step: 0.1,
                 defaultValue: 0.5,
+            },
+        },
+    },
+    cursorConfig:{
+        type: ControlType.Object,
+        controls: {
+            enabled:{
+                type: ControlType.Boolean,
+                title: "Enabled",
+                defaultValue: true,
+                enabledTitle: "On",
+                disabledTitle: "Off",
+                description:"Off = no pointer (cursor or touch) interaction"
+            },
+            radius: {
+                type: ControlType.Number,
+                title: "Radius",
+                min: 0,
+                max: 600,
+                step: 10,
+                defaultValue: 150,
+                unit: "px",
+            },
+            strength: {
+                type: ControlType.Number,
+                title: "Strength",
+                min: 0,
+                max: 1,
+                step: 0.1,
+                defaultValue: 0.3,
+                description: "Controls how strongly particles are repelled (0 = no repulsion, 1 = maximum)",
             },
         },
     },
