@@ -133,8 +133,11 @@ interface BurnTransitionProps {
     scrollSensitivity?: number // UI: 0-1
     baseAnimationSpeed?: number // UI: 0-1
     edgeSoftness?: number // UI: 0-1
+    parallaxEnabled?: boolean
+    parallaxStart?: number // 0-100, percentage where wave starts when component enters viewport (0% = bottom, 50% = middle, 100% = top)
+    parallaxEnd?: number // 0-100, percentage where wave ends when component exits viewport (0% = bottom, 50% = middle, 100% = top)
     style?: React.CSSProperties
-    movement?:{
+    movement?: {
         horizontal: number
         vertical: number
     }
@@ -155,6 +158,9 @@ export default function BurnTransition({
     scrollSensitivity = 0.01, // UI default (maps to ~0.0001 internally)
     baseAnimationSpeed = 0.1, // UI default (maps to ~0.01 internally)
     edgeSoftness = 0.4, // UI default (maps to ~0.08 internally)
+    parallaxEnabled = false,
+    parallaxStart = 50, // 0-100, default 50% (middle)
+    parallaxEnd = 100, // 0-100, default 100% (top)
     style,
     movement = {
         horizontal: 0.5,
@@ -172,7 +178,7 @@ export default function BurnTransition({
     // Resolve color token and parse to RGBA
     const resolvedColor = resolveTokenColor(color)
     const colorRgba = parseColorToRgba(resolvedColor)
-    
+
     // Resolve transition color (defaults to a lighter version of base color if not provided)
     const resolvedTransitionColor = transitionColor
         ? resolveTokenColor(transitionColor)
@@ -208,8 +214,14 @@ export default function BurnTransition({
     const animationFrameRef = useRef<number | null>(null)
     const baseTimeRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
-    const canvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 })
-
+    const parallaxEnabledRef = useRef<boolean>(parallaxEnabled)
+    const parallaxStartRef = useRef<number>(parallaxStart)
+    const parallaxEndRef = useRef<number>(parallaxEnd)
+    const parallaxOffsetRef = useRef<number>(0)
+    const canvasSizeRef = useRef<{ width: number; height: number }>({
+        width: 0,
+        height: 0,
+    })
 
     // Helper function to create shader
     const createShader = (
@@ -249,7 +261,10 @@ export default function BurnTransition({
         gl.linkProgram(program)
 
         if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            console.error("Program linking error:", gl.getProgramInfoLog(program))
+            console.error(
+                "Program linking error:",
+                gl.getProgramInfoLog(program)
+            )
             gl.deleteProgram(program)
             return null
         }
@@ -290,7 +305,12 @@ export default function BurnTransition({
         if (!gl || !program || !buffer) return
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-        gl.viewport(0, 0, canvasSizeRef.current.width, canvasSizeRef.current.height)
+        gl.viewport(
+            0,
+            0,
+            canvasSizeRef.current.width,
+            canvasSizeRef.current.height
+        )
 
         // Use program
         gl.useProgram(program)
@@ -319,7 +339,10 @@ export default function BurnTransition({
         }
 
         // Set noise uniforms
-        const noiseScaleLocation = gl.getUniformLocation(program, "u_noise_scale")
+        const noiseScaleLocation = gl.getUniformLocation(
+            program,
+            "u_noise_scale"
+        )
         if (noiseScaleLocation) {
             gl.uniform1f(noiseScaleLocation, noiseScaleRef.current)
         }
@@ -376,7 +399,10 @@ export default function BurnTransition({
             "u_movement_horizontal"
         )
         if (movementHorizontalLocation) {
-            gl.uniform1f(movementHorizontalLocation, movementHorizontalRef.current)
+            gl.uniform1f(
+                movementHorizontalLocation,
+                movementHorizontalRef.current
+            )
         }
 
         const movementVerticalLocation = gl.getUniformLocation(
@@ -385,6 +411,15 @@ export default function BurnTransition({
         )
         if (movementVerticalLocation) {
             gl.uniform1f(movementVerticalLocation, movementVerticalRef.current)
+        }
+
+        // Set parallax offset uniform
+        const parallaxOffsetLocation = gl.getUniformLocation(
+            program,
+            "u_parallax_offset"
+        )
+        if (parallaxOffsetLocation) {
+            gl.uniform1f(parallaxOffsetLocation, parallaxOffsetRef.current)
         }
 
         // Clear with transparent background
@@ -403,6 +438,71 @@ export default function BurnTransition({
     const render = () => {
         if (glRef.current && programRef.current) {
             renderScene()
+        }
+    }
+
+    // Function to calculate parallax offset based on component position in viewport
+    const updateParallaxOffset = () => {
+        const container = containerRef.current
+        if (!container) return
+
+        // If parallax is disabled, set offset to 0
+        if (!parallaxEnabledRef.current) {
+            parallaxOffsetRef.current = 0
+            if (glRef.current && programRef.current) {
+                render()
+            }
+            return
+        }
+
+        const rect = container.getBoundingClientRect()
+        const viewportHeight = window.innerHeight
+
+        // Calculate scroll progress based on component's position in viewport
+        // progress = 0 when component top enters viewport (at bottom)
+        // progress = 1 when component bottom exits viewport (at top)
+        const componentTop = rect.top
+        const componentBottom = rect.bottom
+        const componentHeight = rect.height
+
+        // Calculate progress: inverted so progress=1 when entering, progress=0 when exiting
+        // This should make wave move in correct direction
+        let progress = 0
+        
+        if (componentTop >= viewportHeight) {
+            // Component hasn't entered yet (below viewport) - use 1 (about to enter)
+            progress = 1
+        } else if (componentBottom <= 0) {
+            // Component has exited (above viewport) - use 0 (has exited)
+            progress = 0
+        } else {
+            // Component is visible - calculate inverted progress
+            // When top = viewportHeight (entering): progress should be 1
+            // When bottom = 0 (exiting): progress should be 0
+            // Invert: progress = 1 - ((viewportHeight - componentTop) / (viewportHeight + componentHeight))
+            progress = 1 - ((viewportHeight - componentTop) / (viewportHeight + componentHeight))
+            progress = Math.max(0, Math.min(1, progress))
+        }
+
+        // Convert percentages to UV coordinates (0-1)
+        // In UV: 0 = top, 1 = bottom
+        // User interface: 0% = bottom, 50% = middle, 100% = top
+        const startPosition = parallaxStartRef.current / 100
+        const endPosition = parallaxEndRef.current / 100
+
+        // With inverted progress: progress=1 when entering, progress=0 when exiting
+        // We want: progress=1 → startPosition, progress=0 → endPosition
+        // So: targetPosition = startPosition + (endPosition - startPosition) * (1 - progress)
+        // When progress=1 (entering): startPosition + (endPosition - startPosition) * 0 = startPosition ✓
+        // When progress=0 (exiting): startPosition + (endPosition - startPosition) * 1 = endPosition ✓
+        const targetPosition = startPosition + (endPosition - startPosition) * (1 - progress)
+        
+        // Calculate offset from center (0.5)
+        // baseLine = 0.5 + offset, so offset = targetPosition - 0.5
+        parallaxOffsetRef.current = targetPosition - 0.5
+
+        if (glRef.current && programRef.current) {
+            render()
         }
     }
 
@@ -446,7 +546,8 @@ export default function BurnTransition({
     }, [scrollSensitivity])
 
     useEffect(() => {
-        baseAnimationSpeedRef.current = mapBaseAnimationSpeed(baseAnimationSpeed)
+        baseAnimationSpeedRef.current =
+            mapBaseAnimationSpeed(baseAnimationSpeed)
     }, [baseAnimationSpeed])
 
     useEffect(() => {
@@ -477,6 +578,21 @@ export default function BurnTransition({
         }
     }, [movement.vertical])
 
+    useEffect(() => {
+        parallaxEnabledRef.current = parallaxEnabled
+        updateParallaxOffset()
+    }, [parallaxEnabled])
+
+    useEffect(() => {
+        parallaxStartRef.current = Math.max(0, Math.min(100, parallaxStart))
+        updateParallaxOffset()
+    }, [parallaxStart])
+
+    useEffect(() => {
+        parallaxEndRef.current = Math.max(0, Math.min(100, parallaxEnd))
+        updateParallaxOffset()
+    }, [parallaxEnd])
+
     // Vertex shader - simple fullscreen quad
     const vertexShader = `
         attribute vec2 a_position;
@@ -501,6 +617,7 @@ export default function BurnTransition({
         uniform float u_grain_scale;
         uniform float u_movement_horizontal;
         uniform float u_movement_vertical;
+        uniform float u_parallax_offset;
 
         // Random function
         float random(vec2 st) {
@@ -550,7 +667,8 @@ export default function BurnTransition({
 
         void main() {
             // === STEP 1: Define the main wavy edge (the "tear line") ===
-            float baseLine = 0.5;
+            // Apply parallax offset to translate the wave vertically
+            float baseLine = 0.5 + u_parallax_offset;
             // Apply movement controls: horizontal controls direction/speed, vertical controls evolution amount
             // horizontal: -1 = right to left, 1 = left to right, 0 = no horizontal movement
             // vertical: 0 = no vertical evolution, 1 = full vertical evolution
@@ -689,10 +807,14 @@ export default function BurnTransition({
 
         // Create fullscreen quad
         const positions = new Float32Array([
-            -1, -1, // bottom left
-            1, -1, // bottom right
-            -1, 1, // top left
-            1, 1, // top right
+            -1,
+            -1, // bottom left
+            1,
+            -1, // bottom right
+            -1,
+            1, // top left
+            1,
+            1, // top right
         ])
 
         const buffer = gl.createBuffer()
@@ -713,18 +835,21 @@ export default function BurnTransition({
 
         // Initial render
         resizeCanvas()
+        updateParallaxOffset()
         render()
 
         // Animation loop
         const animate = () => {
             if (glRef.current && programRef.current) {
+                // Update parallax offset continuously for smooth effect
+                updateParallaxOffset()
                 render()
             }
             animationFrameRef.current = requestAnimationFrame(animate)
         }
         animationFrameRef.current = requestAnimationFrame(animate)
 
-        // Track scroll for animation
+        // Track scroll for animation and parallax
         const scrollHandler = () => {
             const currentScrollY = window.scrollY || window.pageYOffset
             const currentTime = performance.now()
@@ -732,19 +857,23 @@ export default function BurnTransition({
             if (lastScrollTimeRef.current > 0) {
                 const deltaY = currentScrollY - lastScrollYRef.current
                 const deltaTime = currentTime - lastScrollTimeRef.current
-                
+
                 if (deltaTime > 0 && Math.abs(deltaY) > 0) {
                     // Calculate scroll velocity (pixels per second) for tracking
                     scrollVelocityRef.current = (deltaY / deltaTime) * 1000
-                    
+
                     // Use deltaY directly with sensitivity for more controlled animation
                     // This prevents velocity spikes from causing huge animations
-                    scrollOffsetRef.current += deltaY * scrollSensitivityRef.current
+                    scrollOffsetRef.current +=
+                        deltaY * scrollSensitivityRef.current
                 }
             }
 
             lastScrollYRef.current = currentScrollY
             lastScrollTimeRef.current = currentTime
+
+            // Update parallax offset on scroll
+            updateParallaxOffset()
         }
 
         // Initialize scroll tracking
@@ -815,7 +944,7 @@ addPropertyControls(BurnTransition, {
         defaultValue: "#ffffff",
         optional: true,
     },
-    
+
     noiseScale: {
         type: ControlType.Number,
         title: "Scale",
@@ -823,7 +952,6 @@ addPropertyControls(BurnTransition, {
         min: 0.0,
         max: 1.0,
         step: 0.1,
-       
     },
     noiseIntensity: {
         type: ControlType.Number,
@@ -832,7 +960,6 @@ addPropertyControls(BurnTransition, {
         min: 0.0,
         max: 1.0,
         step: 0.1,
-       
     },
     scrollSensitivity: {
         type: ControlType.Number,
@@ -841,7 +968,6 @@ addPropertyControls(BurnTransition, {
         min: 0.0,
         max: 1.0,
         step: 0.1,
-
     },
     baseAnimationSpeed: {
         type: ControlType.Number,
@@ -859,31 +985,60 @@ addPropertyControls(BurnTransition, {
         max: 1.0,
         step: 0.1,
     },
-    movement:{
-        type:ControlType.Object,
-        controls:{
-            horizontal:{
-                type:ControlType.Number,
+    parallaxEnabled: {
+        type: ControlType.Boolean,
+        title: "Parallax",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
+    parallaxStart: {
+        type: ControlType.Number,
+        title: "Start",
+        defaultValue: 50,
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
+    },
+    parallaxEnd: {
+        type: ControlType.Number,
+        title: "End",
+        defaultValue: 100,
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+        description: "0% = bottom, 50% = middle, 100% = top",
+        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
+    },
+    movement: {
+        type: ControlType.Object,
+        controls: {
+            horizontal: {
+                type: ControlType.Number,
                 title: "Horizontal",
                 defaultValue: 0,
-                step:0.1,
+                step: 0.1,
                 min: -1,
                 max: 1,
-                description:"-1 = right to left, 1 = left to right"
+                description: "-1 = right to left, 1 = left to right",
             },
-            vertical:{
-                type:ControlType.Number,
+            vertical: {
+                type: ControlType.Number,
                 title: "Vertical",
                 defaultValue: 0,
-                step:0.1,
+                step: 0.1,
                 min: 0,
                 max: 1,
-            }
+            },
         },
-        defaultValue:{
+        defaultValue: {
             horizontal: 0.5,
             vertical: 0.5,
-        }
-    }
+        },
+    },
 })
 
+BurnTransition.displayName="Burn Transition"

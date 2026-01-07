@@ -468,7 +468,7 @@ export default function LineConnections({
 addPropertyControls(LineConnections, {
     connectionMode:{
         type:ControlType.Enum,
-        title: "Connection Mode",
+        title: "Mode",
         options: ["all", "closer"],
         optionTitles: ["All", "Closer"],
         defaultValue: "all",
@@ -492,6 +492,14 @@ addPropertyControls(LineConnections, {
         max: 100,
         step: 1,
     },
+    strokeWidth: {
+        type: ControlType.Number,
+        title: "Width",
+        defaultValue: 1,
+        min: 0.5,
+        max: 10,
+        step: 0.5,
+    },
     strokeColor: {
         type: ControlType.Color,
         title: "Color",
@@ -500,7 +508,7 @@ addPropertyControls(LineConnections, {
     },
     dashLength: {
         type: ControlType.Number,
-        title: "Dash Length",
+        title: "Dash",
         defaultValue: 0,
         min: 0,
         max: 50,
@@ -508,7 +516,7 @@ addPropertyControls(LineConnections, {
     },
     gapLength: {
         type: ControlType.Number,
-        title: "Gap Length",
+        title: "Dash Gap",
         defaultValue: 0,
         min: 0,
         max: 50,
@@ -520,16 +528,10 @@ addPropertyControls(LineConnections, {
         options: ["butt", "round", "square"],
         optionTitles: ["Butt", "Round", "Square"],
         defaultValue: "butt",
-    },
-    strokeWidth: {
-        type: ControlType.Number,
-        title: "Thickness",
-        defaultValue: 1,
-        min: 0.5,
-        max: 10,
-        step: 0.5,
         description: "More components at [Framer University](https://frameruni.link/cc).",
+
     },
+    
     
 })
 

@@ -1,0 +1,12 @@
+name = "framer-webhook"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Uncomment and configure if you need environment variables
+# [vars]
+# EXAMPLE_VAR = "example-value"
+
+# Uncomment to add secrets (use `wrangler secret put SECRET_NAME`)
+# [secrets]
+# KLAVIYO_API_KEY = "pk_4c90771e6ebe994c58449e91b6d005fa81"
+

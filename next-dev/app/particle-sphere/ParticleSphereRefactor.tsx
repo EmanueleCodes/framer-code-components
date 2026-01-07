@@ -141,6 +141,42 @@ export default function ParticleSphereRefactor({
     const mouseRef = useRef<{ x: number; y: number } | null>(null)
     const baseParticlePositionsRef = useRef<any[]>([])
     const particleDisplacementsRef = useRef<any[]>([])
+    const debugInfoRef = useRef<{
+        cursorEnabled: boolean
+        mousePosition: { x: number; y: number } | null
+        displacedParticles: number
+        coloredParticles: number
+        maxDisplacement: number
+        avgDisplacement: number
+        maxColorFactor: number
+        instanceColorExists: boolean
+        vertexColorExists: boolean
+        particleShape: string
+        sampleColor: { r: number; g: number; b: number } | null
+    }>({
+        cursorEnabled: false,
+        mousePosition: null,
+        displacedParticles: 0,
+        coloredParticles: 0,
+        maxDisplacement: 0,
+        avgDisplacement: 0,
+        maxColorFactor: 0,
+        instanceColorExists: false,
+        vertexColorExists: false,
+        particleShape: "unknown",
+        sampleColor: null,
+    })
+    
+    // State for debug panel (updates reactively)
+    const [debugInfo, setDebugInfo] = React.useState(debugInfoRef.current)
+    
+    // Update debug info state periodically
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setDebugInfo({ ...debugInfoRef.current })
+        }, 100) // Update every 100ms
+        return () => clearInterval(interval)
+    }, [])
 
     // Check canvas mode ONCE at component mount and cache it
     const isCanvasRef = useRef<boolean | null>(null)
@@ -254,6 +290,9 @@ export default function ParticleSphereRefactor({
             ? new Color(resolvedSphereColor)
             : new Color(1, 1, 1)
         
+        // Red color for displaced particles
+        const redColor = new Color(1, 0, 0)
+        
         for (let i = 0; i < particlesCount; i++) {
             // Use golden angle spiral for even distribution
             const y = 1 - (i / (particlesCount - 1)) * 2 // y goes from 1 to -1
@@ -284,7 +323,7 @@ export default function ParticleSphereRefactor({
             const sphereRadius = particleSize * 0.15 // Adjust this factor to match visual size
             const sphereGeometry = new SphereGeometry(sphereRadius, 8, 8)
             const sphereMaterial = new MeshBasicMaterial({
-                color: baseColorObj,
+                color: 0xffffff, // White so instance colors are used directly
                 blending: AdditiveBlending,
                 transparent: true,
             })
@@ -299,6 +338,18 @@ export default function ParticleSphereRefactor({
                 particles.setMatrixAt(i, matrix)
             }
             particles.instanceMatrix.needsUpdate = true
+            
+            // Set up instance colors (per-instance coloring)
+            const instanceColors = new Float32Array(particlesCount * 3)
+            for (let i = 0; i < particlesCount; i++) {
+                const idx = i * 3
+                instanceColors[idx] = baseColorObj.r
+                instanceColors[idx + 1] = baseColorObj.g
+                instanceColors[idx + 2] = baseColorObj.b
+            }
+            particles.instanceColor = new Float32BufferAttribute(instanceColors, 3)
+            sphereMaterial.vertexColors = false
+            particles.instanceColor.needsUpdate = true
         } else {
             // Square particles using Points
             const particlesGeometry = new BufferGeometry()
@@ -307,12 +358,23 @@ export default function ParticleSphereRefactor({
                 new Float32BufferAttribute(vertices, 3)
             )
             
+            // Set up vertex colors (per-vertex coloring)
+            const colors = new Float32Array(particlesCount * 3)
+            for (let i = 0; i < particlesCount; i++) {
+                const idx = i * 3
+                colors[idx] = baseColorObj.r
+                colors[idx + 1] = baseColorObj.g
+                colors[idx + 2] = baseColorObj.b
+            }
+            particlesGeometry.setAttribute("color", new Float32BufferAttribute(colors, 3))
+            
             const particlesMaterial = new PointsMaterial({
                 size: particleSize,
                 color: baseColorObj,
                 blending: AdditiveBlending,
                 depthTest: false,
                 transparent: true,
+                vertexColors: true, // Enable vertex colors
             })
             
             particles = new Points(particlesGeometry, particlesMaterial)
@@ -427,18 +489,22 @@ export default function ParticleSphereRefactor({
             particlesGroup.rotation.x = rotation.y
             particlesGroup.updateMatrixWorld(true)
 
+            // Get container and camera info for both cursor interaction and color updates
+            const containerWidth = containerRef.current?.clientWidth || 400
+            const containerHeight = containerRef.current?.clientHeight || 400
+            const currentCamera = cameraRef.current
+            const cursorRadiusSquared = cursorRadius * cursorRadius
+
+            // Store color factors for each particle (0 = base color, 1 = full red)
+            const particleColorFactors = new Float32Array(baseParticlePositionsRef.current.length)
+
             // Apply cursor repulsion to particles (only if enabled)
             if (cursorConfig.enabled && baseParticlePositionsRef.current.length > 0) {
-                const containerWidth = containerRef.current?.clientWidth || 400
-                const containerHeight = containerRef.current?.clientHeight || 400
-
-                // Get current camera for projection
-                const currentCamera = cameraRef.current
-                const cursorRadiusSquared = cursorRadius * cursorRadius
 
                 for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
                     const basePos = baseParticlePositionsRef.current[i]
                     const displacement = particleDisplacementsRef.current[i]
+                    let colorFactor = 0 // Default: no color change
 
                     // Apply repulsion force only if cursor is present and near particle
                     if (mouseRef.current) {
@@ -495,8 +561,14 @@ export default function ParticleSphereRefactor({
 
                             // Apply to displacement
                             displacement.add(localRepulsion)
+                            
+                            // Calculate color factor: set to 1 (full red) if within cursor
+                            colorFactor = 1.0
                         }
                     }
+
+                    // Store color factor for this particle
+                    particleColorFactors[i] = colorFactor
 
                     // Always apply friction and return force to decay displacements (even when cursor is gone)
                     const frictionFactor = Math.pow(CURSOR_PHYSICS.FRICTION, deltaFactor)
@@ -506,12 +578,29 @@ export default function ParticleSphereRefactor({
                     // Apply return force (decay towards zero)
                     displacement.multiplyScalar(1 - returnForce)
                 }
+            }
 
-                // Update particle positions
-                const particleShape = particlesConfig.shape || "sphere"
+            // Update particle positions and colors (ALWAYS, not just when cursor is enabled)
+            const particleShape = particlesConfig.shape || "sphere"
+            
+            // Debug tracking
+            let displacedCount = 0
+            let maxDisplacement = 0
+            let totalDisplacement = 0
+            let maxColorFactor = 0
+            let sampleColor: { r: number; g: number; b: number } | null = null
+            let coloredParticlesCount = 0
+                
                 if (particleShape === "sphere" && particlesRef.current) {
-                    // Update InstancedMesh positions
+                    // Update InstancedMesh positions and colors
                     const matrix = new Matrix4()
+                    const instanceColors = particlesRef.current.instanceColor
+                    
+                    // Debug: check if instanceColor exists
+                    debugInfoRef.current.instanceColorExists = !!instanceColors
+                    debugInfoRef.current.vertexColorExists = false
+                    debugInfoRef.current.particleShape = "sphere"
+                    
                     for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
                         const basePos = baseParticlePositionsRef.current[i]
                         const displacement = particleDisplacementsRef.current[i]
@@ -520,11 +609,63 @@ export default function ParticleSphereRefactor({
                         finalPos.add(displacement)
                         matrix.setPosition(finalPos.x, finalPos.y, finalPos.z)
                         particlesRef.current.setMatrixAt(i, matrix)
+                        
+                        // Calculate displacement magnitude for debug
+                        const displacementMagnitude = displacement.length()
+                        totalDisplacement += displacementMagnitude
+                        if (displacementMagnitude > 0.001) {
+                            displacedCount++
+                        }
+                        if (displacementMagnitude > maxDisplacement) {
+                            maxDisplacement = displacementMagnitude
+                        }
+                        
+                        // Use pre-calculated color factor from displacement loop
+                        const colorFactor = particleColorFactors[i] || 0
+                        if (colorFactor > maxColorFactor) {
+                            maxColorFactor = colorFactor
+                        }
+                        if (colorFactor > 0.01) {
+                            coloredParticlesCount++
+                        }
+                        
+                        // Set color directly: red ONLY if colorFactor > 0, base color otherwise
+                        const idx = i * 3
+                        if (colorFactor > 0) {
+                            // Red
+                            if (instanceColors && instanceColors.array) {
+                                instanceColors.array[idx] = 1.0
+                                instanceColors.array[idx + 1] = 0.0
+                                instanceColors.array[idx + 2] = 0.0
+                                
+                                // Store sample color from first colored particle
+                                if (!sampleColor) {
+                                    sampleColor = { r: 1.0, g: 0.0, b: 0.0 }
+                                }
+                            }
+                        } else {
+                            // Base color
+                            if (instanceColors && instanceColors.array) {
+                                instanceColors.array[idx] = baseColorObj.r
+                                instanceColors.array[idx + 1] = baseColorObj.g
+                                instanceColors.array[idx + 2] = baseColorObj.b
+                            }
+                        }
                     }
                     particlesRef.current.instanceMatrix.needsUpdate = true
+                    if (instanceColors) {
+                        instanceColors.needsUpdate = true
+                    }
                 } else if (particleShape === "cube" && particlesRef.current) {
-                    // Update Points geometry positions
+                    // Update Points geometry positions and colors
                     const positions = particlesRef.current.geometry.attributes.position
+                    const colors = particlesRef.current.geometry.attributes.color
+                    
+                    // Debug: check if colors exist
+                    debugInfoRef.current.instanceColorExists = false
+                    debugInfoRef.current.vertexColorExists = !!colors
+                    debugInfoRef.current.particleShape = "cube"
+                    
                     for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
                         const basePos = baseParticlePositionsRef.current[i]
                         const displacement = particleDisplacementsRef.current[i]
@@ -532,12 +673,56 @@ export default function ParticleSphereRefactor({
                         finalPos.copy(basePos)
                         finalPos.add(displacement)
                         positions.setXYZ(i, finalPos.x, finalPos.y, finalPos.z)
+                        
+                        // Calculate displacement magnitude for debug
+                        const displacementMagnitude = displacement.length()
+                        totalDisplacement += displacementMagnitude
+                        if (displacementMagnitude > 0.001) {
+                            displacedCount++
+                        }
+                        if (displacementMagnitude > maxDisplacement) {
+                            maxDisplacement = displacementMagnitude
+                        }
+                        
+                        // Use pre-calculated color factor from displacement loop
+                        const colorFactor = particleColorFactors[i] || 0
+                        if (colorFactor > maxColorFactor) {
+                            maxColorFactor = colorFactor
+                        }
+                        if (colorFactor > 0.01) {
+                            coloredParticlesCount++
+                        }
+                        
+                        // Set color directly: red ONLY if colorFactor > 0, base color otherwise
+                        if (colorFactor > 0) {
+                            // Red
+                            colors.setXYZ(i, 1.0, 0.0, 0.0)
+                            // Store sample color from first colored particle
+                            if (!sampleColor) {
+                                sampleColor = { r: 1.0, g: 0.0, b: 0.0 }
+                            }
+                        } else {
+                            // Base color
+                            colors.setXYZ(i, baseColorObj.r, baseColorObj.g, baseColorObj.b)
+                        }
                     }
                     positions.needsUpdate = true
+                    colors.needsUpdate = true
                 }
+                
+            // Update debug info
+            debugInfoRef.current.cursorEnabled = cursorConfig.enabled
+            debugInfoRef.current.mousePosition = mouseRef.current
+            debugInfoRef.current.displacedParticles = displacedCount
+            debugInfoRef.current.coloredParticles = coloredParticlesCount
+            debugInfoRef.current.maxDisplacement = maxDisplacement
+            debugInfoRef.current.avgDisplacement = baseParticlePositionsRef.current.length > 0 
+                ? totalDisplacement / baseParticlePositionsRef.current.length 
+                : 0
+            debugInfoRef.current.maxColorFactor = maxColorFactor
+            debugInfoRef.current.sampleColor = sampleColor
 
-                needsRender = true
-            }
+            needsRender = true
 
             // Render every frame
             if (needsRender || rotationSpeed !== 0 || isDragging) {
@@ -939,6 +1124,80 @@ export default function ParticleSphereRefactor({
                 }}
             />
             <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+            
+            {/* Debug Panel */}
+            <div
+                style={{
+                    position: "absolute",
+                    top: 10,
+                    left: -100,
+                    background: "rgba(0, 0, 0, 0.85)",
+                    color: "#fff",
+                    padding: "12px 16px",
+                    borderRadius: "8px",
+                    fontFamily: "monospace",
+                    fontSize: "11px",
+                    lineHeight: "1.6",
+                    zIndex: 10000,
+                    minWidth: "280px",
+                    maxWidth: "400px",
+                    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                }}
+            >
+                <div style={{ fontWeight: "bold", marginBottom: "8px", borderBottom: "1px solid #444", paddingBottom: "6px" }}>
+                    🐛 Debug Panel
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div>
+                        <strong>Cursor:</strong> {debugInfo.cursorEnabled ? "✅ Enabled" : "❌ Disabled"}
+                    </div>
+                    <div>
+                        <strong>Mouse:</strong> {debugInfo.mousePosition 
+                            ? `(${Math.round(debugInfo.mousePosition.x)}, ${Math.round(debugInfo.mousePosition.y)})` 
+                            : "None"}
+                    </div>
+                    <div>
+                        <strong>Particle Shape:</strong> {debugInfo.particleShape}
+                    </div>
+                    <div>
+                        <strong>Instance Color:</strong> {debugInfo.instanceColorExists ? "✅" : "❌"}
+                    </div>
+                    <div>
+                        <strong>Vertex Color:</strong> {debugInfo.vertexColorExists ? "✅" : "❌"}
+                    </div>
+                    <div>
+                        <strong>Displaced Particles:</strong> {debugInfo.displacedParticles} / {particlesCount}
+                    </div>
+                    <div>
+                        <strong>Colored Particles:</strong> {debugInfo.coloredParticles || 0} / {particlesCount}
+                    </div>
+                    <div>
+                        <strong>Max Displacement:</strong> {debugInfo.maxDisplacement.toFixed(4)}
+                    </div>
+                    <div>
+                        <strong>Avg Displacement:</strong> {debugInfo.avgDisplacement.toFixed(6)}
+                    </div>
+                    <div>
+                        <strong>Max Color Factor:</strong> {debugInfo.maxColorFactor.toFixed(3)}
+                    </div>
+                    {debugInfo.sampleColor && (
+                        <div>
+                            <strong>Sample Color (RGB):</strong>{" "}
+                            ({debugInfo.sampleColor.r.toFixed(3)}, {debugInfo.sampleColor.g.toFixed(3)}, {debugInfo.sampleColor.b.toFixed(3)})
+                            <div
+                                style={{
+                                    width: "40px",
+                                    height: "20px",
+                                    backgroundColor: `rgb(${Math.round(debugInfo.sampleColor.r * 255)}, ${Math.round(debugInfo.sampleColor.g * 255)}, ${Math.round(debugInfo.sampleColor.b * 255)})`,
+                                    marginTop: "4px",
+                                    border: "1px solid #666",
+                                    borderRadius: "2px",
+                                }}
+                            />
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
     )
 }
