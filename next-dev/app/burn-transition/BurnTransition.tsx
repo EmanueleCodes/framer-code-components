@@ -904,20 +904,9 @@ export default function BurnTransition({
         // Add scroll listener
         window.addEventListener("scroll", scrollHandler, { passive: true })
 
-        // Decay scroll offset over time when not scrolling
-        const decayInterval = setInterval(() => {
-            if (Math.abs(scrollVelocityRef.current) < 0.1) {
-                // Gradually decay the offset when not scrolling
-                scrollOffsetRef.current *= 0.98
-            }
-            // Decay velocity over time
-            scrollVelocityRef.current *= 0.95
-        }, 16) // ~60fps
-
         return () => {
             resizeObserver.disconnect()
             window.removeEventListener("scroll", scrollHandler)
-            clearInterval(decayInterval)
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
             }
