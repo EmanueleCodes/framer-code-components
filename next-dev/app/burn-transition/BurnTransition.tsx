@@ -422,6 +422,18 @@ export default function BurnTransition({
             gl.uniform1f(parallaxOffsetLocation, parallaxOffsetRef.current)
         }
 
+        // Set aspect ratio uniform for consistent noise scaling
+        const aspectRatioLocation = gl.getUniformLocation(
+            program,
+            "u_aspect_ratio"
+        )
+        if (aspectRatioLocation) {
+            const width = canvasSizeRef.current.width
+            const height = canvasSizeRef.current.height
+            const aspectRatio = height > 0 ? width / height : 1.0
+            gl.uniform1f(aspectRatioLocation, aspectRatio)
+        }
+
         // Clear with transparent background
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
@@ -618,6 +630,7 @@ export default function BurnTransition({
         uniform float u_movement_horizontal;
         uniform float u_movement_vertical;
         uniform float u_parallax_offset;
+        uniform float u_aspect_ratio;
 
         // Random function
         float random(vec2 st) {
@@ -675,8 +688,10 @@ export default function BurnTransition({
             float horizontalOffset = u_scroll_offset * u_movement_horizontal;
             float verticalOffset = u_scroll_offset * u_movement_vertical;
             
+            // Use aspect-ratio-corrected x-coordinates to prevent noise stretching
+            // Keep original y-scaling for the "mountain-ish" profile
             vec2 noiseCoord = vec2(
-                v_uv.x * u_noise_scale + horizontalOffset,
+                v_uv.x * u_aspect_ratio * u_noise_scale + horizontalOffset,
                 v_uv.y * 3.0 + verticalOffset * 0.6
             );
             float edgeNoise = fbm(noiseCoord);
@@ -685,8 +700,9 @@ export default function BurnTransition({
             // === STEP 2: Create UNEVEN transition thickness ===
             // Use a different noise to vary how thick the transition zone is at each point
             // Apply movement controls for consistent animation
+            // Use aspect-ratio-corrected x-coordinates, original y-scaling
             vec2 thicknessNoiseCoord = vec2(
-                v_uv.x * u_noise_scale * 2.3 + horizontalOffset * 0.7,
+                v_uv.x * u_aspect_ratio * u_noise_scale * 2.3 + horizontalOffset * 0.7,
                 v_uv.y * 2.0 + verticalOffset * 0.4 + 100.0
             );
             float thicknessNoise = fbm(thicknessNoiseCoord);
@@ -704,13 +720,18 @@ export default function BurnTransition({
             
             // === STEP 4: High-frequency grain for fiber effect ===
             // Animate grain both horizontally and vertically using movement controls
-            vec2 grainCoord = v_uv * u_grain_scale * 3.0 + vec2(horizontalOffset * 0.5, verticalOffset * 0.3);
+            // Use aspect-ratio-corrected coordinates
+            vec2 grainCoord = vec2(
+                v_uv.x * u_aspect_ratio * u_grain_scale * 3.0 + horizontalOffset * 0.5,
+                v_uv.y * u_grain_scale * 3.0 + verticalOffset * 0.3
+            );
             float grain = detailedNoise(grainCoord);
             
             // Additional "fiber" noise - elongated in Y direction for torn paper fibers
             // Apply movement controls for consistent animation
+            // Use aspect-ratio-corrected coordinates
             vec2 fiberCoord = vec2(
-                v_uv.x * u_grain_scale * 8.0 + horizontalOffset * 0.3,
+                v_uv.x * u_aspect_ratio * u_grain_scale * 8.0 + horizontalOffset * 0.3,
                 v_uv.y * u_grain_scale * 2.0 + verticalOffset * 0.2
             );
             float fiberNoise = noise(fiberCoord);
