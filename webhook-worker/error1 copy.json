@@ -1,0 +1,36 @@
+{
+  "level": "error",
+  "message": "❌ Error tracking Klaviyo event: Error: Klaviyo event API error: 400 - {\"errors\":[{\"id\":\"86647774-6620-4fde-81f9-159f2e9b717b\",\"status\":400,\"code\":\"invalid\",\"title\":\"Invalid input.\",\"detail\":\"'data' key missing in relationship\",\"source\":{\"pointer\":\"/data/attributes/profile\"},\"links\":{},\"meta\":{}}]}",
+  "$workers": {
+    "truncated": false,
+    "event": {
+      "request": {
+        "url": "https://framer-webhook.emanuelecodes.workers.dev/",
+        "method": "POST",
+        "path": "/"
+      }
+    },
+    "outcome": "ok",
+    "scriptName": "framer-webhook",
+    "eventType": "fetch",
+    "executionModel": "stateless",
+    "scriptVersion": {
+      "id": "f3a68fc2-7c66-4683-8371-e3e64159b002"
+    },
+    "requestId": "9bab52d18b0c5bfb"
+  },
+  "$metadata": {
+    "id": "01KEENHZXNYHEYCCHQW0K3RME8",
+    "requestId": "9bab52d18b0c5bfb",
+    "trigger": "POST /",
+    "service": "framer-webhook",
+    "level": "error",
+    "error": "❌ Error tracking Klaviyo event: Error: Klaviyo event API error: 400 - {\"errors\":[{\"id\":\"86647774-6620-4fde-81f9-159f2e9b717b\",\"status\":400,\"code\":\"invalid\",\"title\":\"Invalid input.\",\"detail\":\"'data' key missing in relationship\",\"source\":{\"pointer\":\"/data/attributes/profile\"},\"links\":{},\"meta\":{}}]}",
+    "message": "❌ Error tracking Klaviyo event: Error: Klaviyo event API error: 400 - {\"errors\":[{\"id\":\"86647774-6620-4fde-81f9-159f2e9b717b\",\"status\":400,\"code\":\"invalid\",\"title\":\"Invalid input.\",\"detail\":\"'data' key missing in relationship\",\"source\":{\"pointer\":\"/data/attributes/profile\"},\"links\":{},\"meta\":{}}]}",
+    "account": "8fa2ec3c5a448b4859992628a5b9728d",
+    "type": "cf-worker",
+    "fingerprint": "356522ec9d449c8af3d2cdec493126f8",
+    "origin": "fetch",
+    "errorTemplate": "❌ Error tracking Klaviyo event: Error: Klaviyo event API error: 400 - {\"errors\":[{\"id\":\"<UUID>\",\"status\":400,\"code\":\"invalid\",\"title\":\"Invalid input.\",\"detail\":\"'data' key missing in relationship\",\"source\":{\"pointer\":\"/data/attributes/profile\"},\"links\":{},\"meta\":{}}]}"
+  }
+}

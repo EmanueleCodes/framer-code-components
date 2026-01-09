@@ -168,7 +168,27 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
 
   // Step 1: Create/Update Profile
   try {
-    const profilePayload = {
+    // Build custom properties object for any non-standard fields
+    // Custom properties go in a "properties" object within attributes
+    const customProperties: Record<string, any> = {};
+    
+    // Collect all form fields that aren't standard profile attributes
+    // Standard attributes: email, first_name, last_name, phone_number, organization, 
+    // address1, address2, city, state, country, zip
+    const standardFields = ['email', 'Email', 'name', 'Name', 'firstName', 'FirstName', 
+      'first_name', 'lastName', 'LastName', 'last_name', 'phone', 'Phone', 'phoneNumber', 
+      'PhoneNumber', 'phone_number', 'company', 'Company', 'address', 'Address', 'address1', 
+      'Address1', 'address2', 'Address2', 'city', 'City', 'location', 'Location', 'state', 
+      'State', 'region', 'Region', 'country', 'Country', 'zip', 'Zip', 'postalCode', 'PostalCode'];
+    
+    // Add any non-standard fields as custom properties
+    for (const [key, value] of Object.entries(formData)) {
+      if (!standardFields.includes(key) && value !== null && value !== undefined && value !== '') {
+        customProperties[key] = value;
+      }
+    }
+    
+    const profilePayload: any = {
       data: {
         type: 'profile',
         attributes: {
@@ -180,14 +200,37 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
           ...(formData.lastName && { last_name: formData.lastName }),
           ...(formData.last_name && { last_name: formData.last_name }),
           ...(formData.phone && { phone_number: formData.phone }),
+          ...(formData.Phone && { phone_number: formData.Phone }),
           ...(formData.phoneNumber && { phone_number: formData.phoneNumber }),
           ...(formData.phone_number && { phone_number: formData.phone_number }),
-          // Add any other custom properties
-          ...(formData.location && { location: formData.location }),
+          // Map address fields directly (NOT as a location object!)
+          // Klaviyo uses: address1, address2, city, state, country, zip as direct attributes
+          ...((formData.address || formData.Address || formData.address1 || formData.Address1) && {
+            address1: formData.address || formData.Address || formData.address1 || formData.Address1
+          }),
+          ...((formData.address2 || formData.Address2) && {
+            address2: formData.address2 || formData.Address2
+          }),
+          ...((formData.city || formData.City || formData.location || formData.Location) && { 
+            city: formData.city || formData.City || formData.location || formData.Location 
+          }),
+          ...((formData.state || formData.State || formData.region || formData.Region) && {
+            state: formData.state || formData.State || formData.region || formData.Region
+          }),
+          ...((formData.country || formData.Country) && { country: formData.country || formData.Country }),
+          ...((formData.zip || formData.Zip || formData.postalCode || formData.PostalCode) && {
+            zip: formData.zip || formData.Zip || formData.postalCode || formData.PostalCode
+          }),
+          // Add any other standard properties
           ...(formData.company && { organization: formData.company }),
         },
       },
     };
+    
+    // Add custom properties if any exist (for fields like "height", etc.)
+    if (Object.keys(customProperties).length > 0) {
+      profilePayload.data.attributes.properties = customProperties;
+    }
 
     const profileResponse = await fetch(`${KLAVIYO_BASE_URL}/profiles/`, {
       method: 'POST',
@@ -213,15 +256,27 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
 
   // Step 2: Track Form Submission Event
   try {
+    // Klaviyo Events API requires profile and metric to be wrapped in "data" objects
+    // Reference: https://developers.klaviyo.com/en/reference/create_event
     const eventPayload = {
       data: {
         type: 'event',
         attributes: {
           profile: {
-            email: email,
+            data: {
+              type: 'profile',
+              attributes: {
+                email: email,
+              },
+            },
           },
           metric: {
-            name: 'Form Submitted', // Customize this event name
+            data: {
+              type: 'metric',
+              attributes: {
+                name: 'Form Submitted',
+              },
+            },
           },
           properties: {
             // Include all form data as event properties
@@ -247,7 +302,17 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
       throw new Error(`Klaviyo event API error: ${eventResponse.status} - ${errorText}`);
     }
 
-    results.event = await eventResponse.json();
+    // Events API may return 202 Accepted with no body
+    const eventText = await eventResponse.text();
+    if (eventText && eventText.trim().length > 0) {
+      try {
+        results.event = JSON.parse(eventText);
+      } catch {
+        results.event = { success: true, message: 'Event tracked' };
+      }
+    } else {
+      results.event = { success: true, message: 'Event tracked' };
+    }
     console.log('✅ Event tracked in Klaviyo');
   } catch (error) {
     console.error('❌ Error tracking Klaviyo event:', error);
@@ -279,7 +344,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
         );
 
         if (profileLookupResponse.ok) {
-          const profileData = await profileLookupResponse.json();
+          const profileData: any = await profileLookupResponse.json();
           if (profileData.data && profileData.data.length > 0) {
             profileId = profileData.data[0].id;
           }
@@ -316,7 +381,19 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
           throw new Error(`Klaviyo list API error: ${listResponse.status} - ${errorText}`);
         }
 
-        results.list = await listResponse.json();
+        // Some API responses might be empty (204 No Content) or have no body
+        // Check if there's content before parsing JSON
+        const responseText = await listResponse.text();
+        if (responseText && responseText.trim().length > 0) {
+          try {
+            results.list = JSON.parse(responseText);
+          } catch {
+            // JSON parsing failed, but request succeeded
+            results.list = { success: true, message: 'Profile added to list', raw: responseText };
+          }
+        } else {
+          results.list = { success: true, message: 'Profile added to list' };
+        }
         console.log(`✅ Profile added to list ${listId} in Klaviyo`);
       } else {
         console.warn('⚠️ Could not find profile ID to add to list');

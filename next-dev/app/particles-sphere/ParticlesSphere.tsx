@@ -1,715 +1,1370 @@
-// Particle sphere that responds to cursor position with Three.js
-import { useEffect, useRef } from "react"
+import React, { useEffect, useRef } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
-
-// Three.js imports from CDN
 import {
     Scene,
     PerspectiveCamera,
     WebGLRenderer,
+    Color,
     Points,
     BufferGeometry,
-    BufferAttribute,
     Float32BufferAttribute,
-    ShaderMaterial,
+    PointsMaterial,
+    SphereGeometry,
+    MeshBasicMaterial,
+    InstancedMesh,
+    Matrix4,
+    Group,
     Vector3,
-    Color,
+    AdditiveBlending,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
-// Constants for physics and rendering
-const PHYSICS = {
-    FRICTION: 0.92,
-    RETURN_FORCE: 0.02,
-    CURSOR_FORCE_MULTIPLIER: 1.5,
-    MIN_OPACITY: 0.3,
-    OPACITY_RANGE: 0.7,
-    TRAIL_MIN_SIZE: 0.3,
-    TRAIL_SIZE_RANGE: 0.7,
-} as const
-
-const ANIMATION = {
-    ROTATION_SPEED_Y: 0.7,
-} as const
-
-// Canvas resize detection constants
-const RESIZE_TICK_MS = 250
-const RESIZE_EPSILON = 0.001
-
-interface ParticleSphereProps {
+interface ParticleSphereRefactorProps {
     preview: boolean
-    particleCount: number
-    particleSize: number
-    particleColor: string
+    particlesCount: number
     speed: number
-    cursorRadius: number
-    clickEffect: "scatter" | "color" | "both"
-    clickForce: number
-    mouseoverColor: string
-    colorDuration: number
-    enableTrails: boolean
-    trailLength: number
-    trailOpacity: number
+    smoothing: number
+    scale: number
+    stopOnHover: boolean
+    rotationDirection?: "clockwise" | "anticlockwise"
+    dragSpeed?: number
+    drag?: boolean
+    particles: {
+        scale: number
+        shape: "sphere" | "cube"
+    }
+    cursorConfig: {
+        enabled: boolean
+        radius: number
+        strength: number
+        clickForce?: number
+    }
+    sphereColor: string
     style?: React.CSSProperties
 }
 
+// CSS variable token and color parsing (hex/rgba/var())
+const cssVariableRegex =
+    /var\s*\(\s*(--[\w-]+)(?:\s*,\s*((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*))?\s*\)/
+
+function extractDefaultValue(cssVar: string): string {
+    if (!cssVar || !cssVar.startsWith("var(")) return cssVar
+    const match = cssVariableRegex.exec(cssVar)
+    if (!match) return cssVar
+    const fallback = (match[2] || "").trim()
+    if (fallback.startsWith("var(")) return extractDefaultValue(fallback)
+    return fallback || cssVar
+}
+
+function resolveTokenColor(input: any): any {
+    if (typeof input !== "string") return input
+    if (!input.startsWith("var(")) return input
+    return extractDefaultValue(input)
+}
+
+// Value mapping functions
+function mapLinear(
+    value: number,
+    inMin: number,
+    inMax: number,
+    outMin: number,
+    outMax: number
+): number {
+    if (inMax === inMin) return outMin
+    const t = (value - inMin) / (inMax - inMin)
+    return outMin + t * (outMax - outMin)
+}
+
+// Speed: UI [0.1..1] → internal [0.01..0.05] (rotation speed multiplier)
+function mapSpeedUiToInternal(ui: number): number {
+    return mapLinear(ui, 0.1, 1.0, 0.01, 0.05)
+}
+
+// Scale: UI [0..1] → scale multiplier [0.5..3.0] (overall sphere size multiplier)
+function mapScaleUiToMultiplier(ui: number): number {
+    const clamped = Math.max(0, Math.min(1, ui))
+    return mapLinear(clamped, 0, 1.0, 0.5, 3.0)
+}
+
+// Particle Size: UI [0.1..1] → size [0.01..0.1] (individual particle size)
+function mapParticleSizeUiToInternal(ui: number): number {
+    const clamped = Math.max(0.1, Math.min(1, ui))
+    return mapLinear(clamped, 0.1, 1.0, 0.01, 0.1)
+}
+
+// Cursor Strength: UI [0..1] → force multiplier [0..15]
+// Default 0.3 maps to 4.5 (stronger default behavior)
+// Maximum strength (1.0) creates a much larger void around cursor
+function mapCursorStrengthUiToMultiplier(ui: number): number {
+    const clamped = Math.max(0, Math.min(1, ui))
+    return mapLinear(clamped, 0, 1.0, 0, 15)
+}
+
+// Cursor interaction constants (from ref.tsx)
+const CURSOR_PHYSICS = {
+    RETURN_FORCE: 0.015, // Balanced for smooth return after click scatter
+    FRICTION: 0.94, // Slightly higher friction for smoother decay
+} as const
+
 /**
- * @framerSupportedLayoutWidth fixed
- * @framerSupportedLayoutHeight fixed
- * @framerIntrinsicWidth 675
- * @framerIntrinsicHeight 675
+ * @framerSupportedLayoutWidth any-prefer-fixed
+ * @framerSupportedLayoutHeight any-prefer-fixed
+ * @framerIntrinsicWidth 400
+ * @framerIntrinsicHeight 400
  * @framerDisableUnlink
  */
-export default function ParticleSphere(props: ParticleSphereProps) {
-    const {
-        preview = false,
-        particleCount = 2000,
-        particleSize = 3,
-        particleColor = "#757575",
-        speed = 1,
-        cursorRadius = 150,
-        clickEffect = "scatter",
-        clickForce = 10,
-        mouseoverColor = "#FF5588",
-        colorDuration = 1000,
-        enableTrails = true,
-        trailLength = 10,
-        trailOpacity = 0.5,
-        style,
-    } = props
-
+export default function ParticleSphereRefactor({
+    preview = false,
+    particlesCount = 1000,
+    speed = 0.5,
+    smoothing = 1,
+    scale = 0.5,
+    stopOnHover = true,
+    rotationDirection = "clockwise",
+    dragSpeed = 0.5,
+    drag = true,
+    particles: particlesConfig = { scale: 0.5, shape: "sphere" },
+    cursorConfig = { enabled: true, radius: 150, strength: 0.3, clickForce: 10 },
+    sphereColor = "#ffffff",
+    style,
+}: ParticleSphereRefactorProps) {
     const containerRef = useRef<HTMLDivElement>(null)
+    const zoomProbeRef = useRef<HTMLDivElement>(null)
     const sceneRef = useRef<any>(null)
     const cameraRef = useRef<any>(null)
     const rendererRef = useRef<any>(null)
-    const pointsRef = useRef<any>(null)
-    const geometryRef = useRef<any>(null)
-    const materialRef = useRef<any>(null)
-    const mouseRef = useRef({ x: 0, y: 0 })
-    const trailIndexRef = useRef(0)
-    const particlesRef = useRef<
-        Array<{
-            x: number
-            y: number
-            z: number
-            vx: number
-            vy: number
-            vz: number
-            baseX: number
-            baseY: number
-            baseZ: number
-            color: any
-            colorTimer: number
-            trail: Array<{
-                x: number
-                y: number
-                z: number
-                size: number
-                opacity: number
-            }>
-        }>
-    >([])
-    const animationFrameRef = useRef<number>()
-    const resizeRafRef = useRef<number>()
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    const isStatic = typeof window === "undefined" || RenderTarget.current() === RenderTarget.thumbnail
-    const lastTimeRef = useRef<number>(0)
-    const lastResizeRef = useRef({ w: 0, h: 0, aspect: 0, ts: 0 })
+    const particlesRef = useRef<any>(null)
+    const particlesGroupRef = useRef<any>(null)
+    const animationFrameRef = useRef<number | null>(null)
+    const animateFnRef = useRef<(() => void) | null>(null)
+    const startAnimationRef = useRef<(() => void) | null>(null)
+    const lastResizeRef = useRef({ ts: 0, zoom: 0, w: 0, h: 0, aspect: 0 })
+    const mouseRef = useRef<{ x: number; y: number } | null>(null)
+    const baseParticlePositionsRef = useRef<any[]>([])
+    const particleDisplacementsRef = useRef<any[]>([])
+    const particleScatterVelocitiesRef = useRef<any[]>([])
 
-    // Refs for live prop updates (don't trigger re-initialization)
-    const speedRef = useRef(speed)
-    const particleSizeRef = useRef(particleSize)
-    const particleColorRef = useRef(particleColor)
-    const cursorRadiusRef = useRef(cursorRadius)
-    const clickForceRef = useRef(clickForce)
-    const mouseoverColorRef = useRef(mouseoverColor)
-    const colorDurationRef = useRef(colorDuration)
-    const trailOpacityRef = useRef(trailOpacity)
-    const clickEffectRef = useRef(clickEffect)
-    const enableTrailsRef = useRef(enableTrails)
-
-    // Update refs when props change (live updates without re-initialization)
-    useEffect(() => {
-        speedRef.current = speed
-    }, [speed])
-
-    useEffect(() => {
-        particleSizeRef.current = particleSize
-    }, [particleSize])
-
-    useEffect(() => {
-        particleColorRef.current = particleColor
-    }, [particleColor])
-
-    useEffect(() => {
-        cursorRadiusRef.current = cursorRadius
-    }, [cursorRadius])
-
-    useEffect(() => {
-        clickForceRef.current = clickForce
-    }, [clickForce])
-
-    useEffect(() => {
-        mouseoverColorRef.current = mouseoverColor
-    }, [mouseoverColor])
-
-    useEffect(() => {
-        colorDurationRef.current = colorDuration
-    }, [colorDuration])
-
-    useEffect(() => {
-        trailOpacityRef.current = trailOpacity
-    }, [trailOpacity])
-
-    useEffect(() => {
-        clickEffectRef.current = clickEffect
-    }, [clickEffect])
-
-    useEffect(() => {
-        enableTrailsRef.current = enableTrails
-    }, [enableTrails])
-
-    // Pre-calculate rotation for a point in 3D space
-    const rotatePoint3D = (
-        baseX: number,
-        baseY: number,
-        baseZ: number,
-        time: number
-    ) => {
-        // X-Z rotation
-        const cosTimeX = Math.cos(time)
-        const sinTimeX = Math.sin(time)
-        const rotatedX = baseX * cosTimeX - baseZ * sinTimeX
-        const rotatedZ = baseX * sinTimeX + baseZ * cosTimeX
-
-        // Y rotation
-        const timeY = time * ANIMATION.ROTATION_SPEED_Y
-        const cosTimeY = Math.cos(timeY)
-        const sinTimeY = Math.sin(timeY)
-        const rotatedY = baseY * cosTimeY - rotatedZ * sinTimeY
-        const finalZ = baseY * sinTimeY + rotatedZ * cosTimeY
-
-        return { x: rotatedX, y: rotatedY, z: finalZ }
+    // Check canvas mode ONCE at component mount and cache it
+    const isCanvasRef = useRef<boolean | null>(null)
+    if (isCanvasRef.current === null) {
+        isCanvasRef.current = RenderTarget.current() === RenderTarget.canvas
     }
+    const isCanvas = isCanvasRef.current
 
-    // Parse hex color to Three.js Color
-    const parseColor = (hex: string): any => {
-        const color = new Color(hex)
-        return color
-    }
+    // Ref for preview - only matters in canvas mode
+    const previewRef = useRef(preview)
 
-    // Initialize Three.js scene
-    const initScene = () => {
+    // Update previewRef ONLY when in canvas mode
+    const previewForRefUpdate = isCanvas ? preview : false
+    useEffect(() => {
+        if (isCanvas) {
+            previewRef.current = preview
+        }
+    }, [previewForRefUpdate, isCanvas])
+
+    // Map UI speed to internal speed
+    const rotationSpeed = React.useMemo(() => {
+        const baseSpeed = mapSpeedUiToInternal(speed)
+        return rotationDirection === "anticlockwise" ? -baseSpeed : baseSpeed
+    }, [speed, rotationDirection])
+
+    // Map UI scale to internal scale multiplier (overall sphere size)
+    const scaleMultiplier = React.useMemo(
+        () => mapScaleUiToMultiplier(scale),
+        [scale]
+    )
+
+    // Map UI particle size to internal particle size
+    const particleSize = React.useMemo(
+        () => mapParticleSizeUiToInternal(particlesConfig.scale),
+        [particlesConfig.scale]
+    )
+
+    // Cursor radius in pixels (clamped to reasonable range)
+    const cursorRadius = React.useMemo(
+        () => Math.max(0, Math.min(600, cursorConfig.radius)),
+        [cursorConfig.radius]
+    )
+
+    // Map UI cursor strength to force multiplier
+    const cursorStrength = React.useMemo(
+        () => mapCursorStrengthUiToMultiplier(cursorConfig.strength),
+        [cursorConfig.strength]
+    )
+
+    useEffect(() => {
         if (!containerRef.current) return
 
         const container = containerRef.current
-        const width = container.clientWidth || container.offsetWidth || 1
-        const height = container.clientHeight || container.offsetHeight || 1
-        const size = Math.min(width, height)
-        const dpr = Math.min(window.devicePixelRatio || 1, 2)
+        const containerWidth =
+            container.clientWidth || container.offsetWidth || 400
+        const containerHeight =
+            container.clientHeight || container.offsetHeight || 400
 
-        // Create scene
+        // Scene setup
         const scene = new Scene()
         sceneRef.current = scene
 
-        // Create camera
-        const camera = new PerspectiveCamera(75, size / size, 0.1, 2000)
-        camera.position.z = 600
+        const camera = new PerspectiveCamera(
+            50,
+            containerWidth / containerHeight,
+            0.1,
+            1000
+        )
+        // Base camera distance - keep it relatively fixed so sphere appears bigger when scaled
+        // The sphere radius is 1.0 * scaleMultiplier, so we need camera at least at that distance + margin
+        const baseCameraDistance = 3.0
+        const currentSphereRadius = 1.0 * scaleMultiplier
+        // Ensure camera is always outside the sphere with a safe margin
+        const cameraDistance = Math.max(
+            baseCameraDistance,
+            currentSphereRadius + 1.0
+        )
+        camera.position.z = cameraDistance
         cameraRef.current = camera
 
-        // Create renderer
-        const renderer = new WebGLRenderer({ alpha: true, antialias: true })
-        renderer.setSize(size * dpr, size * dpr, false)
-        renderer.setPixelRatio(1)
-        renderer.domElement.style.width = `${size}px`
-        renderer.domElement.style.height = `${size}px`
-        renderer.domElement.style.display = "block"
-        renderer.domElement.style.aspectRatio = "1 / 1"
-        renderer.domElement.style.objectFit = "contain"
-        container.appendChild(renderer.domElement)
+        // Renderer setup
+        const renderer = new WebGLRenderer({ antialias: true, alpha: true })
+        renderer.setSize(containerWidth, containerHeight)
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+        renderer.outputColorSpace = "srgb"
+        const canvas = renderer.domElement
+        canvas.style.position = "absolute"
+        canvas.style.inset = "0"
+        canvas.style.width = "100%"
+        canvas.style.height = "100%"
+        canvas.style.display = "block"
+        container.appendChild(canvas)
         rendererRef.current = renderer
 
-        // Create particle system
-            initParticles()
+        // Parse color
+        const colorObj = new Color(sphereColor)
+
+        // Create particles evenly distributed on sphere surface
+        const vertices = []
+
+        // Fibonacci sphere distribution for even spacing on sphere surface
+        // This creates evenly distributed points on a unit sphere
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5)) // Golden angle in radians
+        const baseSphereRadius = 1.0 // Base radius of the particle sphere
+        const sphereRadius = baseSphereRadius * scaleMultiplier // Scale the sphere
+
+        // Initialize base positions, displacements, and scatter velocities for cursor interaction
+        baseParticlePositionsRef.current = []
+        particleDisplacementsRef.current = []
+        particleScatterVelocitiesRef.current = []
+
+        // Resolve color tokens (CSS variables) and parse color properly
+        const resolvedSphereColor = resolveTokenColor(sphereColor)
+        const baseColorObj = resolvedSphereColor
+            ? new Color(resolvedSphereColor)
+            : new Color(1, 1, 1)
+
+        // Red color for displaced particles
+        const redColor = new Color(1, 0, 0)
+
+        for (let i = 0; i < particlesCount; i++) {
+            // Use golden angle spiral for even distribution
+            const y = 1 - (i / (particlesCount - 1)) * 2 // y goes from 1 to -1
+            const radius = Math.sqrt(1 - y * y) // Radius at y
+            const theta = goldenAngle * i // Golden angle increment
+
+            const x = Math.cos(theta) * radius
+            const z = Math.sin(theta) * radius
+
+            // Scale to sphere surface with scale multiplier
+            const posX = x * sphereRadius
+            const posY = y * sphereRadius
+            const posZ = z * sphereRadius
+            vertices.push(posX, posY, posZ)
+
+            // Store base position and initialize displacement and scatter velocity
+            baseParticlePositionsRef.current.push(new Vector3(posX, posY, posZ))
+            particleDisplacementsRef.current.push(new Vector3(0, 0, 0))
+            particleScatterVelocitiesRef.current.push(new Vector3(0, 0, 0))
         }
 
-    // Initialize particles
-        const initParticles = () => {
-        if (!sceneRef.current || !cameraRef.current) return
+        // Create particles based on shape
+        const particleShape = particlesConfig.shape || "sphere"
+        let particles: any
 
-            const shouldRecreate = particlesRef.current.length !== particleCount
+        if (particleShape === "sphere") {
+            // Round particles using actual sphere geometries with InstancedMesh
+            // Convert screen-space particle size to world-space radius to match visual size
+            const sphereRadius = particleSize * 0.15 // Adjust this factor to match visual size
+            const sphereGeometry = new SphereGeometry(sphereRadius, 8, 8)
+            // Use MeshBasicMaterial with AdditiveBlending for the glow effect
+            const sphereMaterial = new MeshBasicMaterial({
+                color: 0xffffff,
+                blending: AdditiveBlending,
+                transparent: true,
+            })
 
-        // Always recreate particles array to ensure it matches particleCount
-                particlesRef.current = []
-            trailIndexRef.current = 0
+            particles = new InstancedMesh(
+                sphereGeometry,
+                sphereMaterial,
+                particlesCount
+            )
 
-        const radius = 200
-        const initialTime = performance.now() * 0.0005 * speedRef.current
+            // Set positions for each instance
+            const matrix = new Matrix4()
+            for (let i = 0; i < particlesCount; i++) {
+                const idx = i * 3
+                matrix.setPosition(
+                    vertices[idx],
+                    vertices[idx + 1],
+                    vertices[idx + 2]
+                )
+                particles.setMatrixAt(i, matrix)
+            }
+            particles.instanceMatrix.needsUpdate = true
 
-        // Create geometry - always create new geometry to match particle count
-        const geometry = new BufferGeometry()
-        const positions = new Float32Array(particleCount * 3)
-        const colors = new Float32Array(particleCount * 3)
-        const sizes = new Float32Array(particleCount)
-        const opacities = new Float32Array(particleCount)
+            // Set up instance colors (per-instance coloring)
+            const instanceColors = new Float32Array(particlesCount * 3)
+            for (let i = 0; i < particlesCount; i++) {
+                const idx = i * 3
+                instanceColors[idx] = baseColorObj.r
+                instanceColors[idx + 1] = baseColorObj.g
+                instanceColors[idx + 2] = baseColorObj.b
+            }
+            particles.instanceColor = new Float32BufferAttribute(
+                instanceColors,
+                3
+            )
+            sphereMaterial.vertexColors = false
+            particles.instanceColor.needsUpdate = true
+        } else {
+            // Square particles using Points
+            const particlesGeometry = new BufferGeometry()
+            particlesGeometry.setAttribute(
+                "position",
+                new Float32BufferAttribute(vertices, 3)
+            )
 
-        const baseColor = parseColor(particleColorRef.current)
+            // Set up vertex colors (per-vertex coloring)
+            const colors = new Float32Array(particlesCount * 3)
+            for (let i = 0; i < particlesCount; i++) {
+                const idx = i * 3
+                colors[idx] = baseColorObj.r
+                colors[idx + 1] = baseColorObj.g
+                colors[idx + 2] = baseColorObj.b
+            }
+            particlesGeometry.setAttribute(
+                "color",
+                new Float32BufferAttribute(colors, 3)
+            )
 
-            for (let i = 0; i < particleCount; i++) {
-            // Fibonacci sphere distribution
-                const phi = Math.acos(1 - (2 * (i + 0.5)) / particleCount)
-                const theta = Math.PI * (1 + Math.sqrt(5)) * i
+            const particlesMaterial = new PointsMaterial({
+                size: particleSize,
+                color: baseColorObj,
+                blending: AdditiveBlending,
+                depthTest: false,
+                transparent: true,
+                vertexColors: true, // Enable vertex colors
+            })
 
-                const baseX = radius * Math.sin(phi) * Math.cos(theta)
-                const baseY = radius * Math.sin(phi) * Math.sin(theta)
-                const baseZ = radius * Math.cos(phi)
+            particles = new Points(particlesGeometry, particlesMaterial)
+        }
 
-            // Initialize at rotated position so all particles are moving from the start
-                const rotated = rotatePoint3D(baseX, baseY, baseZ, initialTime)
+        particlesRef.current = particles
 
-            const idx = i * 3
-            positions[idx] = rotated.x
-            positions[idx + 1] = rotated.y
-            positions[idx + 2] = rotated.z
+        // Create group to hold particles for rotation
+        const particlesGroup = new Group()
+        particlesGroupRef.current = particlesGroup
+        particlesGroup.add(particles)
+        scene.add(particlesGroup)
 
-            colors[idx] = baseColor.r
-            colors[idx + 1] = baseColor.g
-            colors[idx + 2] = baseColor.b
+        // Rotation state - initialize
+        const rotation = { x: 0, y: 0 }
+        const targetRotation = { x: 0, y: 0 }
+        const velocity = { x: 0, y: 0 }
+        let isDragging = false
+        let isHovering = false
+        let lastMouseX = 0
+        let lastMouseY = 0
+        let lastDragTime = 0
+        let animationFrameId: number | null = null
 
-            // Depth-based size and opacity
-            const depthScale = (rotated.z + 400) / 800
-            sizes[i] = particleSizeRef.current * depthScale
-            opacities[i] = PHYSICS.MIN_OPACITY + PHYSICS.OPACITY_RANGE * depthScale
+        // Delta time tracking for frame-rate independent animation
+        let lastFrameTime = performance.now()
+        const targetDeltaTime = 1000 / 60 // Reference delta time (60 FPS = 16.67ms)
 
-            // Always create new particle
-                    const trail = new Array(trailLength)
-                    for (let j = 0; j < trailLength; j++) {
-                trail[j] = { x: 0, y: 0, z: 0, size: 0, opacity: 0 }
+        // Lerp factor: smoothing 0 = instant (factor=1), smoothing 1 = very smooth (factor=0.03)
+        const lerpFactor =
+            smoothing === 0 ? 1 : mapLinear(smoothing, 0, 1, 0.4, 0.03)
+        // Velocity decay for throw: higher smoothing = more momentum
+        const velocityDecay = mapLinear(smoothing, 0, 1, 0.7, 0.96)
+
+        // Animation loop - uses cached isCanvas value for performance
+        const animate = () => {
+            // Continue with animation (component should always render to show changes)
+            animateCore()
+        }
+
+        // Core animation logic - uses delta time for frame-rate independent animation
+        const animateCore = () => {
+            const now = performance.now()
+
+            // Calculate delta time and normalize it relative to 60 FPS
+            const deltaTime = now - lastFrameTime
+            lastFrameTime = now
+            const deltaFactor = deltaTime / targetDeltaTime
+
+            let needsRender = false
+            const threshold = 0.01
+
+            // Auto-rotation: add to target when not dragging and not hovering
+            // In canvas mode, only rotate when preview is on
+            const canAutoRotate = isCanvas
+                ? previewRef.current
+                : true
+            if (
+                !isDragging &&
+                rotationSpeed !== 0 &&
+                canAutoRotate &&
+                (!stopOnHover || !isHovering)
+            ) {
+                targetRotation.x += rotationSpeed * 0.1 * deltaFactor
+            }
+
+            // Apply throw velocity when not dragging
+            if (!isDragging && smoothing > 0) {
+                if (
+                    Math.abs(velocity.x) > threshold ||
+                    Math.abs(velocity.y) > threshold
+                ) {
+                    targetRotation.x += velocity.x * deltaFactor
+                    targetRotation.y += velocity.y * deltaFactor
+                    targetRotation.y = Math.max(
+                        -Math.PI / 2,
+                        Math.min(Math.PI / 2, targetRotation.y)
+                    )
+                    const decayFactor = Math.pow(velocityDecay, deltaFactor)
+                    velocity.x *= decayFactor
+                    velocity.y *= decayFactor
+                } else {
+                    velocity.x = 0
+                    velocity.y = 0
+                }
+            }
+
+            // Lerp current rotation toward target
+            const dx = targetRotation.x - rotation.x
+            const dy = targetRotation.y - rotation.y
+
+            if (
+                Math.abs(dx) > threshold ||
+                Math.abs(dy) > threshold ||
+                rotationSpeed !== 0 ||
+                isDragging
+            ) {
+                const timeLerpFactor = 1 - Math.pow(1 - lerpFactor, deltaFactor)
+                rotation.x += dx * timeLerpFactor
+                rotation.y += dy * timeLerpFactor
+                rotation.y = Math.max(
+                    -Math.PI / 2,
+                    Math.min(Math.PI / 2, rotation.y)
+                )
+                needsRender = true
+            }
+
+            // Apply rotation to group BEFORE cursor interaction (so matrix is current)
+            particlesGroup.rotation.y = rotation.x
+            particlesGroup.rotation.x = rotation.y
+            particlesGroup.updateMatrixWorld(true)
+
+            // Get container and camera info for both cursor interaction and color updates
+            const containerWidth = containerRef.current?.clientWidth || 400
+            const containerHeight = containerRef.current?.clientHeight || 400
+            const currentCamera = cameraRef.current
+            const cursorRadiusSquared = cursorRadius * cursorRadius
+
+            // Apply cursor repulsion to particles (only if enabled)
+            if (
+                cursorConfig.enabled &&
+                baseParticlePositionsRef.current.length > 0
+            ) {
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+
+                    // Apply repulsion force only if cursor is present and near particle
+                    if (mouseRef.current) {
+                        const mouse = mouseRef.current
+
+                        // Calculate current position: base position + displacement, then rotated by group
+                        const currentLocalPos = new Vector3()
+                        currentLocalPos.copy(basePos)
+                        currentLocalPos.add(displacement)
+
+                        // Transform to world space (apply group rotation)
+                        const worldPos = new Vector3()
+                        worldPos.copy(currentLocalPos)
+                        worldPos.applyMatrix4(particlesGroup.matrixWorld)
+
+                        // Project 3D position to 2D screen space
+                        const projected = worldPos
+                            .clone()
+                            .project(currentCamera)
+                        const screenX =
+                            (projected.x * 0.5 + 0.5) * containerWidth
+                        const screenY =
+                            (-projected.y * 0.5 + 0.5) * containerHeight
+
+                        // Calculate distance from cursor to particle in screen space
+                        const dx = mouse.x - screenX
+                        const dy = mouse.y - screenY
+                        const distanceSquared = dx * dx + dy * dy
+
+                        if (
+                            distanceSquared < cursorRadiusSquared &&
+                            distanceSquared > 0
+                        ) {
+                            // Apply repulsion force
+                            const distance = Math.sqrt(distanceSquared)
+                            const force =
+                                (cursorRadius - distance) / cursorRadius
+                            const angle = Math.atan2(dy, dx)
+
+                            // Get camera's right and up vectors in world space
+                            const cameraRight = new Vector3()
+                            const cameraUp = new Vector3()
+                            cameraRight
+                                .setFromMatrixColumn(
+                                    currentCamera.matrixWorld,
+                                    0
+                                )
+                                .normalize()
+                            cameraUp
+                                .setFromMatrixColumn(
+                                    currentCamera.matrixWorld,
+                                    1
+                                )
+                                .normalize()
+
+                            // Calculate repulsion direction in screen space
+                            const repulsion2D =
+                                force * cursorStrength * speed * deltaFactor
+                            const repulsionX =
+                                -Math.cos(angle) * repulsion2D * 0.01
+                            const repulsionY =
+                                Math.sin(angle) * repulsion2D * 0.01
+
+                            // Convert screen space repulsion to world space, then to local space
+                            const worldRepulsion = new Vector3()
+                            worldRepulsion.addScaledVector(
+                                cameraRight,
+                                repulsionX
+                            )
+                            worldRepulsion.addScaledVector(cameraUp, repulsionY)
+
+                            // Transform world repulsion back to local space (inverse of group rotation)
+                            const localRepulsion = new Vector3()
+                            localRepulsion.copy(worldRepulsion)
+                            const inverseGroupMatrix = new Matrix4()
+                            inverseGroupMatrix
+                                .copy(particlesGroup.matrixWorld)
+                                .invert()
+                            localRepulsion.applyMatrix4(inverseGroupMatrix)
+
+                            // Apply to displacement
+                            displacement.add(localRepulsion)
+                        }
                     }
 
-                    particlesRef.current.push({
-                x: rotated.x,
-                y: rotated.y,
-                        z: rotated.z,
-                        vx: 0,
-                        vy: 0,
-                        vz: 0,
-                        baseX: baseX,
-                        baseY: baseY,
-                        baseZ: baseZ,
-                color: baseColor.clone(),
-                        colorTimer: 0,
-                        trail: trail,
-                    })
-        }
-
-        geometry.setAttribute("position", new BufferAttribute(positions, 3))
-        geometry.setAttribute("color", new BufferAttribute(colors, 3))
-        geometry.setAttribute("size", new BufferAttribute(sizes, 1))
-        geometry.setAttribute("opacity", new BufferAttribute(opacities, 1))
-
-        // Shader material for particles
-        const material = new ShaderMaterial({
-            uniforms: {
-                enableTrails: { value: enableTrailsRef.current ? 1.0 : 0.0 },
-                trailOpacity: { value: trailOpacityRef.current },
-            },
-            vertexShader: `
-                attribute float size;
-                attribute float opacity;
-                varying vec3 vColor;
-                varying float vOpacity;
-                
-                void main() {
-                    vColor = color;
-                    vOpacity = opacity;
-                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = size * (300.0 / -mvPosition.z);
-                    gl_Position = projectionMatrix * mvPosition;
-                }
-            `,
-            fragmentShader: `
-                varying vec3 vColor;
-                varying float vOpacity;
-                
-                void main() {
-                    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
-                    float alpha = 1.0 - smoothstep(0.0, 0.5, distanceToCenter);
-                    gl_FragColor = vec4(vColor, alpha * vOpacity);
-                }
-            `,
-            vertexColors: true,
-            transparent: true,
-            depthWrite: false,
-        })
-
-        materialRef.current = material
-
-        // Remove old points if exists and dispose properly
-        if (pointsRef.current) {
-            sceneRef.current.remove(pointsRef.current)
-            if (geometryRef.current) {
-                geometryRef.current.dispose()
-            }
-            if (materialRef.current) {
-                materialRef.current.dispose()
-            }
-        }
-
-        const points = new Points(geometry, material)
-        pointsRef.current = points
-        geometryRef.current = geometry
-        sceneRef.current.add(points)
-    }
-
-    // Update particle positions and attributes
-    const updateParticles = (deltaTime: number, currentTime: number) => {
-        if (!geometryRef.current || !materialRef.current || !cameraRef.current) return
-        if (particlesRef.current.length === 0) return
-
-        const geometry = geometryRef.current
-        const material = materialRef.current
-        const positions = geometry.attributes.position as any
-        const colors = geometry.attributes.color as any
-        const sizes = geometry.attributes.size as any
-        const opacities = geometry.attributes.opacity as any
-
-        // Ensure geometry matches particle count
-        if (positions.count !== particlesRef.current.length) {
-            return // Geometry will be recreated on next init
-        }
-
-        const mouse = mouseRef.current
-        const time = currentTime * 0.0005 * speedRef.current
-        const cursorRadiusSquared = cursorRadiusRef.current * cursorRadiusRef.current
-
-        // Update uniforms
-        material.uniforms.enableTrails.value = enableTrailsRef.current ? 1.0 : 0.0
-        material.uniforms.trailOpacity.value = trailOpacityRef.current
-
-        // Convert mouse position to 3D space
-        const container = containerRef.current
-        if (!container) return
-        const width = container.clientWidth || container.offsetWidth || 1
-        const height = container.clientHeight || container.offsetHeight || 1
-        const size = Math.min(width, height)
-        const mouseX = ((mouse.x / size) * 2 - 1) * 300
-        const mouseY = (-(mouse.y / size) * 2 + 1) * 300
-
-        // Update ALL particles - ensure we iterate over all of them
-        const particleCount = Math.min(particlesRef.current.length, positions.count)
-        for (let i = 0; i < particleCount; i++) {
-                    const particle = particlesRef.current[i]
-            if (!particle) continue
-            // Rotate particle in 3D space
-            const rotated = rotatePoint3D(
-                particle.baseX,
-                particle.baseY,
-                particle.baseZ,
-                time
-            )
-
-            // Mouse interaction
-            const dx = mouseX - particle.x
-            const dy = mouseY - particle.y
-            const distanceSquared = dx * dx + dy * dy
-
-            if (distanceSquared < cursorRadiusSquared) {
-                const distance = Math.sqrt(distanceSquared)
-                const force = (cursorRadiusRef.current - distance) / cursorRadiusRef.current
-                const angle = Math.atan2(dy, dx)
-                particle.vx -=
-                    Math.cos(angle) *
-                    force *
-                    speedRef.current *
-                    PHYSICS.CURSOR_FORCE_MULTIPLIER
-                particle.vy -=
-                    Math.sin(angle) *
-                    force *
-                    speedRef.current *
-                    PHYSICS.CURSOR_FORCE_MULTIPLIER
-
-                // Apply mouseover color effect
-                if (clickEffectRef.current === "color" || clickEffectRef.current === "both") {
-                    particle.color = parseColor(mouseoverColorRef.current)
-                    particle.colorTimer = colorDurationRef.current
+                    // Always apply friction and return force to decay displacements (even when cursor is gone)
+                    const frictionFactor = Math.pow(
+                        CURSOR_PHYSICS.FRICTION,
+                        deltaFactor
+                    )
+                    const returnForce =
+                        CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
+                    // Apply friction (multiplicative decay)
+                    displacement.multiplyScalar(frictionFactor)
+                    // Apply return force (decay towards zero)
+                    displacement.multiplyScalar(1 - returnForce)
                 }
             }
 
-            // Return to base position
-            const returnForce = PHYSICS.RETURN_FORCE * speedRef.current
-            particle.vx += (rotated.x - particle.x) * returnForce
-            particle.vy += (rotated.y - particle.y) * returnForce
-            particle.vz += (rotated.z - particle.z) * returnForce
+            // Apply scatter velocities to displacements (spring-like effect)
+            if (particleScatterVelocitiesRef.current.length > 0) {
+                for (
+                    let i = 0;
+                    i < particleScatterVelocitiesRef.current.length;
+                    i++
+                ) {
+                    const scatterVelocity = particleScatterVelocitiesRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
 
-            // Apply friction
-            particle.vx *= PHYSICS.FRICTION
-            particle.vy *= PHYSICS.FRICTION
-            particle.vz *= PHYSICS.FRICTION
+                    // Apply velocity to displacement (frame-rate independent)
+                    displacement.addScaledVector(scatterVelocity, deltaFactor * 0.1)
 
-            particle.x += particle.vx
-            particle.y += particle.vy
-            particle.z += particle.vz
+                    // Apply friction to scatter velocity (decay over time)
+                    const scatterFriction = Math.pow(0.95, deltaFactor)
+                    scatterVelocity.multiplyScalar(scatterFriction)
 
-            // Handle color timer
-            if (particle.colorTimer > 0) {
-                particle.colorTimer -= deltaTime * 1000
-                if (particle.colorTimer <= 0) {
-                    particle.color = parseColor(particleColorRef.current)
+                    // Apply return force to scatter velocity (spring back)
+                    const scatterReturnForce = CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
+                    scatterVelocity.multiplyScalar(1 - scatterReturnForce)
                 }
             }
 
-            // Update attributes
-            const idx = i * 3
-            positions.setXYZ(idx, particle.x, particle.y, particle.z)
-            colors.setXYZ(idx, particle.color.r, particle.color.g, particle.color.b)
+            // Update particle positions and colors (ALWAYS, not just when cursor is enabled)
+            const particleShape = particlesConfig.shape || "sphere"
 
-            // Depth-based size and opacity
-            const depthScale = (particle.z + 400) / 800
-            sizes.setX(i, particleSizeRef.current * depthScale)
-            opacities.setX(
-                i,
-                PHYSICS.MIN_OPACITY + PHYSICS.OPACITY_RANGE * depthScale
-            )
+            if (particleShape === "sphere" && particlesRef.current) {
+                // Update InstancedMesh positions
+                const matrix = new Matrix4()
 
-            // Update trail
-            if (enableTrailsRef.current) {
-                const currentTrailIndex = trailIndexRef.current % trailLength
-                particle.trail[currentTrailIndex] = {
-                    x: particle.x,
-                    y: particle.y,
-                    z: particle.z,
-                    size: particleSizeRef.current * depthScale,
-                    opacity:
-                        PHYSICS.MIN_OPACITY + PHYSICS.OPACITY_RANGE * depthScale,
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+                    const finalPos = new Vector3()
+                    finalPos.copy(basePos)
+                    finalPos.add(displacement)
+                    matrix.setPosition(finalPos.x, finalPos.y, finalPos.z)
+                    particlesRef.current.setMatrixAt(i, matrix)
                 }
+                particlesRef.current.instanceMatrix.needsUpdate = true
+            } else if (particleShape === "cube" && particlesRef.current) {
+                // Update Points geometry positions and colors
+                const positions =
+                    particlesRef.current.geometry.attributes.position
+
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+                    const finalPos = new Vector3()
+                    finalPos.copy(basePos)
+                    finalPos.add(displacement)
+                    positions.setXYZ(i, finalPos.x, finalPos.y, finalPos.z)
+                }
+                positions.needsUpdate = true
+            }
+
+            needsRender = true
+
+            // Render every frame
+            if (needsRender || rotationSpeed !== 0 || isDragging) {
+                renderer.render(scene, camera)
+            }
+
+            // Continue loop if animation is needed
+            const hasVelocity =
+                Math.abs(velocity.x) > threshold ||
+                Math.abs(velocity.y) > threshold
+            const hasLerpDelta =
+                Math.abs(dx) > threshold || Math.abs(dy) > threshold
+            // Check if cursor interaction is active (any non-zero displacements) - only if enabled
+            const hasCursorInteraction =
+                cursorConfig.enabled &&
+                particleDisplacementsRef.current.some(
+                    (disp) =>
+                        Math.abs(disp.x) > threshold ||
+                        Math.abs(disp.y) > threshold ||
+                        Math.abs(disp.z) > threshold
+                )
+            // In canvas mode, always continue animation so component is visible
+            // In preview/live mode, only continue if there's actual animation
+            const canAutoRotateForContinue = isCanvas
+                ? previewRef.current
+                : true
+            const needsContinue =
+                isCanvas || // Always run in canvas mode for visibility
+                isDragging ||
+                (rotationSpeed !== 0 && canAutoRotateForContinue) ||
+                hasVelocity ||
+                hasLerpDelta ||
+                hasCursorInteraction
+
+            if (needsContinue) {
+                animationFrameId = requestAnimationFrame(animate)
+                animationFrameRef.current = animationFrameId
+            } else {
+                animationFrameId = null
+                animationFrameRef.current = null
             }
         }
 
-        positions.needsUpdate = true
-        colors.needsUpdate = true
-        sizes.needsUpdate = true
-        opacities.needsUpdate = true
+        // Store animate function in ref for preview effect to use
+        animateFnRef.current = animate
 
-        trailIndexRef.current++
-    }
-
-    // Animation loop
-    const animate = (currentTime: number) => {
-        if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return
-
-        const deltaTime = lastTimeRef.current
-            ? (currentTime - lastTimeRef.current) / 1000
-            : 0.016
-        lastTimeRef.current = currentTime
-
-        updateParticles(deltaTime, currentTime)
-        rendererRef.current.render(sceneRef.current, cameraRef.current)
-
-        animationFrameRef.current = requestAnimationFrame(animate)
-    }
-
-    useEffect(() => {
-        if (!containerRef.current) return
-
-        const container = containerRef.current
-
-        const handleMouseMove = (e: MouseEvent) => {
-            const rect = container.getBoundingClientRect()
-            mouseRef.current = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
+        // Start animation loop - resets lastFrameTime to prevent delta jump
+        const startAnimation = () => {
+            if (animationFrameId === null) {
+                lastFrameTime = performance.now()
+                animationFrameId = requestAnimationFrame(animate)
+                animationFrameRef.current = animationFrameId
             }
         }
 
-        const handleTouchMove = (e: TouchEvent) => {
-            e.preventDefault()
-            const rect = container.getBoundingClientRect()
-            const touch = e.touches[0]
-            if (touch) {
+        // Store startAnimation in ref for preview effect to use
+        startAnimationRef.current = startAnimation
+
+        // Always start animation to ensure component is visible and interactive
+        // In canvas mode, rotation will be controlled by preview state
+        startAnimation()
+
+        // Mouse interaction handlers (only if drag is enabled)
+        const handleMouseDown = (event: MouseEvent) => {
+            if (!drag) return
+            isDragging = true
+            velocity.x = 0
+            velocity.y = 0
+            lastMouseX = event.clientX
+            lastMouseY = event.clientY
+            lastDragTime = performance.now()
+            startAnimation()
+
+            const handleMouseMove = (moveEvent: MouseEvent) => {
+                const currentTime = performance.now()
+                const timeSinceLastMove = currentTime - lastDragTime
+
+                const sensitivity = mapLinear(dragSpeed, 0, 1, 0.001, 0.02)
+                const dx = moveEvent.clientX - lastMouseX
+                const dy = moveEvent.clientY - lastMouseY
+
+                targetRotation.x += dx * sensitivity
+                targetRotation.y += dy * sensitivity
+                targetRotation.y = Math.max(
+                    -Math.PI / 2,
+                    Math.min(Math.PI / 2, targetRotation.y)
+                )
+
+                // Track velocity for throw - TIME NORMALIZED
+                if (timeSinceLastMove > 0) {
+                    const timeNormalization =
+                        targetDeltaTime / timeSinceLastMove
+                    velocity.x = dx * sensitivity * 0.3 * timeNormalization
+                    velocity.y = dy * sensitivity * 0.3 * timeNormalization
+                }
+
+                lastMouseX = moveEvent.clientX
+                lastMouseY = moveEvent.clientY
+                lastDragTime = currentTime
+            }
+
+            const handleMouseUp = () => {
+                document.removeEventListener("mousemove", handleMouseMove)
+                document.removeEventListener("mouseup", handleMouseUp)
+                isDragging = false
+            }
+
+            document.addEventListener("mousemove", handleMouseMove)
+            document.addEventListener("mouseup", handleMouseUp)
+        }
+
+        if (drag) {
+            canvas.addEventListener("mousedown", handleMouseDown)
+        }
+
+        // Handle hover to stop auto-rotation (only when cursor is over the sphere)
+        const handleMouseMoveHover = (event: MouseEvent) => {
+            if (!stopOnHover) return
+
+            // Simple check: if mouse is over canvas, consider it hovering
+            const rect = canvas.getBoundingClientRect()
+            const mouseX = event.clientX - rect.left
+            const mouseY = event.clientY - rect.top
+            isHovering =
+                mouseX >= 0 &&
+                mouseX <= rect.width &&
+                mouseY >= 0 &&
+                mouseY <= rect.height
+        }
+
+        if (stopOnHover) {
+            canvas.addEventListener("mousemove", handleMouseMoveHover)
+        }
+
+        // Track cursor position for particle repulsion
+        const handleMouseMoveCursor = (event: MouseEvent) => {
+            const rect = canvas.getBoundingClientRect()
+            const mouseX = event.clientX - rect.left
+            const mouseY = event.clientY - rect.top
+            // Only track if mouse is over canvas
+            if (
+                mouseX >= 0 &&
+                mouseX <= rect.width &&
+                mouseY >= 0 &&
+                mouseY <= rect.height
+            ) {
                 mouseRef.current = {
-                    x: touch.clientX - rect.left,
-                    y: touch.clientY - rect.top,
+                    x: mouseX,
+                    y: mouseY,
+                }
+                // Start animation if not running (needed for cursor interaction to work)
+                startAnimation()
+            } else {
+                mouseRef.current = null
+            }
+        }
+
+        const handleMouseLeaveCursor = () => {
+            mouseRef.current = null
+        }
+
+        // Track touch position for particle repulsion
+        const handleTouchMove = (event: TouchEvent) => {
+            event.preventDefault() // Prevent scrolling
+            const rect = canvas.getBoundingClientRect()
+            const touch = event.touches[0]
+            if (touch) {
+                const touchX = touch.clientX - rect.left
+                const touchY = touch.clientY - rect.top
+                // Only track if touch is over canvas
+                if (
+                    touchX >= 0 &&
+                    touchX <= rect.width &&
+                    touchY >= 0 &&
+                    touchY <= rect.height
+                ) {
+                    mouseRef.current = {
+                        x: touchX,
+                        y: touchY,
+                    }
+                    // Start animation if not running (needed for cursor interaction to work)
+                    startAnimation()
+                } else {
+                    mouseRef.current = null
                 }
             }
         }
 
-        const handleClick = (e: MouseEvent) => {
-            const rect = container.getBoundingClientRect()
-            const clickX = e.clientX - rect.left
-            const clickY = e.clientY - rect.top
-            const width = container.clientWidth || container.offsetWidth || 1
-            const height = container.clientHeight || container.offsetHeight || 1
-            const size = Math.min(width, height)
-            const mouseX = ((clickX / size) * 2 - 1) * 300
-            const mouseY = (-(clickY / size) * 2 + 1) * 300
-            const cursorRadiusSquared = cursorRadiusRef.current * cursorRadiusRef.current
+        const handleTouchEnd = () => {
+            mouseRef.current = null
+        }
 
-            particlesRef.current.forEach((particle) => {
-                const dx = mouseX - particle.x
-                const dy = mouseY - particle.y
+        // Click scatter effect handler
+        const handleClick = (event: MouseEvent) => {
+            if (!cursorConfig.enabled || !cursorConfig.clickForce) return
+
+            // Update matrix to ensure it's current
+            particlesGroup.updateMatrixWorld(true)
+
+            const rect = canvas.getBoundingClientRect()
+            const clickX = event.clientX - rect.left
+            const clickY = event.clientY - rect.top
+            const cursorRadiusSquared = cursorRadius * cursorRadius
+            const clickForce = cursorConfig.clickForce || 10
+
+            const containerWidth = containerRef.current?.clientWidth || 400
+            const containerHeight = containerRef.current?.clientHeight || 400
+            const currentCamera = cameraRef.current
+
+            // Convert click point from screen space to 3D world space
+            // Normalize click coordinates to NDC (Normalized Device Coordinates)
+            const ndcX = (clickX / containerWidth) * 2 - 1
+            const ndcY = 1 - (clickY / containerHeight) * 2
+
+            // Create a ray from camera through the click point
+            const clickRay = new Vector3(ndcX, ndcY, 0.5)
+            clickRay.unproject(currentCamera)
+            
+            // Get camera position in world space
+            const cameraWorldPos = new Vector3()
+            cameraWorldPos.setFromMatrixPosition(currentCamera.matrixWorld)
+            
+            // Calculate direction from camera through click point
+            const clickDirection = new Vector3()
+            clickDirection.subVectors(clickRay, cameraWorldPos).normalize()
+            
+            // Estimate click point in world space (at sphere distance)
+            const sphereCenter = new Vector3(0, 0, 0)
+            const cameraToCenter = new Vector3()
+            cameraToCenter.subVectors(sphereCenter, cameraWorldPos)
+            const sphereDistance = cameraToCenter.length()
+            const clickWorldPos = new Vector3()
+            clickWorldPos.copy(cameraWorldPos)
+            clickWorldPos.addScaledVector(clickDirection, sphereDistance)
+
+            // Apply scatter velocity to particles (velocity-based, radial in 3D)
+            for (
+                let i = 0;
+                i < baseParticlePositionsRef.current.length;
+                i++
+            ) {
+                const basePos = baseParticlePositionsRef.current[i]
+                const displacement = particleDisplacementsRef.current[i]
+                const scatterVelocity = particleScatterVelocitiesRef.current[i]
+
+                // Calculate current position: base position + displacement, then rotated by group
+                const currentLocalPos = new Vector3()
+                currentLocalPos.copy(basePos)
+                currentLocalPos.add(displacement)
+
+                // Transform to world space (apply group rotation)
+                const worldPos = new Vector3()
+                worldPos.copy(currentLocalPos)
+                worldPos.applyMatrix4(particlesGroup.matrixWorld)
+
+                // Project 3D position to 2D screen space for distance check
+                const projected = worldPos
+                    .clone()
+                    .project(currentCamera)
+                const screenX =
+                    (projected.x * 0.5 + 0.5) * containerWidth
+                const screenY =
+                    (-projected.y * 0.5 + 0.5) * containerHeight
+
+                // Calculate distance from click point to particle in screen space
+                const dx = clickX - screenX
+                const dy = clickY - screenY
                 const distanceSquared = dx * dx + dy * dy
 
-                if (distanceSquared < cursorRadiusSquared) {
-                    if (clickEffectRef.current === "scatter" || clickEffectRef.current === "both") {
-                        const distance = Math.sqrt(distanceSquared)
-                        const angle = Math.atan2(dy, dx)
-                        const force =
-                            ((cursorRadiusRef.current - distance) / cursorRadiusRef.current) *
-                            clickForceRef.current
-                        particle.vx -= Math.cos(angle) * force
-                        particle.vy -= Math.sin(angle) * force
+                if (
+                    distanceSquared < cursorRadiusSquared &&
+                    distanceSquared > 0
+                ) {
+                    // Calculate scatter force based on screen distance
+                    const screenDistance = Math.sqrt(distanceSquared)
+                    const force =
+                        ((cursorRadius - screenDistance) / cursorRadius) * clickForce
+
+                    // Calculate radial direction in 3D: from click point to particle
+                    const radialDirection = new Vector3()
+                    radialDirection.subVectors(worldPos, clickWorldPos)
+                    const radialDistance = radialDirection.length()
+                    
+                    if (radialDistance > 0.001) {
+                        radialDirection.normalize()
+                        
+                        // Apply scatter velocity along radial direction (in world space)
+                        const scatterMagnitude = force * 0.5 // Velocity multiplier
+                        const worldScatter = new Vector3()
+                        worldScatter.copy(radialDirection)
+                        worldScatter.multiplyScalar(scatterMagnitude)
+
+                        // Transform world scatter back to local space (inverse of group rotation)
+                        const localScatter = new Vector3()
+                        localScatter.copy(worldScatter)
+                        const inverseGroupMatrix = new Matrix4()
+                        inverseGroupMatrix
+                            .copy(particlesGroup.matrixWorld)
+                            .invert()
+                        localScatter.applyMatrix4(inverseGroupMatrix)
+
+                        // Set scatter velocity (adds to existing velocity for momentum)
+                        scatterVelocity.add(localScatter)
                     }
                 }
-            })
+            }
+
+            // Start animation to ensure scatter effect is visible
+            startAnimation()
         }
 
-        const handleTouchStart = (e: TouchEvent) => {
-            const rect = container.getBoundingClientRect()
-            const touch = e.touches[0]
+        // Touch scatter effect handler
+        const handleTouchStart = (event: TouchEvent) => {
+            if (!cursorConfig.enabled || !cursorConfig.clickForce) return
+
+            event.preventDefault()
+
+            // Update matrix to ensure it's current
+            particlesGroup.updateMatrixWorld(true)
+
+            const rect = canvas.getBoundingClientRect()
+            const touch = event.touches[0]
             if (!touch) return
 
             const touchX = touch.clientX - rect.left
             const touchY = touch.clientY - rect.top
-            const width = container.clientWidth || container.offsetWidth || 1
-            const height = container.clientHeight || container.offsetHeight || 1
-            const size = Math.min(width, height)
-            const mouseX = ((touchX / size) * 2 - 1) * 300
-            const mouseY = (-(touchY / size) * 2 + 1) * 300
-            const cursorRadiusSquared = cursorRadiusRef.current * cursorRadiusRef.current
+            const cursorRadiusSquared = cursorRadius * cursorRadius
+            const clickForce = cursorConfig.clickForce || 10
 
-            particlesRef.current.forEach((particle) => {
-                const dx = mouseX - particle.x
-                const dy = mouseY - particle.y
+            const containerWidth = containerRef.current?.clientWidth || 400
+            const containerHeight = containerRef.current?.clientHeight || 400
+            const currentCamera = cameraRef.current
+
+            // Convert touch point from screen space to 3D world space
+            // Normalize touch coordinates to NDC (Normalized Device Coordinates)
+            const ndcX = (touchX / containerWidth) * 2 - 1
+            const ndcY = 1 - (touchY / containerHeight) * 2
+
+            // Create a ray from camera through the touch point
+            const touchRay = new Vector3(ndcX, ndcY, 0.5)
+            touchRay.unproject(currentCamera)
+            
+            // Get camera position in world space
+            const cameraWorldPos = new Vector3()
+            cameraWorldPos.setFromMatrixPosition(currentCamera.matrixWorld)
+            
+            // Calculate direction from camera through touch point
+            const touchDirection = new Vector3()
+            touchDirection.subVectors(touchRay, cameraWorldPos).normalize()
+            
+            // Estimate touch point in world space (at sphere distance)
+            const sphereCenter = new Vector3(0, 0, 0)
+            const cameraToCenter = new Vector3()
+            cameraToCenter.subVectors(sphereCenter, cameraWorldPos)
+            const sphereDistance = cameraToCenter.length()
+            const touchWorldPos = new Vector3()
+            touchWorldPos.copy(cameraWorldPos)
+            touchWorldPos.addScaledVector(touchDirection, sphereDistance)
+
+            // Apply scatter velocity to particles (velocity-based, radial in 3D)
+            for (
+                let i = 0;
+                i < baseParticlePositionsRef.current.length;
+                i++
+            ) {
+                const basePos = baseParticlePositionsRef.current[i]
+                const displacement = particleDisplacementsRef.current[i]
+                const scatterVelocity = particleScatterVelocitiesRef.current[i]
+
+                // Calculate current position: base position + displacement, then rotated by group
+                const currentLocalPos = new Vector3()
+                currentLocalPos.copy(basePos)
+                currentLocalPos.add(displacement)
+
+                // Transform to world space (apply group rotation)
+                const worldPos = new Vector3()
+                worldPos.copy(currentLocalPos)
+                worldPos.applyMatrix4(particlesGroup.matrixWorld)
+
+                // Project 3D position to 2D screen space for distance check
+                const projected = worldPos
+                    .clone()
+                    .project(currentCamera)
+                const screenX =
+                    (projected.x * 0.5 + 0.5) * containerWidth
+                const screenY =
+                    (-projected.y * 0.5 + 0.5) * containerHeight
+
+                // Calculate distance from touch point to particle in screen space
+                const dx = touchX - screenX
+                const dy = touchY - screenY
                 const distanceSquared = dx * dx + dy * dy
 
-                if (distanceSquared < cursorRadiusSquared) {
-                    if (clickEffectRef.current === "scatter" || clickEffectRef.current === "both") {
-                        const distance = Math.sqrt(distanceSquared)
-                        const angle = Math.atan2(dy, dx)
-                        const force =
-                            ((cursorRadiusRef.current - distance) / cursorRadiusRef.current) *
-                            clickForceRef.current
-                        particle.vx -= Math.cos(angle) * force
-                        particle.vy -= Math.sin(angle) * force
+                if (
+                    distanceSquared < cursorRadiusSquared &&
+                    distanceSquared > 0
+                ) {
+                    // Calculate scatter force based on screen distance
+                    const screenDistance = Math.sqrt(distanceSquared)
+                    const force =
+                        ((cursorRadius - screenDistance) / cursorRadius) * clickForce
+
+                    // Calculate radial direction in 3D: from touch point to particle
+                    const radialDirection = new Vector3()
+                    radialDirection.subVectors(worldPos, touchWorldPos)
+                    const radialDistance = radialDirection.length()
+                    
+                    if (radialDistance > 0.001) {
+                        radialDirection.normalize()
+                        
+                        // Apply scatter velocity along radial direction (in world space)
+                        const scatterMagnitude = force * 0.5 // Velocity multiplier
+                        const worldScatter = new Vector3()
+                        worldScatter.copy(radialDirection)
+                        worldScatter.multiplyScalar(scatterMagnitude)
+
+                        // Transform world scatter back to local space (inverse of group rotation)
+                        const localScatter = new Vector3()
+                        localScatter.copy(worldScatter)
+                        const inverseGroupMatrix = new Matrix4()
+                        inverseGroupMatrix
+                            .copy(particlesGroup.matrixWorld)
+                            .invert()
+                        localScatter.applyMatrix4(inverseGroupMatrix)
+
+                        // Set scatter velocity (adds to existing velocity for momentum)
+                        scatterVelocity.add(localScatter)
                     }
                 }
-            })
+            }
+
+            // Start animation to ensure scatter effect is visible
+            startAnimation()
         }
 
-        const resizeScene = () => {
-            if (!containerRef.current || !rendererRef.current || !cameraRef.current) return
+        // Only add cursor interaction event listeners if enabled
+        if (cursorConfig.enabled) {
+            canvas.addEventListener("mousemove", handleMouseMoveCursor)
+            canvas.addEventListener("mouseleave", handleMouseLeaveCursor)
+            canvas.addEventListener("click", handleClick)
+            canvas.addEventListener("touchmove", handleTouchMove, {
+                passive: false,
+            })
+            canvas.addEventListener("touchstart", handleTouchStart, {
+                passive: false,
+            })
+            canvas.addEventListener("touchend", handleTouchEnd)
+            canvas.addEventListener("touchcancel", handleTouchEnd)
+        }
 
-            const width = container.clientWidth || container.offsetWidth || 1
-            const height = container.clientHeight || container.offsetHeight || 1
-            const size = Math.min(width, height)
-            const dpr = Math.min(window.devicePixelRatio || 1, 2)
+        // Resize handler
+        const handleResize = () => {
+            if (
+                !containerRef.current ||
+                !cameraRef.current ||
+                !rendererRef.current
+            )
+                return
 
-            cameraRef.current.aspect = 1
+            const newWidth =
+                containerRef.current.clientWidth ||
+                containerRef.current.offsetWidth ||
+                400
+            const newHeight =
+                containerRef.current.clientHeight ||
+                containerRef.current.offsetHeight ||
+                400
+
+            cameraRef.current.aspect = newWidth / newHeight
             cameraRef.current.updateProjectionMatrix()
 
-            rendererRef.current.setSize(size * dpr, size * dpr, false)
-            rendererRef.current.domElement.style.width = `${size}px`
-            rendererRef.current.domElement.style.height = `${size}px`
+            // Update camera distance based on scale - ensure it stays outside sphere
+            const baseCameraDistance = 3.0
+            const currentSphereRadius = 1.0 * scaleMultiplier
+            const cameraDistance = Math.max(
+                baseCameraDistance,
+                currentSphereRadius + 1.0
+            )
+            cameraRef.current.position.z = cameraDistance
+
+            rendererRef.current.setSize(newWidth, newHeight)
+            rendererRef.current.render(sceneRef.current!, cameraRef.current)
         }
 
-        // Canvas resize detection
+        // Canvas resize detection using zoom probe
         if (isCanvas && typeof window !== "undefined") {
+            const TICK_MS = 250 // throttle to 4Hz
+            const EPS_ZOOM = 0.001
+            const EPS_SIZE = 0.5
+            const EPS_ASPECT = 0.001
+
+            let rafId = 0
             const tick = (now?: number) => {
-                if (!container) return
-                const cw = container.clientWidth || container.offsetWidth || 1
-                const ch = container.clientHeight || container.offsetHeight || 1
-                const aspect = cw / ch
+                const probe = zoomProbeRef.current
+                if (probe && containerRef.current) {
+                    const currentZoom = probe.getBoundingClientRect().width / 20
+                    const rect = containerRef.current.getBoundingClientRect()
+                    const cw = rect.width
+                    const ch = rect.height
+                    const aspect = cw / ch
 
-                const timeOk =
-                    !lastResizeRef.current.ts ||
-                    (now || performance.now()) - lastResizeRef.current.ts >= RESIZE_TICK_MS
-                const aspectChanged =
-                    Math.abs(aspect - lastResizeRef.current.aspect) > RESIZE_EPSILON
-                const sizeChanged =
-                    Math.abs(cw - lastResizeRef.current.w) > 1 ||
-                    Math.abs(ch - lastResizeRef.current.h) > 1
+                    const timeOk =
+                        !lastResizeRef.current.ts ||
+                        (now || performance.now()) - lastResizeRef.current.ts >=
+                            TICK_MS
+                    const zoomChanged =
+                        Math.abs(currentZoom - lastResizeRef.current.zoom) >
+                        EPS_ZOOM
+                    const sizeChanged =
+                        Math.abs(cw - lastResizeRef.current.w) > EPS_SIZE ||
+                        Math.abs(ch - lastResizeRef.current.h) > EPS_SIZE
+                    const aspectChanged =
+                        Math.abs(aspect - lastResizeRef.current.aspect) >
+                        EPS_ASPECT
 
-                if (timeOk && (aspectChanged || sizeChanged)) {
-                    lastResizeRef.current = {
-                        w: cw,
-                        h: ch,
-                        aspect,
-                        ts: now || performance.now(),
+                    if (
+                        timeOk &&
+                        (zoomChanged || sizeChanged || aspectChanged)
+                    ) {
+                        lastResizeRef.current = {
+                            ts: now || performance.now(),
+                            zoom: currentZoom,
+                            w: cw,
+                            h: ch,
+                            aspect,
+                        }
+                        handleResize()
                     }
-                    resizeScene()
                 }
-                resizeRafRef.current = requestAnimationFrame(tick)
+                rafId = requestAnimationFrame(tick)
             }
-            resizeRafRef.current = requestAnimationFrame(tick)
+            rafId = requestAnimationFrame(tick)
+
+            // Cleanup for canvas mode
+            return () => {
+                cancelAnimationFrame(rafId)
+                if (animationFrameId !== null) {
+                    cancelAnimationFrame(animationFrameId)
+                }
+                if (animationFrameRef.current) {
+                    cancelAnimationFrame(animationFrameRef.current)
+                }
+                if (drag) {
+                    canvas.removeEventListener("mousedown", handleMouseDown)
+                }
+                if (stopOnHover) {
+                    canvas.removeEventListener(
+                        "mousemove",
+                        handleMouseMoveHover
+                    )
+                }
+                // Remove cursor interaction event listeners if they were added
+                if (cursorConfig.enabled) {
+                    canvas.removeEventListener(
+                        "mousemove",
+                        handleMouseMoveCursor
+                    )
+                    canvas.removeEventListener(
+                        "mouseleave",
+                        handleMouseLeaveCursor
+                    )
+                    canvas.removeEventListener("click", handleClick)
+                    canvas.removeEventListener("touchmove", handleTouchMove)
+                    canvas.removeEventListener("touchstart", handleTouchStart)
+                    canvas.removeEventListener("touchend", handleTouchEnd)
+                    canvas.removeEventListener("touchcancel", handleTouchEnd)
+                }
+                if (rendererRef.current) {
+                    rendererRef.current.dispose()
+                    if (containerRef.current && canvas.parentNode) {
+                        containerRef.current.removeChild(canvas)
+                    }
+                }
+                if (particlesRef.current) {
+                    if (particlesRef.current.geometry) {
+                        particlesRef.current.geometry.dispose()
+                    }
+                    if (particlesRef.current.material) {
+                        if (Array.isArray(particlesRef.current.material)) {
+                            particlesRef.current.material.forEach((mat: any) =>
+                                mat.dispose()
+                            )
+                        } else {
+                            particlesRef.current.material.dispose()
+                        }
+                    }
+                }
+            }
         }
 
-        if (typeof window !== "undefined" && !isStatic && (preview || !isCanvas)) {
-            initScene()
-            window.addEventListener("resize", resizeScene)
-            container.addEventListener("mousemove", handleMouseMove)
-            container.addEventListener("click", handleClick)
-            container.addEventListener("touchmove", handleTouchMove, { passive: false })
-            container.addEventListener("touchstart", handleTouchStart)
-            lastTimeRef.current = performance.now()
-            animate(performance.now())
-        } else {
-            // Static preview - still animate for visual consistency
-            initScene()
-            if (rendererRef.current && sceneRef.current && cameraRef.current) {
-                lastTimeRef.current = performance.now()
-                animate(performance.now())
-            }
-        }
+        // Preview/Live: use ResizeObserver
+        const resizeObserver = new ResizeObserver(() => handleResize())
+        resizeObserver.observe(container)
+        window.addEventListener("resize", handleResize)
 
+        // Cleanup for preview/live mode
         return () => {
-            if (typeof window !== "undefined") {
-                window.removeEventListener("resize", resizeScene)
-                container.removeEventListener("mousemove", handleMouseMove)
-                container.removeEventListener("click", handleClick)
-                container.removeEventListener("touchmove", handleTouchMove)
-                container.removeEventListener("touchstart", handleTouchStart)
+            resizeObserver.disconnect()
+            window.removeEventListener("resize", handleResize)
+            if (animationFrameId !== null) {
+                cancelAnimationFrame(animationFrameId)
             }
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
             }
-            if (resizeRafRef.current) {
-                cancelAnimationFrame(resizeRafRef.current)
+            if (drag) {
+                canvas.removeEventListener("mousedown", handleMouseDown)
+            }
+            if (stopOnHover) {
+                canvas.removeEventListener("mousemove", handleMouseMoveHover)
+            }
+            // Remove cursor interaction event listeners if they were added
+            if (cursorConfig.enabled) {
+                canvas.removeEventListener("mousemove", handleMouseMoveCursor)
+                canvas.removeEventListener("mouseleave", handleMouseLeaveCursor)
+                canvas.removeEventListener("click", handleClick)
+                canvas.removeEventListener("touchmove", handleTouchMove)
+                canvas.removeEventListener("touchstart", handleTouchStart)
+                canvas.removeEventListener("touchend", handleTouchEnd)
+                canvas.removeEventListener("touchcancel", handleTouchEnd)
             }
             if (rendererRef.current) {
                 rendererRef.current.dispose()
-                if (containerRef.current && rendererRef.current.domElement.parentNode) {
-                    containerRef.current.removeChild(rendererRef.current.domElement)
+                if (containerRef.current && canvas.parentNode) {
+                    containerRef.current.removeChild(canvas)
                 }
             }
-            if (geometryRef.current) {
-                geometryRef.current.dispose()
-            }
-            if (materialRef.current) {
-                materialRef.current.dispose()
-            }
-            if (sceneRef.current) {
-                sceneRef.current.clear()
+            if (particlesRef.current) {
+                if (particlesRef.current.geometry) {
+                    particlesRef.current.geometry.dispose()
+                }
+                if (particlesRef.current.material) {
+                    if (Array.isArray(particlesRef.current.material)) {
+                        particlesRef.current.material.forEach((mat: any) =>
+                            mat.dispose()
+                        )
+                    } else {
+                        particlesRef.current.material.dispose()
+                    }
+                }
             }
         }
-    }, [particleCount, trailLength, enableTrails, preview, isCanvas])
+    }, [
+        particlesCount,
+        speed,
+        smoothing,
+        scale,
+        stopOnHover,
+        rotationDirection,
+        dragSpeed,
+        drag,
+        particlesConfig,
+        cursorConfig,
+        cursorRadius,
+        cursorStrength,
+        sphereColor,
+        rotationSpeed,
+        scaleMultiplier,
+        particleSize,
+        isCanvas,
+        // Note: preview is intentionally NOT in dependencies
+        // Preview only affects behavior in canvas mode via previewRef
+    ])
+
+    // Handle preview changes - restart animation loop when preview toggles (CANVAS MODE ONLY)
+    const previewForAnimation = isCanvas ? preview : false
+    useEffect(() => {
+        if (!isCanvas) return
+
+        // Canvas mode only: If preview turned ON and animation is stopped, restart it
+        // Use startAnimationRef to properly reset frame time and prevent delta jump
+        if (
+            preview &&
+            startAnimationRef.current &&
+            animationFrameRef.current === null
+        ) {
+            startAnimationRef.current()
+        }
+    }, [previewForAnimation, isCanvas])
+
+    // Container styles
+    const containerStyle: React.CSSProperties = {
+        ...style,
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+    }
 
     return (
-        <div
-            ref={containerRef}
-            style={{
-                ...style,
-                width: "100%",
-                height: "100%",
-                display: "block",
-                aspectRatio: "1 / 1",
-                position: "relative",
-            }}
-        />
+        <div style={containerStyle}>
+            {/* Zoom probe for canvas mode resize detection */}
+            <div
+                ref={zoomProbeRef}
+                style={{
+                    position: "absolute",
+                    width: 20,
+                    height: 20,
+                    opacity: 0,
+                    pointerEvents: "none",
+                }}
+            />
+            <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        </div>
     )
 }
 
-addPropertyControls(ParticleSphere, {
-    // 1. Preview (always first)
+// Property Controls
+addPropertyControls(ParticleSphereRefactor, {
     preview: {
         type: ControlType.Boolean,
         title: "Preview",
@@ -717,107 +1372,137 @@ addPropertyControls(ParticleSphere, {
         enabledTitle: "On",
         disabledTitle: "Off",
     },
-    // 2. Main content controls - Particles
-    particleCount: {
+    particlesCount: {
         type: ControlType.Number,
-        title: "Particle Count",
-        defaultValue: 2000,
+        title: "Count",
         min: 100,
-        max: 3000,
-        step: 100,
+        max: 10000,
+        step: 10,
+        defaultValue: 4000,
     },
-    particleSize: {
-        type: ControlType.Number,
-        title: "Particle Size",
-        defaultValue: 3,
-        min: 1,
-        max: 10,
-        step: 0.5,
-        unit: "px",
-    },
-    particleColor: {
-        type: ControlType.Color,
-        title: "Particle Color",
-        defaultValue: "#757575",
+    rotationDirection: {
+        type: ControlType.Enum,
+        title: "Rotation",
+        options: ["anticlockwise", "clockwise"],
+        optionIcons: ["direction-left", "direction-right"],
+        optionTitles: ["Anticlockwise", "Clockwise"],
+        defaultValue: "clockwise",
+        displaySegmentedControl: true,
     },
     speed: {
         type: ControlType.Number,
         title: "Speed",
-        defaultValue: 1,
         min: 0.1,
-        max: 5,
+        max: 1,
         step: 0.1,
+        defaultValue: 0.5,
     },
-    // 3. Configuration controls - Interaction
-    cursorRadius: {
-        type: ControlType.Number,
-        title: "Cursor Radius",
-        defaultValue: 150,
-        min: 50,
-        max: 500,
-        step: 10,
-        unit: "px",
-    },
-    clickEffect: {
-        type: ControlType.Enum,
-        title: "Click Effect",
-        defaultValue: "scatter",
-        options: ["scatter", "color", "both"],
-        optionTitles: ["Scatter", "Color", "Both"],
-        displaySegmentedControl: true,
-    },
-    clickForce: {
-        type: ControlType.Number,
-        title: "Click Force",
-        defaultValue: 8,
-        min: 1,
-        max: 50,
-        step: 1,
-        hidden: ({ clickEffect }) => clickEffect === "color",
-    },
-    mouseoverColor: {
-        type: ControlType.Color,
-        title: "Mouseover Color",
-        defaultValue: "#FF5588",
-        hidden: ({ clickEffect }) => clickEffect === "scatter",
-    },
-    colorDuration: {
-        type: ControlType.Number,
-        title: "Color Duration",
-        defaultValue: 1000,
-        min: 100,
-        max: 5000,
-        step: 100,
-        unit: "ms",
-        hidden: ({ clickEffect }) => clickEffect === "scatter",
-    },
-    // 4. Configuration controls - Effects
-    enableTrails: {
+    drag: {
         type: ControlType.Boolean,
-        title: "Enable Trails",
+        title: "Drag",
         defaultValue: true,
         enabledTitle: "On",
         disabledTitle: "Off",
     },
-    trailLength: {
+    smoothing: {
         type: ControlType.Number,
-        title: "Trail Length",
-        defaultValue: 10,
-        min: 2,
-        max: 30,
-        step: 1,
-        hidden: ({ enableTrails }) => !enableTrails,
-    },
-    trailOpacity: {
-        type: ControlType.Number,
-        title: "Trail Opacity",
-        defaultValue: 0.5,
-        min: 0.1,
+        title: "Smoothing",
+        min: 0,
         max: 1,
         step: 0.1,
-        hidden: ({ enableTrails }) => !enableTrails,
-        description: "More components at [Framer University](https://frameruni.link/cc).",
+        defaultValue: 1,
+        hidden: (props: ParticleSphereRefactorProps) => !props.drag,
+    },
+    dragSpeed: {
+        type: ControlType.Number,
+        title: "Drag Speed",
+        min: 0,
+        max: 1,
+        step: 0.1,
+        defaultValue: 0.5,
+        hidden: (props: ParticleSphereRefactorProps) => !props.drag,
+    },
+    stopOnHover: {
+        type: ControlType.Boolean,
+        title: "On Hover",
+        defaultValue: true,
+        enabledTitle: "Stop",
+        disabledTitle: "Rotate",
+    },
+    scale: {
+        type: ControlType.Number,
+        title: "Scale",
+        min: 0,
+        max: 1,
+        step: 0.1,
+        defaultValue: 0.3,
+    },
+    particles: {
+        title: "Particles",
+        type: ControlType.Object,
+        controls: {
+            shape: {
+                type: ControlType.Enum,
+                title: "Shape",
+                options: ["sphere", "cube"],
+                optionTitles: ["Sphere", "Cube"],
+                defaultValue: "sphere",
+            },
+            scale: {
+                type: ControlType.Number,
+                title: "Size",
+                min: 0.1,
+                max: 1,
+                step: 0.1,
+                defaultValue: 0.3,
+            },
+        },
+    },
+    cursorConfig: {
+        type: ControlType.Object,
+        title: "Cursor",
+        controls: {
+            enabled: {
+                type: ControlType.Boolean,
+                title: "Enabled",
+                defaultValue: true,
+                enabledTitle: "On",
+                disabledTitle: "Off",
+            },
+            radius: {
+                type: ControlType.Number,
+                title: "Radius",
+                min: 0,
+                max: 600,
+                step: 10,
+                defaultValue: 150,
+                unit: "px",
+            },
+            strength: {
+                type: ControlType.Number,
+                title: "Strength",
+                min: 0,
+                max: 1,
+                step: 0.1,
+                defaultValue: 0.3,
+            },
+            clickForce: {
+                type: ControlType.Number,
+                title: "Click Force",
+                min: 0,
+                max: 10,
+                step: 1,
+                defaultValue: 3,
+            },
+        },
+    },
+    sphereColor: {
+        type: ControlType.Color,
+        title: "Color",
+        defaultValue: "#ffffff",
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 
-ParticleSphere.displayName = "Particle Sphere"
+ParticleSphereRefactor.displayName = "Particle Sphere"

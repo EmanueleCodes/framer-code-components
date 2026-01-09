@@ -135,9 +135,6 @@ interface BurnTransitionProps {
     edgeSoftness?: number // UI: 0-1
     bloomIntensity?: number // UI: 0-1
     bloomRadius?: number // UI: 0-1
-    parallaxEnabled?: boolean
-    parallaxStart?: number // 0-100, percentage where wave starts when component enters viewport (0% = bottom, 50% = middle, 100% = top)
-    parallaxEnd?: number // 0-100, percentage where wave ends when component exits viewport (0% = bottom, 50% = middle, 100% = top)
     style?: React.CSSProperties
     movement?: {
         horizontal: number
@@ -162,9 +159,6 @@ export default function BurnTransition({
     edgeSoftness = 0.4, // UI default (maps to ~0.08 internally)
     bloomIntensity = 0.5,
     bloomRadius = 0.5,
-    parallaxEnabled = false,
-    parallaxStart = 50, // 0-100, default 50% (middle)
-    parallaxEnd = 100, // 0-100, default 100% (top)
     style,
     movement = {
         horizontal: 0.5,
@@ -218,14 +212,6 @@ export default function BurnTransition({
     const animationFrameRef = useRef<number | null>(null)
     const baseTimeRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
-    const parallaxEnabledRef = useRef<boolean>(parallaxEnabled)
-    const parallaxStartRef = useRef<number>(parallaxStart)
-    const parallaxEndRef = useRef<number>(parallaxEnd)
-    const parallaxOffsetRef = useRef<number>(0)
-    const canvasSizeRef = useRef<{ width: number; height: number }>({
-        width: 0,
-        height: 0,
-    })
 
     // Bloom refs
     const bloomIntensityRef = useRef<number>(bloomIntensity)
@@ -241,6 +227,10 @@ export default function BurnTransition({
     const blurTexture1Ref = useRef<WebGLTexture | null>(null)
     const blurFramebuffer2Ref = useRef<WebGLFramebuffer | null>(null)
     const blurTexture2Ref = useRef<WebGLTexture | null>(null)
+    const canvasSizeRef = useRef<{ width: number; height: number }>({
+        width: 0,
+        height: 0,
+    })
     const bloomDownsampleRef = useRef<number>(2) // Render bloom at half resolution for performance
 
     // Helper function to create shader
@@ -543,27 +533,6 @@ export default function BurnTransition({
             gl.uniform1f(movementVerticalLocation, movementVerticalRef.current)
         }
 
-        // Set parallax offset uniform
-        const parallaxOffsetLocation = gl.getUniformLocation(
-            program,
-            "u_parallax_offset"
-        )
-        if (parallaxOffsetLocation) {
-            gl.uniform1f(parallaxOffsetLocation, parallaxOffsetRef.current)
-        }
-
-        // Set aspect ratio uniform for consistent noise scaling
-        const aspectRatioLocation = gl.getUniformLocation(
-            program,
-            "u_aspect_ratio"
-        )
-        if (aspectRatioLocation) {
-            const width = canvasSizeRef.current.width
-            const height = canvasSizeRef.current.height
-            const aspectRatio = height > 0 ? width / height : 1.0
-            gl.uniform1f(aspectRatioLocation, aspectRatio)
-        }
-
         // Clear with transparent background
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
@@ -758,21 +727,16 @@ export default function BurnTransition({
 
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
-        // Disable blending - we're compositing everything in the shader
-        // This prevents GL from darkening our semi-transparent bloom pixels
-        gl.disable(gl.BLEND)
-
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-        
-        // Re-enable blending for future passes
         gl.enable(gl.BLEND)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
 
     // Main render function with bloom
     const render = () => {
         const gl = glRef.current
-        if (!gl || !programRef.current) return
+        if (!gl) return
 
         const hasBloom =
             bloomIntensityRef.current > 0 &&
@@ -820,65 +784,6 @@ export default function BurnTransition({
             // No bloom - render directly to screen
             renderScene(null)
         }
-    }
-
-    // Function to calculate parallax offset based on component position in viewport
-    const updateParallaxOffset = () => {
-        const container = containerRef.current
-        if (!container) return
-
-        // If parallax is disabled, set offset to 0 (don't render here, let animation loop handle it)
-        if (!parallaxEnabledRef.current) {
-            parallaxOffsetRef.current = 0
-            return
-        }
-
-        const rect = container.getBoundingClientRect()
-        const viewportHeight = window.innerHeight
-
-        // Calculate scroll progress based on component's position in viewport
-        // progress = 0 when component top enters viewport (at bottom)
-        // progress = 1 when component bottom exits viewport (at top)
-        const componentTop = rect.top
-        const componentBottom = rect.bottom
-        const componentHeight = rect.height
-
-        // Calculate progress: inverted so progress=1 when entering, progress=0 when exiting
-        // This should make wave move in correct direction
-        let progress = 0
-        
-        if (componentTop >= viewportHeight) {
-            // Component hasn't entered yet (below viewport) - use 1 (about to enter)
-            progress = 1
-        } else if (componentBottom <= 0) {
-            // Component has exited (above viewport) - use 0 (has exited)
-            progress = 0
-        } else {
-            // Component is visible - calculate inverted progress
-            // When top = viewportHeight (entering): progress should be 1
-            // When bottom = 0 (exiting): progress should be 0
-            // Invert: progress = 1 - ((viewportHeight - componentTop) / (viewportHeight + componentHeight))
-            progress = 1 - ((viewportHeight - componentTop) / (viewportHeight + componentHeight))
-            progress = Math.max(0, Math.min(1, progress))
-        }
-
-        // Convert percentages to UV coordinates (0-1)
-        // In UV: 0 = top, 1 = bottom
-        // User interface: 0% = bottom, 50% = middle, 100% = top
-        const startPosition = parallaxStartRef.current / 100
-        const endPosition = parallaxEndRef.current / 100
-
-        // With inverted progress: progress=1 when entering, progress=0 when exiting
-        // We want: progress=1 → startPosition, progress=0 → endPosition
-        // So: targetPosition = startPosition + (endPosition - startPosition) * (1 - progress)
-        // When progress=1 (entering): startPosition + (endPosition - startPosition) * 0 = startPosition ✓
-        // When progress=0 (exiting): startPosition + (endPosition - startPosition) * 1 = endPosition ✓
-        const targetPosition = startPosition + (endPosition - startPosition) * (1 - progress)
-        
-        // Calculate offset from center (0.5)
-        // baseLine = 0.5 + offset, so offset = targetPosition - 0.5
-        parallaxOffsetRef.current = targetPosition - 0.5
-        // Note: render() is called by animation loop, no need to call it here
     }
 
     // Update refs when props change
@@ -954,21 +859,6 @@ export default function BurnTransition({
     }, [movement.vertical])
 
     useEffect(() => {
-        parallaxEnabledRef.current = parallaxEnabled
-        updateParallaxOffset()
-    }, [parallaxEnabled])
-
-    useEffect(() => {
-        parallaxStartRef.current = Math.max(0, Math.min(100, parallaxStart))
-        updateParallaxOffset()
-    }, [parallaxStart])
-
-    useEffect(() => {
-        parallaxEndRef.current = Math.max(0, Math.min(100, parallaxEnd))
-        updateParallaxOffset()
-    }, [parallaxEnd])
-
-    useEffect(() => {
         bloomIntensityRef.current = bloomIntensity
     }, [bloomIntensity])
 
@@ -1000,8 +890,6 @@ export default function BurnTransition({
         uniform float u_grain_scale;
         uniform float u_movement_horizontal;
         uniform float u_movement_vertical;
-        uniform float u_parallax_offset;
-        uniform float u_aspect_ratio;
 
         // Random function
         float random(vec2 st) {
@@ -1051,18 +939,15 @@ export default function BurnTransition({
 
         void main() {
             // === STEP 1: Define the main wavy edge (the "tear line") ===
-            // Apply parallax offset to translate the wave vertically
-            float baseLine = 0.5 + u_parallax_offset;
+            float baseLine = 0.5;
             // Apply movement controls: horizontal controls direction/speed, vertical controls evolution amount
             // horizontal: -1 = right to left, 1 = left to right, 0 = no horizontal movement
             // vertical: 0 = no vertical evolution, 1 = full vertical evolution
             float horizontalOffset = u_scroll_offset * u_movement_horizontal;
             float verticalOffset = u_scroll_offset * u_movement_vertical;
             
-            // Use aspect-ratio-corrected x-coordinates to prevent noise stretching
-            // Keep original y-scaling for the "mountain-ish" profile
             vec2 noiseCoord = vec2(
-                v_uv.x * u_aspect_ratio * u_noise_scale + horizontalOffset,
+                v_uv.x * u_noise_scale + horizontalOffset,
                 v_uv.y * 3.0 + verticalOffset * 0.6
             );
             float edgeNoise = fbm(noiseCoord);
@@ -1071,9 +956,8 @@ export default function BurnTransition({
             // === STEP 2: Create UNEVEN transition thickness ===
             // Use a different noise to vary how thick the transition zone is at each point
             // Apply movement controls for consistent animation
-            // Use aspect-ratio-corrected x-coordinates, original y-scaling
             vec2 thicknessNoiseCoord = vec2(
-                v_uv.x * u_aspect_ratio * u_noise_scale * 2.3 + horizontalOffset * 0.7,
+                v_uv.x * u_noise_scale * 2.3 + horizontalOffset * 0.7,
                 v_uv.y * 2.0 + verticalOffset * 0.4 + 100.0
             );
             float thicknessNoise = fbm(thicknessNoiseCoord);
@@ -1091,24 +975,22 @@ export default function BurnTransition({
             
             // === STEP 4: High-frequency grain for fiber effect ===
             // Animate grain both horizontally and vertically using movement controls
-            // Use aspect-ratio-corrected coordinates
-            vec2 grainCoord = vec2(
-                v_uv.x * u_aspect_ratio * u_grain_scale * 3.0 + horizontalOffset * 0.5,
-                v_uv.y * u_grain_scale * 3.0 + verticalOffset * 0.3
-            );
+            vec2 grainCoord = v_uv * u_grain_scale * 3.0 + vec2(horizontalOffset * 0.5, verticalOffset * 0.3);
             float grain = detailedNoise(grainCoord);
             
             // Additional "fiber" noise - elongated in Y direction for torn paper fibers
             // Apply movement controls for consistent animation
-            // Use aspect-ratio-corrected coordinates
             vec2 fiberCoord = vec2(
-                v_uv.x * u_aspect_ratio * u_grain_scale * 8.0 + horizontalOffset * 0.3,
+                v_uv.x * u_grain_scale * 8.0 + horizontalOffset * 0.3,
                 v_uv.y * u_grain_scale * 2.0 + verticalOffset * 0.2
             );
             float fiberNoise = noise(fiberCoord);
             
             // Combine grain patterns
             float combinedGrain = grain * 0.6 + fiberNoise * 0.4;
+            
+            // Distance from the main edge
+            float distFromEdge = v_uv.y - mainEdge;
             
             // === STEP 5: Render based on position ===
             
@@ -1129,6 +1011,7 @@ export default function BurnTransition({
                 grainThreshold -= thicknessNoise * 0.2;
                 
                 if (combinedGrain > grainThreshold) {
+                    // Solid grain pixel
                     gl_FragColor = vec4(u_transition_color, 1.0);
                 } else {
                     gl_FragColor = vec4(u_color, 1.0);
@@ -1146,6 +1029,7 @@ export default function BurnTransition({
                 grainThreshold += thicknessNoise * 0.15;
                 
                 if (combinedGrain > grainThreshold) {
+                    // Solid grain pixel
                     gl_FragColor = vec4(u_transition_color, 1.0);
                 } else {
                     discard;
@@ -1159,6 +1043,7 @@ export default function BurnTransition({
     `
 
     // Extraction shader - extracts transition area for bloom
+    // Simplified and more reliable approach
     const extractFragmentShader = `
         precision mediump float;
         varying vec2 v_uv;
@@ -1189,6 +1074,7 @@ export default function BurnTransition({
     `
 
     // Optimized blur shader - proper gaussian blur with more samples
+    // Uses 13 taps for smooth, centered glow without duplicate strips
     const blurFragmentShader = `
         precision mediump float;
         varying vec2 v_uv;
@@ -1199,13 +1085,16 @@ export default function BurnTransition({
         
         void main() {
             // Blur size - scale appropriately for downsampled texture
+            // Use smaller multiplier to prevent oversampling artifacts
             float blur_size = u_radius * 12.0;
             
             // 13-tap gaussian blur with proper distribution
+            // More samples = smoother, centered glow without duplicates
             float alpha = 0.0;
             float totalWeight = 0.0;
             
             // Proper gaussian weights for 13 samples
+            // Center at 0, samples from -6 to +6
             for (int i = -6; i <= 6; i++) {
                 float offset = float(i);
                 
@@ -1244,24 +1133,39 @@ export default function BurnTransition({
             // Bloom strength - use bloom alpha directly, scaled by intensity
             float bloomStrength = bloom.a * u_bloom_intensity;
             
-            // Simple additive bloom that works on any background
-            // For transparent areas, output the bloom glow directly
-            // For solid areas, add bloom on top
-            
-            vec3 bloomColor = u_transition_color * bloomStrength * 2.0;
+            vec3 result;
+            float resultAlpha;
             
             if (scene.a < 0.001) {
-                // Transparent area - output bloom glow directly
-                // Use the transition color with bloom-derived alpha
-                float glowAlpha = bloomStrength * 1.5;
-                gl_FragColor = vec4(u_transition_color, glowAlpha);
+                // Fully transparent area - use SOLID transition color, never gray
+                // Problem: alpha blending with white background: result = color*alpha + white*(1-alpha)
+                // This creates gray when alpha < 1
+                // Solution: compensate the color so when blended with white, we get the transition color
+                float alpha = bloomStrength * 2.5;
+                // To get transition_color after blending: transition_color = color*alpha + (1-alpha)
+                // Solving for color: color = (transition_color - (1-alpha)) / alpha
+                // But we need to handle the case where this might go negative
+                // Better: use a formula that ensures we get the right color
+                vec3 white = vec3(1.0);
+                vec3 targetColor = u_transition_color;
+                // Inverse blend: what color do we need to output to get targetColor after blending?
+                result = (targetColor - white * (1.0 - alpha)) / max(alpha, 0.001);
+                // Clamp to valid range
+                result = max(result, vec3(0.0));
+                resultAlpha = alpha;
             } else {
                 // Solid area - add bloom on top (additive)
-                vec3 result = scene.rgb + bloomColor;
-                // Clamp to valid range
-                result = min(result, vec3(1.0));
-                gl_FragColor = vec4(result, scene.a);
+                // Use transition color at full intensity, scaled by bloom strength for additive effect
+                vec3 bloomColor = u_transition_color * bloomStrength * 3.0;
+                result = scene.rgb + bloomColor;
+                // Keep scene alpha
+                resultAlpha = scene.a;
             }
+            
+            // Clamp to valid range
+            result = min(result, vec3(1.0));
+            
+            gl_FragColor = vec4(result, resultAlpha);
         }
     `
 
@@ -1413,24 +1317,18 @@ export default function BurnTransition({
 
         // Initial render
         resizeCanvas()
-        updateParallaxOffset()
         render()
 
-        // Animation loop - optimized
+        // Animation loop
         const animate = () => {
             if (glRef.current && programRef.current) {
-                // Update parallax if enabled
-                if (parallaxEnabledRef.current) {
-                    updateParallaxOffset()
-                }
-                // Always render (updateParallaxOffset doesn't call render anymore)
                 render()
             }
             animationFrameRef.current = requestAnimationFrame(animate)
         }
         animationFrameRef.current = requestAnimationFrame(animate)
 
-        // Track scroll for animation and parallax
+        // Track scroll for animation
         const scrollHandler = () => {
             const currentScrollY = window.scrollY || window.pageYOffset
             const currentTime = performance.now()
@@ -1452,9 +1350,6 @@ export default function BurnTransition({
 
             lastScrollYRef.current = currentScrollY
             lastScrollTimeRef.current = currentTime
-
-            // Update parallax offset on scroll
-            updateParallaxOffset()
         }
 
         // Initialize scroll tracking
@@ -1464,9 +1359,20 @@ export default function BurnTransition({
         // Add scroll listener
         window.addEventListener("scroll", scrollHandler, { passive: true })
 
+        // Decay scroll offset over time when not scrolling
+        const decayInterval = setInterval(() => {
+            if (Math.abs(scrollVelocityRef.current) < 0.1) {
+                // Gradually decay the offset when not scrolling
+                scrollOffsetRef.current *= 0.98
+            }
+            // Decay velocity over time
+            scrollVelocityRef.current *= 0.95
+        }, 16) // ~60fps
+
         return () => {
             resizeObserver.disconnect()
             window.removeEventListener("scroll", scrollHandler)
+            clearInterval(decayInterval)
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
             }
@@ -1528,7 +1434,7 @@ addPropertyControls(BurnTransition, {
     color: {
         type: ControlType.Color,
         title: "Color",
-        defaultValue: "#D9D6CA",
+        defaultValue: "#ff0000",
     },
     transitionColor: {
         type: ControlType.Color,
@@ -1593,34 +1499,6 @@ addPropertyControls(BurnTransition, {
         max: 1.0,
         step: 0.1,
     },
-    parallaxEnabled: {
-        type: ControlType.Boolean,
-        title: "Parallax",
-        defaultValue: false,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-    parallaxStart: {
-        type: ControlType.Number,
-        title: "Start",
-        defaultValue: 50,
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
-    },
-    parallaxEnd: {
-        type: ControlType.Number,
-        title: "End",
-        defaultValue: 100,
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-        description: "0% = bottom, 50% = middle, 100% = top",
-        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
-    },
     movement: {
         type: ControlType.Object,
         controls: {
@@ -1648,5 +1526,3 @@ addPropertyControls(BurnTransition, {
         },
     },
 })
-
-BurnTransition.displayName="Burn Transition"

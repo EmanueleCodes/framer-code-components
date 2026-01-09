@@ -90,7 +90,6 @@ function mapParticleSizeUiToInternal(ui: number): number {
     return mapLinear(clamped, 0.1, 1.0, 0.01, 0.1)
 }
 
-
 // Cursor Strength: UI [0..1] → force multiplier [0..15]
 // Default 0.3 maps to 4.5 (stronger default behavior)
 // Maximum strength (1.0) creates a much larger void around cursor
@@ -166,10 +165,10 @@ export default function ParticleSphereRefactor({
         particleShape: "unknown",
         sampleColor: null,
     })
-    
+
     // State for debug panel (updates reactively)
     const [debugInfo, setDebugInfo] = React.useState(debugInfoRef.current)
-    
+
     // Update debug info state periodically
     useEffect(() => {
         const interval = setInterval(() => {
@@ -250,7 +249,10 @@ export default function ParticleSphereRefactor({
         const baseCameraDistance = 3.0
         const currentSphereRadius = 1.0 * scaleMultiplier
         // Ensure camera is always outside the sphere with a safe margin
-        const cameraDistance = Math.max(baseCameraDistance, currentSphereRadius + 1.0)
+        const cameraDistance = Math.max(
+            baseCameraDistance,
+            currentSphereRadius + 1.0
+        )
         camera.position.z = cameraDistance
         cameraRef.current = camera
 
@@ -283,31 +285,31 @@ export default function ParticleSphereRefactor({
         // Initialize base positions and displacements for cursor interaction
         baseParticlePositionsRef.current = []
         particleDisplacementsRef.current = []
-        
+
         // Resolve color tokens (CSS variables) and parse color properly
         const resolvedSphereColor = resolveTokenColor(sphereColor)
         const baseColorObj = resolvedSphereColor
             ? new Color(resolvedSphereColor)
             : new Color(1, 1, 1)
-        
+
         // Red color for displaced particles
         const redColor = new Color(1, 0, 0)
-        
+
         for (let i = 0; i < particlesCount; i++) {
             // Use golden angle spiral for even distribution
             const y = 1 - (i / (particlesCount - 1)) * 2 // y goes from 1 to -1
             const radius = Math.sqrt(1 - y * y) // Radius at y
             const theta = goldenAngle * i // Golden angle increment
-            
+
             const x = Math.cos(theta) * radius
             const z = Math.sin(theta) * radius
-            
+
             // Scale to sphere surface with scale multiplier
             const posX = x * sphereRadius
             const posY = y * sphereRadius
             const posZ = z * sphereRadius
             vertices.push(posX, posY, posZ)
-            
+
             // Store base position and initialize displacement
             baseParticlePositionsRef.current.push(new Vector3(posX, posY, posZ))
             particleDisplacementsRef.current.push(new Vector3(0, 0, 0))
@@ -316,7 +318,7 @@ export default function ParticleSphereRefactor({
         // Create particles based on shape
         const particleShape = particlesConfig.shape || "sphere"
         let particles: any
-        
+
         if (particleShape === "sphere") {
             // Round particles using actual sphere geometries with InstancedMesh
             // Convert screen-space particle size to world-space radius to match visual size
@@ -327,18 +329,26 @@ export default function ParticleSphereRefactor({
                 blending: AdditiveBlending,
                 transparent: true,
             })
-            
-            particles = new InstancedMesh(sphereGeometry, sphereMaterial, particlesCount)
-            
+
+            particles = new InstancedMesh(
+                sphereGeometry,
+                sphereMaterial,
+                particlesCount
+            )
+
             // Set positions for each instance
             const matrix = new Matrix4()
             for (let i = 0; i < particlesCount; i++) {
                 const idx = i * 3
-                matrix.setPosition(vertices[idx], vertices[idx + 1], vertices[idx + 2])
+                matrix.setPosition(
+                    vertices[idx],
+                    vertices[idx + 1],
+                    vertices[idx + 2]
+                )
                 particles.setMatrixAt(i, matrix)
             }
             particles.instanceMatrix.needsUpdate = true
-            
+
             // Set up instance colors (per-instance coloring)
             const instanceColors = new Float32Array(particlesCount * 3)
             for (let i = 0; i < particlesCount; i++) {
@@ -347,7 +357,10 @@ export default function ParticleSphereRefactor({
                 instanceColors[idx + 1] = baseColorObj.g
                 instanceColors[idx + 2] = baseColorObj.b
             }
-            particles.instanceColor = new Float32BufferAttribute(instanceColors, 3)
+            particles.instanceColor = new Float32BufferAttribute(
+                instanceColors,
+                3
+            )
             sphereMaterial.vertexColors = false
             particles.instanceColor.needsUpdate = true
         } else {
@@ -357,7 +370,7 @@ export default function ParticleSphereRefactor({
                 "position",
                 new Float32BufferAttribute(vertices, 3)
             )
-            
+
             // Set up vertex colors (per-vertex coloring)
             const colors = new Float32Array(particlesCount * 3)
             for (let i = 0; i < particlesCount; i++) {
@@ -366,8 +379,11 @@ export default function ParticleSphereRefactor({
                 colors[idx + 1] = baseColorObj.g
                 colors[idx + 2] = baseColorObj.b
             }
-            particlesGeometry.setAttribute("color", new Float32BufferAttribute(colors, 3))
-            
+            particlesGeometry.setAttribute(
+                "color",
+                new Float32BufferAttribute(colors, 3)
+            )
+
             const particlesMaterial = new PointsMaterial({
                 size: particleSize,
                 color: baseColorObj,
@@ -376,10 +392,10 @@ export default function ParticleSphereRefactor({
                 transparent: true,
                 vertexColors: true, // Enable vertex colors
             })
-            
+
             particles = new Points(particlesGeometry, particlesMaterial)
         }
-        
+
         particlesRef.current = particles
 
         // Create group to hold particles for rotation
@@ -496,12 +512,20 @@ export default function ParticleSphereRefactor({
             const cursorRadiusSquared = cursorRadius * cursorRadius
 
             // Store color factors for each particle (0 = base color, 1 = full red)
-            const particleColorFactors = new Float32Array(baseParticlePositionsRef.current.length)
+            const particleColorFactors = new Float32Array(
+                baseParticlePositionsRef.current.length
+            )
 
             // Apply cursor repulsion to particles (only if enabled)
-            if (cursorConfig.enabled && baseParticlePositionsRef.current.length > 0) {
-
-                for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
+            if (
+                cursorConfig.enabled &&
+                baseParticlePositionsRef.current.length > 0
+            ) {
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
                     const basePos = baseParticlePositionsRef.current[i]
                     const displacement = particleDisplacementsRef.current[i]
                     let colorFactor = 0 // Default: no color change
@@ -521,47 +545,73 @@ export default function ParticleSphereRefactor({
                         worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
                         // Project 3D position to 2D screen space
-                        const projected = worldPos.clone().project(currentCamera)
-                        const screenX = (projected.x * 0.5 + 0.5) * containerWidth
-                        const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
+                        const projected = worldPos
+                            .clone()
+                            .project(currentCamera)
+                        const screenX =
+                            (projected.x * 0.5 + 0.5) * containerWidth
+                        const screenY =
+                            (-projected.y * 0.5 + 0.5) * containerHeight
 
                         // Calculate distance from cursor to particle in screen space
                         const dx = mouse.x - screenX
                         const dy = mouse.y - screenY
                         const distanceSquared = dx * dx + dy * dy
 
-                        if (distanceSquared < cursorRadiusSquared && distanceSquared > 0) {
+                        if (
+                            distanceSquared < cursorRadiusSquared &&
+                            distanceSquared > 0
+                        ) {
                             // Apply repulsion force
                             const distance = Math.sqrt(distanceSquared)
-                            const force = (cursorRadius - distance) / cursorRadius
+                            const force =
+                                (cursorRadius - distance) / cursorRadius
                             const angle = Math.atan2(dy, dx)
 
                             // Get camera's right and up vectors in world space
                             const cameraRight = new Vector3()
                             const cameraUp = new Vector3()
-                            cameraRight.setFromMatrixColumn(currentCamera.matrixWorld, 0).normalize()
-                            cameraUp.setFromMatrixColumn(currentCamera.matrixWorld, 1).normalize()
+                            cameraRight
+                                .setFromMatrixColumn(
+                                    currentCamera.matrixWorld,
+                                    0
+                                )
+                                .normalize()
+                            cameraUp
+                                .setFromMatrixColumn(
+                                    currentCamera.matrixWorld,
+                                    1
+                                )
+                                .normalize()
 
                             // Calculate repulsion direction in screen space
-                            const repulsion2D = force * cursorStrength * speed * deltaFactor
-                            const repulsionX = -Math.cos(angle) * repulsion2D * 0.01
-                            const repulsionY = Math.sin(angle) * repulsion2D * 0.01
+                            const repulsion2D =
+                                force * cursorStrength * speed * deltaFactor
+                            const repulsionX =
+                                -Math.cos(angle) * repulsion2D * 0.01
+                            const repulsionY =
+                                Math.sin(angle) * repulsion2D * 0.01
 
                             // Convert screen space repulsion to world space, then to local space
                             const worldRepulsion = new Vector3()
-                            worldRepulsion.addScaledVector(cameraRight, repulsionX)
+                            worldRepulsion.addScaledVector(
+                                cameraRight,
+                                repulsionX
+                            )
                             worldRepulsion.addScaledVector(cameraUp, repulsionY)
 
                             // Transform world repulsion back to local space (inverse of group rotation)
                             const localRepulsion = new Vector3()
                             localRepulsion.copy(worldRepulsion)
                             const inverseGroupMatrix = new Matrix4()
-                            inverseGroupMatrix.copy(particlesGroup.matrixWorld).invert()
+                            inverseGroupMatrix
+                                .copy(particlesGroup.matrixWorld)
+                                .invert()
                             localRepulsion.applyMatrix4(inverseGroupMatrix)
 
                             // Apply to displacement
                             displacement.add(localRepulsion)
-                            
+
                             // Calculate color factor: set to 1 (full red) if within cursor
                             colorFactor = 1.0
                         }
@@ -571,8 +621,12 @@ export default function ParticleSphereRefactor({
                     particleColorFactors[i] = colorFactor
 
                     // Always apply friction and return force to decay displacements (even when cursor is gone)
-                    const frictionFactor = Math.pow(CURSOR_PHYSICS.FRICTION, deltaFactor)
-                    const returnForce = CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
+                    const frictionFactor = Math.pow(
+                        CURSOR_PHYSICS.FRICTION,
+                        deltaFactor
+                    )
+                    const returnForce =
+                        CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
                     // Apply friction (multiplicative decay)
                     displacement.multiplyScalar(frictionFactor)
                     // Apply return force (decay towards zero)
@@ -582,7 +636,7 @@ export default function ParticleSphereRefactor({
 
             // Update particle positions and colors (ALWAYS, not just when cursor is enabled)
             const particleShape = particlesConfig.shape || "sphere"
-            
+
             // Debug tracking
             let displacedCount = 0
             let maxDisplacement = 0
@@ -590,135 +644,151 @@ export default function ParticleSphereRefactor({
             let maxColorFactor = 0
             let sampleColor: { r: number; g: number; b: number } | null = null
             let coloredParticlesCount = 0
-                
-                if (particleShape === "sphere" && particlesRef.current) {
-                    // Update InstancedMesh positions and colors
-                    const matrix = new Matrix4()
-                    const instanceColors = particlesRef.current.instanceColor
-                    
-                    // Debug: check if instanceColor exists
-                    debugInfoRef.current.instanceColorExists = !!instanceColors
-                    debugInfoRef.current.vertexColorExists = false
-                    debugInfoRef.current.particleShape = "sphere"
-                    
-                    for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
-                        const basePos = baseParticlePositionsRef.current[i]
-                        const displacement = particleDisplacementsRef.current[i]
-                        const finalPos = new Vector3()
-                        finalPos.copy(basePos)
-                        finalPos.add(displacement)
-                        matrix.setPosition(finalPos.x, finalPos.y, finalPos.z)
-                        particlesRef.current.setMatrixAt(i, matrix)
-                        
-                        // Calculate displacement magnitude for debug
-                        const displacementMagnitude = displacement.length()
-                        totalDisplacement += displacementMagnitude
-                        if (displacementMagnitude > 0.001) {
-                            displacedCount++
-                        }
-                        if (displacementMagnitude > maxDisplacement) {
-                            maxDisplacement = displacementMagnitude
-                        }
-                        
-                        // Use pre-calculated color factor from displacement loop
-                        const colorFactor = particleColorFactors[i] || 0
-                        if (colorFactor > maxColorFactor) {
-                            maxColorFactor = colorFactor
-                        }
-                        if (colorFactor > 0.01) {
-                            coloredParticlesCount++
-                        }
-                        
-                        // Set color directly: red ONLY if colorFactor > 0, base color otherwise
-                        const idx = i * 3
-                        if (colorFactor > 0) {
-                            // Red
-                            if (instanceColors && instanceColors.array) {
-                                instanceColors.array[idx] = 1.0
-                                instanceColors.array[idx + 1] = 0.0
-                                instanceColors.array[idx + 2] = 0.0
-                                
-                                // Store sample color from first colored particle
-                                if (!sampleColor) {
-                                    sampleColor = { r: 1.0, g: 0.0, b: 0.0 }
-                                }
-                            }
-                        } else {
-                            // Base color
-                            if (instanceColors && instanceColors.array) {
-                                instanceColors.array[idx] = baseColorObj.r
-                                instanceColors.array[idx + 1] = baseColorObj.g
-                                instanceColors.array[idx + 2] = baseColorObj.b
-                            }
-                        }
+
+            if (particleShape === "sphere" && particlesRef.current) {
+                // Update InstancedMesh positions and colors
+                const matrix = new Matrix4()
+                const instanceColors = particlesRef.current.instanceColor
+
+                // Debug: check if instanceColor exists
+                debugInfoRef.current.instanceColorExists = !!instanceColors
+                debugInfoRef.current.vertexColorExists = false
+                debugInfoRef.current.particleShape = "sphere"
+
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+                    const finalPos = new Vector3()
+                    finalPos.copy(basePos)
+                    finalPos.add(displacement)
+                    matrix.setPosition(finalPos.x, finalPos.y, finalPos.z)
+                    particlesRef.current.setMatrixAt(i, matrix)
+
+                    // Calculate displacement magnitude for debug
+                    const displacementMagnitude = displacement.length()
+                    totalDisplacement += displacementMagnitude
+                    if (displacementMagnitude > 0.001) {
+                        displacedCount++
                     }
-                    particlesRef.current.instanceMatrix.needsUpdate = true
-                    if (instanceColors) {
-                        instanceColors.needsUpdate = true
+                    if (displacementMagnitude > maxDisplacement) {
+                        maxDisplacement = displacementMagnitude
                     }
-                } else if (particleShape === "cube" && particlesRef.current) {
-                    // Update Points geometry positions and colors
-                    const positions = particlesRef.current.geometry.attributes.position
-                    const colors = particlesRef.current.geometry.attributes.color
-                    
-                    // Debug: check if colors exist
-                    debugInfoRef.current.instanceColorExists = false
-                    debugInfoRef.current.vertexColorExists = !!colors
-                    debugInfoRef.current.particleShape = "cube"
-                    
-                    for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
-                        const basePos = baseParticlePositionsRef.current[i]
-                        const displacement = particleDisplacementsRef.current[i]
-                        const finalPos = new Vector3()
-                        finalPos.copy(basePos)
-                        finalPos.add(displacement)
-                        positions.setXYZ(i, finalPos.x, finalPos.y, finalPos.z)
-                        
-                        // Calculate displacement magnitude for debug
-                        const displacementMagnitude = displacement.length()
-                        totalDisplacement += displacementMagnitude
-                        if (displacementMagnitude > 0.001) {
-                            displacedCount++
-                        }
-                        if (displacementMagnitude > maxDisplacement) {
-                            maxDisplacement = displacementMagnitude
-                        }
-                        
-                        // Use pre-calculated color factor from displacement loop
-                        const colorFactor = particleColorFactors[i] || 0
-                        if (colorFactor > maxColorFactor) {
-                            maxColorFactor = colorFactor
-                        }
-                        if (colorFactor > 0.01) {
-                            coloredParticlesCount++
-                        }
-                        
-                        // Set color directly: red ONLY if colorFactor > 0, base color otherwise
-                        if (colorFactor > 0) {
-                            // Red
-                            colors.setXYZ(i, 1.0, 0.0, 0.0)
+
+                    // Use pre-calculated color factor from displacement loop
+                    const colorFactor = particleColorFactors[i] || 0
+                    if (colorFactor > maxColorFactor) {
+                        maxColorFactor = colorFactor
+                    }
+                    if (colorFactor > 0.01) {
+                        coloredParticlesCount++
+                    }
+
+                    // Set color directly: red ONLY if colorFactor > 0, base color otherwise
+                    const idx = i * 3
+                    if (colorFactor > 0) {
+                        // Red
+                        if (instanceColors && instanceColors.array) {
+                            instanceColors.array[idx] = 1.0
+                            instanceColors.array[idx + 1] = 0.0
+                            instanceColors.array[idx + 2] = 0.0
+
                             // Store sample color from first colored particle
                             if (!sampleColor) {
                                 sampleColor = { r: 1.0, g: 0.0, b: 0.0 }
                             }
-                        } else {
-                            // Base color
-                            colors.setXYZ(i, baseColorObj.r, baseColorObj.g, baseColorObj.b)
+                        }
+                    } else {
+                        // Base color
+                        if (instanceColors && instanceColors.array) {
+                            instanceColors.array[idx] = baseColorObj.r
+                            instanceColors.array[idx + 1] = baseColorObj.g
+                            instanceColors.array[idx + 2] = baseColorObj.b
                         }
                     }
-                    positions.needsUpdate = true
-                    colors.needsUpdate = true
                 }
-                
+                particlesRef.current.instanceMatrix.needsUpdate = true
+                if (instanceColors) {
+                    instanceColors.needsUpdate = true
+                }
+            } else if (particleShape === "cube" && particlesRef.current) {
+                // Update Points geometry positions and colors
+                const positions =
+                    particlesRef.current.geometry.attributes.position
+                const colors = particlesRef.current.geometry.attributes.color
+
+                // Debug: check if colors exist
+                debugInfoRef.current.instanceColorExists = false
+                debugInfoRef.current.vertexColorExists = !!colors
+                debugInfoRef.current.particleShape = "cube"
+
+                for (
+                    let i = 0;
+                    i < baseParticlePositionsRef.current.length;
+                    i++
+                ) {
+                    const basePos = baseParticlePositionsRef.current[i]
+                    const displacement = particleDisplacementsRef.current[i]
+                    const finalPos = new Vector3()
+                    finalPos.copy(basePos)
+                    finalPos.add(displacement)
+                    positions.setXYZ(i, finalPos.x, finalPos.y, finalPos.z)
+
+                    // Calculate displacement magnitude for debug
+                    const displacementMagnitude = displacement.length()
+                    totalDisplacement += displacementMagnitude
+                    if (displacementMagnitude > 0.001) {
+                        displacedCount++
+                    }
+                    if (displacementMagnitude > maxDisplacement) {
+                        maxDisplacement = displacementMagnitude
+                    }
+
+                    // Use pre-calculated color factor from displacement loop
+                    const colorFactor = particleColorFactors[i] || 0
+                    if (colorFactor > maxColorFactor) {
+                        maxColorFactor = colorFactor
+                    }
+                    if (colorFactor > 0.01) {
+                        coloredParticlesCount++
+                    }
+
+                    // Set color directly: red ONLY if colorFactor > 0, base color otherwise
+                    if (colorFactor > 0) {
+                        // Red
+                        colors.setXYZ(i, 1.0, 0.0, 0.0)
+                        // Store sample color from first colored particle
+                        if (!sampleColor) {
+                            sampleColor = { r: 1.0, g: 0.0, b: 0.0 }
+                        }
+                    } else {
+                        // Base color
+                        colors.setXYZ(
+                            i,
+                            baseColorObj.r,
+                            baseColorObj.g,
+                            baseColorObj.b
+                        )
+                    }
+                }
+                positions.needsUpdate = true
+                colors.needsUpdate = true
+            }
+
             // Update debug info
             debugInfoRef.current.cursorEnabled = cursorConfig.enabled
             debugInfoRef.current.mousePosition = mouseRef.current
             debugInfoRef.current.displacedParticles = displacedCount
             debugInfoRef.current.coloredParticles = coloredParticlesCount
             debugInfoRef.current.maxDisplacement = maxDisplacement
-            debugInfoRef.current.avgDisplacement = baseParticlePositionsRef.current.length > 0 
-                ? totalDisplacement / baseParticlePositionsRef.current.length 
-                : 0
+            debugInfoRef.current.avgDisplacement =
+                baseParticlePositionsRef.current.length > 0
+                    ? totalDisplacement /
+                      baseParticlePositionsRef.current.length
+                    : 0
             debugInfoRef.current.maxColorFactor = maxColorFactor
             debugInfoRef.current.sampleColor = sampleColor
 
@@ -736,11 +806,20 @@ export default function ParticleSphereRefactor({
             const hasLerpDelta =
                 Math.abs(dx) > threshold || Math.abs(dy) > threshold
             // Check if cursor interaction is active (any non-zero displacements) - only if enabled
-            const hasCursorInteraction = cursorConfig.enabled && particleDisplacementsRef.current.some(
-                (disp) => Math.abs(disp.x) > threshold || Math.abs(disp.y) > threshold || Math.abs(disp.z) > threshold
-            )
+            const hasCursorInteraction =
+                cursorConfig.enabled &&
+                particleDisplacementsRef.current.some(
+                    (disp) =>
+                        Math.abs(disp.x) > threshold ||
+                        Math.abs(disp.y) > threshold ||
+                        Math.abs(disp.z) > threshold
+                )
             const needsContinue =
-                isDragging || rotationSpeed !== 0 || hasVelocity || hasLerpDelta || hasCursorInteraction
+                isDragging ||
+                rotationSpeed !== 0 ||
+                hasVelocity ||
+                hasLerpDelta ||
+                hasCursorInteraction
 
             if (needsContinue) {
                 animationFrameId = requestAnimationFrame(animate)
@@ -799,7 +878,8 @@ export default function ParticleSphereRefactor({
 
                 // Track velocity for throw - TIME NORMALIZED
                 if (timeSinceLastMove > 0) {
-                    const timeNormalization = targetDeltaTime / timeSinceLastMove
+                    const timeNormalization =
+                        targetDeltaTime / timeSinceLastMove
                     velocity.x = dx * sensitivity * 0.3 * timeNormalization
                     velocity.y = dy * sensitivity * 0.3 * timeNormalization
                 }
@@ -848,7 +928,12 @@ export default function ParticleSphereRefactor({
             const mouseX = event.clientX - rect.left
             const mouseY = event.clientY - rect.top
             // Only track if mouse is over canvas
-            if (mouseX >= 0 && mouseX <= rect.width && mouseY >= 0 && mouseY <= rect.height) {
+            if (
+                mouseX >= 0 &&
+                mouseX <= rect.width &&
+                mouseY >= 0 &&
+                mouseY <= rect.height
+            ) {
                 mouseRef.current = {
                     x: mouseX,
                     y: mouseY,
@@ -873,7 +958,12 @@ export default function ParticleSphereRefactor({
                 const touchX = touch.clientX - rect.left
                 const touchY = touch.clientY - rect.top
                 // Only track if touch is over canvas
-                if (touchX >= 0 && touchX <= rect.width && touchY >= 0 && touchY <= rect.height) {
+                if (
+                    touchX >= 0 &&
+                    touchX <= rect.width &&
+                    touchY >= 0 &&
+                    touchY <= rect.height
+                ) {
                     mouseRef.current = {
                         x: touchX,
                         y: touchY,
@@ -894,14 +984,20 @@ export default function ParticleSphereRefactor({
         if (cursorConfig.enabled) {
             canvas.addEventListener("mousemove", handleMouseMoveCursor)
             canvas.addEventListener("mouseleave", handleMouseLeaveCursor)
-            canvas.addEventListener("touchmove", handleTouchMove, { passive: false })
+            canvas.addEventListener("touchmove", handleTouchMove, {
+                passive: false,
+            })
             canvas.addEventListener("touchend", handleTouchEnd)
             canvas.addEventListener("touchcancel", handleTouchEnd)
         }
 
         // Resize handler
         const handleResize = () => {
-            if (!containerRef.current || !cameraRef.current || !rendererRef.current)
+            if (
+                !containerRef.current ||
+                !cameraRef.current ||
+                !rendererRef.current
+            )
                 return
 
             const newWidth =
@@ -915,13 +1011,16 @@ export default function ParticleSphereRefactor({
 
             cameraRef.current.aspect = newWidth / newHeight
             cameraRef.current.updateProjectionMatrix()
-            
+
             // Update camera distance based on scale - ensure it stays outside sphere
             const baseCameraDistance = 3.0
             const currentSphereRadius = 1.0 * scaleMultiplier
-            const cameraDistance = Math.max(baseCameraDistance, currentSphereRadius + 1.0)
+            const cameraDistance = Math.max(
+                baseCameraDistance,
+                currentSphereRadius + 1.0
+            )
             cameraRef.current.position.z = cameraDistance
-            
+
             rendererRef.current.setSize(newWidth, newHeight)
             rendererRef.current.render(sceneRef.current!, cameraRef.current)
         }
@@ -945,8 +1044,7 @@ export default function ParticleSphereRefactor({
 
                     const timeOk =
                         !lastResizeRef.current.ts ||
-                        (now || performance.now()) -
-                            lastResizeRef.current.ts >=
+                        (now || performance.now()) - lastResizeRef.current.ts >=
                             TICK_MS
                     const zoomChanged =
                         Math.abs(currentZoom - lastResizeRef.current.zoom) >
@@ -958,7 +1056,10 @@ export default function ParticleSphereRefactor({
                         Math.abs(aspect - lastResizeRef.current.aspect) >
                         EPS_ASPECT
 
-                    if (timeOk && (zoomChanged || sizeChanged || aspectChanged)) {
+                    if (
+                        timeOk &&
+                        (zoomChanged || sizeChanged || aspectChanged)
+                    ) {
                         lastResizeRef.current = {
                             ts: now || performance.now(),
                             zoom: currentZoom,
@@ -986,12 +1087,21 @@ export default function ParticleSphereRefactor({
                     canvas.removeEventListener("mousedown", handleMouseDown)
                 }
                 if (stopOnHover) {
-                    canvas.removeEventListener("mousemove", handleMouseMoveHover)
+                    canvas.removeEventListener(
+                        "mousemove",
+                        handleMouseMoveHover
+                    )
                 }
                 // Remove cursor interaction event listeners if they were added
                 if (cursorConfig.enabled) {
-                    canvas.removeEventListener("mousemove", handleMouseMoveCursor)
-                    canvas.removeEventListener("mouseleave", handleMouseLeaveCursor)
+                    canvas.removeEventListener(
+                        "mousemove",
+                        handleMouseMoveCursor
+                    )
+                    canvas.removeEventListener(
+                        "mouseleave",
+                        handleMouseLeaveCursor
+                    )
                     canvas.removeEventListener("touchmove", handleTouchMove)
                     canvas.removeEventListener("touchend", handleTouchEnd)
                     canvas.removeEventListener("touchcancel", handleTouchEnd)
@@ -1008,7 +1118,9 @@ export default function ParticleSphereRefactor({
                     }
                     if (particlesRef.current.material) {
                         if (Array.isArray(particlesRef.current.material)) {
-                            particlesRef.current.material.forEach((mat: any) => mat.dispose())
+                            particlesRef.current.material.forEach((mat: any) =>
+                                mat.dispose()
+                            )
                         } else {
                             particlesRef.current.material.dispose()
                         }
@@ -1058,7 +1170,9 @@ export default function ParticleSphereRefactor({
                 }
                 if (particlesRef.current.material) {
                     if (Array.isArray(particlesRef.current.material)) {
-                        particlesRef.current.material.forEach((mat: any) => mat.dispose())
+                        particlesRef.current.material.forEach((mat: any) =>
+                            mat.dispose()
+                        )
                     } else {
                         particlesRef.current.material.dispose()
                     }
@@ -1094,7 +1208,11 @@ export default function ParticleSphereRefactor({
 
         // Canvas mode only: If preview turned ON and animation is stopped, restart it
         // Use startAnimationRef to properly reset frame time and prevent delta jump
-        if (preview && startAnimationRef.current && animationFrameRef.current === null) {
+        if (
+            preview &&
+            startAnimationRef.current &&
+            animationFrameRef.current === null
+        ) {
             startAnimationRef.current()
         }
     }, [previewForAnimation, isCanvas])
@@ -1124,7 +1242,7 @@ export default function ParticleSphereRefactor({
                 }}
             />
             <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-            
+
             {/* Debug Panel */}
             <div
                 style={{
@@ -1144,46 +1262,71 @@ export default function ParticleSphereRefactor({
                     boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
                 }}
             >
-                <div style={{ fontWeight: "bold", marginBottom: "8px", borderBottom: "1px solid #444", paddingBottom: "6px" }}>
+                <div
+                    style={{
+                        fontWeight: "bold",
+                        marginBottom: "8px",
+                        borderBottom: "1px solid #444",
+                        paddingBottom: "6px",
+                    }}
+                >
                     🐛 Debug Panel
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "4px",
+                    }}
+                >
                     <div>
-                        <strong>Cursor:</strong> {debugInfo.cursorEnabled ? "✅ Enabled" : "❌ Disabled"}
+                        <strong>Cursor:</strong>{" "}
+                        {debugInfo.cursorEnabled ? "✅ Enabled" : "❌ Disabled"}
                     </div>
                     <div>
-                        <strong>Mouse:</strong> {debugInfo.mousePosition 
-                            ? `(${Math.round(debugInfo.mousePosition.x)}, ${Math.round(debugInfo.mousePosition.y)})` 
+                        <strong>Mouse:</strong>{" "}
+                        {debugInfo.mousePosition
+                            ? `(${Math.round(debugInfo.mousePosition.x)}, ${Math.round(debugInfo.mousePosition.y)})`
                             : "None"}
                     </div>
                     <div>
-                        <strong>Particle Shape:</strong> {debugInfo.particleShape}
+                        <strong>Particle Shape:</strong>{" "}
+                        {debugInfo.particleShape}
                     </div>
                     <div>
-                        <strong>Instance Color:</strong> {debugInfo.instanceColorExists ? "✅" : "❌"}
+                        <strong>Instance Color:</strong>{" "}
+                        {debugInfo.instanceColorExists ? "✅" : "❌"}
                     </div>
                     <div>
-                        <strong>Vertex Color:</strong> {debugInfo.vertexColorExists ? "✅" : "❌"}
+                        <strong>Vertex Color:</strong>{" "}
+                        {debugInfo.vertexColorExists ? "✅" : "❌"}
                     </div>
                     <div>
-                        <strong>Displaced Particles:</strong> {debugInfo.displacedParticles} / {particlesCount}
+                        <strong>Displaced Particles:</strong>{" "}
+                        {debugInfo.displacedParticles} / {particlesCount}
                     </div>
                     <div>
-                        <strong>Colored Particles:</strong> {debugInfo.coloredParticles || 0} / {particlesCount}
+                        <strong>Colored Particles:</strong>{" "}
+                        {debugInfo.coloredParticles || 0} / {particlesCount}
                     </div>
                     <div>
-                        <strong>Max Displacement:</strong> {debugInfo.maxDisplacement.toFixed(4)}
+                        <strong>Max Displacement:</strong>{" "}
+                        {debugInfo.maxDisplacement.toFixed(4)}
                     </div>
                     <div>
-                        <strong>Avg Displacement:</strong> {debugInfo.avgDisplacement.toFixed(6)}
+                        <strong>Avg Displacement:</strong>{" "}
+                        {debugInfo.avgDisplacement.toFixed(6)}
                     </div>
                     <div>
-                        <strong>Max Color Factor:</strong> {debugInfo.maxColorFactor.toFixed(3)}
+                        <strong>Max Color Factor:</strong>{" "}
+                        {debugInfo.maxColorFactor.toFixed(3)}
                     </div>
                     {debugInfo.sampleColor && (
                         <div>
-                            <strong>Sample Color (RGB):</strong>{" "}
-                            ({debugInfo.sampleColor.r.toFixed(3)}, {debugInfo.sampleColor.g.toFixed(3)}, {debugInfo.sampleColor.b.toFixed(3)})
+                            <strong>Sample Color (RGB):</strong> (
+                            {debugInfo.sampleColor.r.toFixed(3)},{" "}
+                            {debugInfo.sampleColor.g.toFixed(3)},{" "}
+                            {debugInfo.sampleColor.b.toFixed(3)})
                             <div
                                 style={{
                                     width: "40px",
@@ -1211,7 +1354,7 @@ addPropertyControls(ParticleSphereRefactor, {
         enabledTitle: "On",
         disabledTitle: "Off",
     },
-    particlesCount:{
+    particlesCount: {
         type: ControlType.Number,
         title: "Count",
         min: 100,
@@ -1260,7 +1403,6 @@ addPropertyControls(ParticleSphereRefactor, {
         step: 0.1,
         defaultValue: 0.5,
         hidden: (props: ParticleSphereRefactorProps) => !props.drag,
-    
     },
     stopOnHover: {
         type: ControlType.Boolean,
@@ -1281,8 +1423,8 @@ addPropertyControls(ParticleSphereRefactor, {
         title: "Particles",
         type: ControlType.Object,
         controls: {
-            shape:{
-                type:ControlType.Enum,
+            shape: {
+                type: ControlType.Enum,
                 title: "Shape",
                 options: ["sphere", "cube"],
                 optionTitles: ["Sphere", "Cube"],
@@ -1298,11 +1440,11 @@ addPropertyControls(ParticleSphereRefactor, {
             },
         },
     },
-    cursorConfig:{
+    cursorConfig: {
         type: ControlType.Object,
-        title:"Cursor",
+        title: "Cursor",
         controls: {
-            enabled:{
+            enabled: {
                 type: ControlType.Boolean,
                 title: "Enabled",
                 defaultValue: true,
@@ -1338,4 +1480,3 @@ addPropertyControls(ParticleSphereRefactor, {
 })
 
 ParticleSphereRefactor.displayName = "Particle Sphere Refactor"
-
