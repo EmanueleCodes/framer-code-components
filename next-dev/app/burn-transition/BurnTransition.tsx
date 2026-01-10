@@ -125,7 +125,13 @@ function mapGrainScale(ui: number): number {
     return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 50, 500)
 }
 
+// Bloom Radius: UI 0-1 → Internal 0-0.3 (blur radius for bloom effect)
+function mapBloomRadius(ui: number): number {
+    return mapLinear(Math.max(0, Math.min(1, ui)), 0, 1, 0, 0.3)
+}
+
 interface BurnTransitionProps {
+    preview?: boolean
     color?: string
     transitionColor?: string
     noiseScale?: number // UI: 0-1
@@ -136,11 +142,9 @@ interface BurnTransitionProps {
     bloomIntensity?: number // UI: 0-1
     bloomRadius?: number // UI: 0-1
     parallaxEnabled?: boolean
-    parallaxStart?: number // 0-100, percentage where wave starts when component enters viewport (0% = bottom, 50% = middle, 100% = top)
-    parallaxEnd?: number // 0-100, percentage where wave ends when component exits viewport (0% = bottom, 50% = middle, 100% = top)
     style?: React.CSSProperties
     movement?: {
-        horizontal: number
+        horizontal?: "left" | "center" | "right"
         vertical: number
     }
 }
@@ -153,6 +157,7 @@ interface BurnTransitionProps {
  * @framerDisableUnlink
  */
 export default function BurnTransition({
+    preview = false,
     color = "#ff0000",
     transitionColor,
     noiseScale = 0.37, // UI default (maps to ~8.0 internally)
@@ -163,11 +168,9 @@ export default function BurnTransition({
     bloomIntensity = 0.5,
     bloomRadius = 0.5,
     parallaxEnabled = false,
-    parallaxStart = 50, // 0-100, default 50% (middle)
-    parallaxEnd = 100, // 0-100, default 100% (top)
     style,
     movement = {
-        horizontal: 0.5,
+        horizontal: "center",
         vertical: 0.5,
     },
 }: BurnTransitionProps) {
@@ -178,6 +181,15 @@ export default function BurnTransition({
     const internalBaseAnimationSpeed = mapBaseAnimationSpeed(baseAnimationSpeed)
     const internalEdgeSoftness = mapEdgeSoftness(edgeSoftness)
     const internalGrainScale = 0
+    const internalBloomRadius = mapBloomRadius(bloomRadius)
+
+    // Map horizontal movement enum to numeric value: left = 1, right = -1, center = 0
+    const horizontalMovementValue =
+        movement?.horizontal === "left"
+            ? 1
+            : movement?.horizontal === "right"
+              ? -1
+              : 0
 
     // Resolve color token and parse to RGBA
     const resolvedColor = resolveTokenColor(color)
@@ -209,8 +221,8 @@ export default function BurnTransition({
     const baseAnimationSpeedRef = useRef<number>(internalBaseAnimationSpeed)
     const edgeSoftnessRef = useRef<number>(internalEdgeSoftness)
     const grainScaleRef = useRef<number>(internalGrainScale)
-    const movementHorizontalRef = useRef<number>(movement.horizontal)
-    const movementVerticalRef = useRef<number>(movement.vertical)
+    const movementHorizontalRef = useRef<number>(horizontalMovementValue)
+    const movementVerticalRef = useRef<number>(movement?.vertical ?? 0.5)
     const scrollOffsetRef = useRef<number>(0)
     const lastScrollYRef = useRef<number>(0)
     const lastScrollTimeRef = useRef<number>(0)
@@ -218,9 +230,18 @@ export default function BurnTransition({
     const animationFrameRef = useRef<number | null>(null)
     const baseTimeRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
+    const previewRef = useRef<boolean>(preview)
     const parallaxEnabledRef = useRef<boolean>(parallaxEnabled)
-    const parallaxStartRef = useRef<number>(parallaxStart)
-    const parallaxEndRef = useRef<number>(parallaxEnd)
+
+    // Check canvas mode ONCE at component mount and cache it
+    const isCanvasRef = useRef<boolean | null>(null)
+    if (isCanvasRef.current === null) {
+        isCanvasRef.current = RenderTarget.current() === RenderTarget.canvas
+    }
+    const isCanvas = isCanvasRef.current
+    // Hardcode parallax values: start = 0% (bottom), end = 100% (top)
+    const parallaxStartRef = useRef<number>(0)
+    const parallaxEndRef = useRef<number>(100)
     const parallaxOffsetRef = useRef<number>(0)
     const canvasSizeRef = useRef<{ width: number; height: number }>({
         width: 0,
@@ -229,7 +250,7 @@ export default function BurnTransition({
 
     // Bloom refs
     const bloomIntensityRef = useRef<number>(bloomIntensity)
-    const bloomRadiusRef = useRef<number>(bloomRadius)
+    const bloomRadiusRef = useRef<number>(internalBloomRadius)
     const extractProgramRef = useRef<WebGLProgram | null>(null)
     const blurProgramRef = useRef<WebGLProgram | null>(null)
     const compositeProgramRef = useRef<WebGLProgram | null>(null)
@@ -486,12 +507,18 @@ export default function BurnTransition({
         }
 
         // Update base time (linear, constant speed animation)
+        // In canvas mode with preview off, freeze time (set speed to 0)
         const currentTime = performance.now()
         if (startTimeRef.current === 0) {
             startTimeRef.current = currentTime
         }
-        const elapsedSeconds = (currentTime - startTimeRef.current) / 1000
-        baseTimeRef.current = elapsedSeconds * baseAnimationSpeedRef.current
+        // Only update time if not in canvas mode with preview off
+        const shouldAnimate = !(isCanvas && !previewRef.current)
+        if (shouldAnimate) {
+            const elapsedSeconds = (currentTime - startTimeRef.current) / 1000
+            baseTimeRef.current = elapsedSeconds * baseAnimationSpeedRef.current
+        }
+        // If preview is off in canvas mode, baseTimeRef stays frozen at its current value
 
         // Set scroll offset uniform for animation (base time + scroll offset)
         const scrollOffsetLocation = gl.getUniformLocation(
@@ -881,6 +908,15 @@ export default function BurnTransition({
         // Note: render() is called by animation loop, no need to call it here
     }
 
+    // Update preview ref when preview prop changes
+    useEffect(() => {
+        previewRef.current = preview
+        // When preview turns on in canvas mode, reset start time to prevent jump
+        if (isCanvas && preview && startTimeRef.current > 0) {
+            startTimeRef.current = performance.now()
+        }
+    }, [preview, isCanvas])
+
     // Update refs when props change
     useEffect(() => {
         const resolved = resolveTokenColor(color)
@@ -940,41 +976,51 @@ export default function BurnTransition({
     }, [])
 
     useEffect(() => {
-        movementHorizontalRef.current = movement.horizontal
+        // Map horizontal movement enum to value: left = 1, right = -1, center = 0
+        const horizontalValue =
+            movement?.horizontal === "left"
+                ? 1
+                : movement?.horizontal === "right"
+                  ? -1
+                  : 0
+        movementHorizontalRef.current = horizontalValue
         if (glRef.current && programRef.current) {
             render()
         }
-    }, [movement.horizontal])
+    }, [movement?.horizontal])
 
     useEffect(() => {
-        movementVerticalRef.current = movement.vertical
+        movementVerticalRef.current = movement?.vertical ?? 0.5
         if (glRef.current && programRef.current) {
             render()
         }
-    }, [movement.vertical])
+    }, [movement?.vertical])
 
     useEffect(() => {
         parallaxEnabledRef.current = parallaxEnabled
+        // Hardcode parallax values: start = 0% (bottom), end = 100% (top)
+        parallaxStartRef.current = 0
+        parallaxEndRef.current = 100
         updateParallaxOffset()
     }, [parallaxEnabled])
-
-    useEffect(() => {
-        parallaxStartRef.current = Math.max(0, Math.min(100, parallaxStart))
-        updateParallaxOffset()
-    }, [parallaxStart])
-
-    useEffect(() => {
-        parallaxEndRef.current = Math.max(0, Math.min(100, parallaxEnd))
-        updateParallaxOffset()
-    }, [parallaxEnd])
 
     useEffect(() => {
         bloomIntensityRef.current = bloomIntensity
     }, [bloomIntensity])
 
     useEffect(() => {
-        bloomRadiusRef.current = bloomRadius
+        bloomRadiusRef.current = mapBloomRadius(bloomRadius)
+        if (glRef.current && blurProgramRef.current) {
+            render()
+        }
     }, [bloomRadius])
+
+    // Handle preview changes - re-render when preview toggles
+    useEffect(() => {
+        if (glRef.current && programRef.current) {
+            render()
+        }
+    }, [preview])
 
     // Vertex shader - simple fullscreen quad
     const vertexShader = `
@@ -1432,10 +1478,13 @@ export default function BurnTransition({
 
         // Track scroll for animation and parallax
         const scrollHandler = () => {
+            // In canvas mode with preview off, don't update scroll offset (freeze animation)
+            const shouldAnimate = !(isCanvas && !previewRef.current)
+            
             const currentScrollY = window.scrollY || window.pageYOffset
             const currentTime = performance.now()
 
-            if (lastScrollTimeRef.current > 0) {
+            if (lastScrollTimeRef.current > 0 && shouldAnimate) {
                 const deltaY = currentScrollY - lastScrollYRef.current
                 const deltaTime = currentTime - lastScrollTimeRef.current
 
@@ -1453,8 +1502,10 @@ export default function BurnTransition({
             lastScrollYRef.current = currentScrollY
             lastScrollTimeRef.current = currentTime
 
-            // Update parallax offset on scroll
-            updateParallaxOffset()
+            // Update parallax offset on scroll (still needed for parallax to work)
+            if (shouldAnimate || parallaxEnabledRef.current) {
+                updateParallaxOffset()
+            }
         }
 
         // Initialize scroll tracking
@@ -1525,6 +1576,13 @@ export default function BurnTransition({
 
 // Property controls for Framer
 addPropertyControls(BurnTransition, {
+    preview: {
+        type: ControlType.Boolean,
+        title: "Preview",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
     color: {
         type: ControlType.Color,
         title: "Color",
@@ -1532,7 +1590,7 @@ addPropertyControls(BurnTransition, {
     },
     transitionColor: {
         type: ControlType.Color,
-        title: "Transition Color",
+        title: "Transition",
         defaultValue: "#ffffff",
         optional: true,
     },
@@ -1587,8 +1645,8 @@ addPropertyControls(BurnTransition, {
     },
     bloomRadius: {
         type: ControlType.Number,
-        title: "Bloom Radius",
-        defaultValue: 0.5,
+        title: "Bloom Width",
+        defaultValue: 0.1,
         min: 0.0,
         max: 1.0,
         step: 0.1,
@@ -1600,53 +1658,35 @@ addPropertyControls(BurnTransition, {
         enabledTitle: "On",
         disabledTitle: "Off",
     },
-    parallaxStart: {
-        type: ControlType.Number,
-        title: "Start",
-        defaultValue: 50,
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
-    },
-    parallaxEnd: {
-        type: ControlType.Number,
-        title: "End",
-        defaultValue: 100,
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-        description: "0% = bottom, 50% = middle, 100% = top",
-        hidden: (props: BurnTransitionProps) => !props.parallaxEnabled,
-    },
     movement: {
         type: ControlType.Object,
+        title:"Movement",
+        description:"More components at [Framer University](https://frameruni.link/cc).",
         controls: {
             horizontal: {
-                type: ControlType.Number,
+                type: ControlType.Enum,
                 title: "Horizontal",
-                defaultValue: 0,
-                step: 0.1,
-                min: -1,
-                max: 1,
-                description: "-1 = right to left, 1 = left to right",
+                options: ["left", "center", "right"],
+                optionTitles: ["<-", "•", "->"],
+                defaultValue: "center",
+                displaySegmentedControl: true,
             },
             vertical: {
                 type: ControlType.Number,
                 title: "Vertical",
-                defaultValue: 0,
+                defaultValue: 0.5,
                 step: 0.1,
                 min: 0,
                 max: 1,
+                description:"Set parallax = Off to see better what this does."
             },
         },
         defaultValue: {
-            horizontal: 0.5,
+            horizontal: "center",
             vertical: 0.5,
         },
     },
+    
 })
 
 BurnTransition.displayName="Burn Transition"

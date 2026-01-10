@@ -61,6 +61,68 @@ function resolveTokenColor(input: any): any {
     return extractDefaultValue(input)
 }
 
+// Parse color string to RGBA values (0-1 range)
+function parseColorToRgba(input: string | undefined): {
+    r: number
+    g: number
+    b: number
+    a: number
+} {
+    if (!input || input.trim() === "") return { r: 0, g: 0, b: 0, a: 0 }
+    const str = input.trim()
+
+    // Handle rgba() format
+    const rgbaMatch = str.match(
+        /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/i
+    )
+    if (rgbaMatch) {
+        const r = Math.max(0, Math.min(255, parseFloat(rgbaMatch[1]))) / 255
+        const g = Math.max(0, Math.min(255, parseFloat(rgbaMatch[2]))) / 255
+        const b = Math.max(0, Math.min(255, parseFloat(rgbaMatch[3]))) / 255
+        const a =
+            rgbaMatch[4] !== undefined
+                ? Math.max(0, Math.min(1, parseFloat(rgbaMatch[4])))
+                : 1
+        return { r, g, b, a }
+    }
+
+    // Handle hex formats
+    const hex = str.replace(/^#/, "")
+    if (hex.length === 8) {
+        return {
+            r: parseInt(hex.slice(0, 2), 16) / 255,
+            g: parseInt(hex.slice(2, 4), 16) / 255,
+            b: parseInt(hex.slice(4, 6), 16) / 255,
+            a: parseInt(hex.slice(6, 8), 16) / 255,
+        }
+    }
+    if (hex.length === 6) {
+        return {
+            r: parseInt(hex.slice(0, 2), 16) / 255,
+            g: parseInt(hex.slice(2, 4), 16) / 255,
+            b: parseInt(hex.slice(4, 6), 16) / 255,
+            a: 1,
+        }
+    }
+    if (hex.length === 4) {
+        return {
+            r: parseInt(hex[0] + hex[0], 16) / 255,
+            g: parseInt(hex[1] + hex[1], 16) / 255,
+            b: parseInt(hex[2] + hex[2], 16) / 255,
+            a: parseInt(hex[3] + hex[3], 16) / 255,
+        }
+    }
+    if (hex.length === 3) {
+        return {
+            r: parseInt(hex[0] + hex[0], 16) / 255,
+            g: parseInt(hex[1] + hex[1], 16) / 255,
+            b: parseInt(hex[2] + hex[2], 16) / 255,
+            a: 1,
+        }
+    }
+    return { r: 0, g: 0, b: 0, a: 1 }
+}
+
 // Value mapping functions
 function mapLinear(
     value: number,
@@ -255,9 +317,13 @@ export default function ParticleSphereRefactor({
 
         // Resolve color tokens (CSS variables) and parse color properly
         const resolvedSphereColor = resolveTokenColor(sphereColor)
+        const sphereRgba = parseColorToRgba(resolvedSphereColor || sphereColor)
+        // Use Color constructor with string for proper color space handling
+        // Then apply the parsed RGB values to ensure opacity is extracted correctly
         const baseColorObj = resolvedSphereColor
             ? new Color(resolvedSphereColor)
-            : new Color(1, 1, 1)
+            : new Color(sphereRgba.r, sphereRgba.g, sphereRgba.b)
+        const particleOpacity = sphereRgba.a
 
         // Red color for displaced particles
         const redColor = new Color(1, 0, 0)
@@ -296,7 +362,8 @@ export default function ParticleSphereRefactor({
             const sphereMaterial = new MeshBasicMaterial({
                 color: 0xffffff,
                 blending: AdditiveBlending,
-                transparent: true,
+                transparent: particleOpacity < 1,
+                opacity: particleOpacity,
             })
 
             particles = new InstancedMesh(
@@ -355,10 +422,11 @@ export default function ParticleSphereRefactor({
 
             const particlesMaterial = new PointsMaterial({
                 size: particleSize,
-                color: baseColorObj,
+                color: 0xffffff, // White multiplier when using vertexColors
                 blending: AdditiveBlending,
                 depthTest: false,
-                transparent: true,
+                transparent: particleOpacity < 1,
+                opacity: particleOpacity,
                 vertexColors: true, // Enable vertex colors
             })
 
