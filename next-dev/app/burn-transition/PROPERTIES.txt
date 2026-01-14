@@ -1,0 +1,40 @@
+Burn Transition - Property Controls
+
+Preview
+Controls whether the animation preview is active in the Framer canvas. "On" enables the animation preview. "Off" freezes the animation in canvas mode.
+
+Color
+The base color of the burn transition effect. This is the solid color that appears below the transition edge. Supports hex colors, rgba values, and Framer color tokens.
+
+Transition
+The transition color that appears in the torn edge area between the solid color and transparency. If not specified, defaults to a lighter version of the base color. Supports hex colors, rgba values, and Framer color tokens.
+
+Scale
+Controls the scale of the noise pattern used for the torn edge effect. Higher values create larger, more dramatic tears. Lower values create finer, more detailed edges. Range: 0.0-1.0.
+
+Noise
+Controls the intensity of the noise pattern that creates the uneven, organic edge. Higher values create more variation in the edge shape. Lower values create smoother, more uniform edges. Range: 0.0-1.0.
+
+Scroll
+Controls how sensitive the transition animation is to scroll movement. Higher values make the transition respond more strongly to scrolling. Lower values create subtler scroll-based animation. Range: 0.0-1.0.
+
+Base Speed
+Controls the base animation speed of the transition effect when not scrolling. Higher values create faster continuous animation. Lower values create slower, more subtle animation. Range: 0.0-1.0.
+
+Edge
+Controls the softness and thickness of the transition edge. Higher values create thicker, softer transition zones with more gradual blending. Lower values create sharper, thinner edges. Range: 0.0-1.0.
+
+Bloom
+Controls the intensity of the glow/bloom effect around the transition edge. Higher values create a stronger glow. Set to 0 to disable the bloom effect. Range: 0.0-1.0.
+
+Bloom Width
+Controls the width/spread of the bloom glow effect. Higher values create a wider, more diffused glow. Lower values create a tighter, more focused glow. Range: 0.0-1.0.
+
+Parallax
+Controls whether the transition edge follows scroll position with parallax effect. "On" enables parallax scrolling where the edge position is tied to the component's position in the viewport. "Off" disables parallax and uses only scroll-based animation.
+
+Movement
+Controls the direction and evolution of the transition animation.
+- Horizontal: Controls the horizontal movement direction. "<-" moves left to right, "->" moves right to left, "•" has no horizontal movement.
+- Vertical: Controls the vertical evolution amount of the noise pattern. Higher values create more vertical variation. Set parallax to "Off" to better see the effect of this control. Range: 0.0-1.0.
+

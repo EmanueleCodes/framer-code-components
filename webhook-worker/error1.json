@@ -1,0 +1,36 @@
+{
+    "level": "error",
+    "message": "❌ Error adding profile to list: SyntaxError: Unexpected end of JSON input",
+    "$workers": {
+      "truncated": false,
+      "event": {
+        "request": {
+          "url": "https://framer-webhook.emanuelecodes.workers.dev/",
+          "method": "POST",
+          "path": "/"
+        }
+      },
+      "outcome": "ok",
+      "scriptName": "framer-webhook",
+      "eventType": "fetch",
+      "executionModel": "stateless",
+      "scriptVersion": {
+        "id": "f3a68fc2-7c66-4683-8371-e3e64159b002"
+      },
+      "requestId": "9bab52d18b0c5bfb"
+    },
+    "$metadata": {
+      "id": "01KEENJ02VJX4BN8PRMK93KGPA",
+      "requestId": "9bab52d18b0c5bfb",
+      "trigger": "POST /",
+      "service": "framer-webhook",
+      "level": "error",
+      "error": "❌ Error adding profile to list: SyntaxError: Unexpected end of JSON input",
+      "message": "❌ Error adding profile to list: SyntaxError: Unexpected end of JSON input",
+      "account": "8fa2ec3c5a448b4859992628a5b9728d",
+      "type": "cf-worker",
+      "fingerprint": "ddbfd6ea2529d52479e108c64c6bad03",
+      "origin": "fetch",
+      "errorTemplate": "❌ Error adding profile to list: SyntaxError: Unexpected end of JSON input"
+    }
+  }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
+import { useMotionValue, animate, useMotionValueEvent } from "framer-motion"
 
 // Three.js imports from CDN
 import {
@@ -9,15 +10,14 @@ import {
     WebGLRenderer,
     BoxGeometry,
     SkinnedMesh,
-    MeshBasicMaterial,
     MeshStandardMaterial,
     Texture,
     Vector3,
+    Quaternion,
     Bone,
     Skeleton,
     Float32BufferAttribute,
     Uint16BufferAttribute,
-    DoubleSide,
     FrontSide,
     RepeatWrapping,
     LinearFilter,
@@ -33,10 +33,6 @@ import {
     PCFSoftShadowMap,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
-// GSAP import from CDN
-import gsap from "https://cdn.jsdelivr.net/npm/gsap@3.12.5/+esm"
-
-// OrbitControls import from Three.js examples
 import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/3D-text-rug.js"
 
 // ============================================================================
@@ -60,22 +56,45 @@ interface StickerProps {
     // Main content
     image?: ResponsiveImageSource
     // Sticker settings
-    curlAmount: number
-    curlRadius: number
-    curlStart: number
     curlRotation: number // Curl direction rotation in degrees (0-360)
     curlMode: "semicircle" | "spiral"
     backColor: string
-    // Lighting and shadows
-    enableShadows: boolean
-    shadowIntensity: number
+    // Animation settings (start = initial state, end = hover state)
+    animation: {
+        show: "initial" | "final" // Which state to show in Canvas
+        curlAmountStart: number
+        curlAmountEnd: number
+        curlRadiusStart: number
+        curlRadiusEnd: number
+        curlStartStart: number
+        curlStartEnd: number
+    }
+    // Transition settings for Framer Motion animations
+    transition?: {
+        type?: "tween" | "spring" | "keyframes" | "inertia"
+        duration?: number
+        ease?: string | number[]
+        delay?: number
+        // Spring properties
+        stiffness?: number
+        damping?: number
+        mass?: number
+        bounce?: number
+        restDelta?: number
+        restSpeed?: number
+    }
+    // Lighting and shadows (shadows always enabled with intensity = 1)
     animationDuration: number
     shadowPositionX: number
     shadowPositionY: number
     shadowBgColor: string
     castShadowOpacity: number
+    // Refresh toggle to force re-initialization
+    refresh: boolean
     // Style (always last)
     style?: React.CSSProperties
+    borderRadius: string
+    backgroundColor: string
 }
 
 // Simple image source resolution
@@ -99,8 +118,12 @@ const CAMERA_FAR = 2000
 // Sticker geometry - same as Reference for smoothness
 const STICKER_DEPTH = 0.003
 
-// Canvas overscan - much larger for curl to extend beyond bounds
-const CANVAS_SCALE = 2.5 // Large transparent space around sticker
+// Canvas scale - small padding for shadows while staying responsive
+const CANVAS_SCALE = 4 // 400% extra space for shadows
+
+// 2D Bone Grid settings
+const BONE_GRID_X = 60 // Performance-safe bone count for hardware skinning
+const BONE_GRID_Y = 60
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -261,28 +284,6 @@ function makeBackTextureViewConsistent(tex: any, frontTex?: any): any {
     return out
 }
 
-/**
- * Apply counter-rotation to a texture so the image stays upright
- * when the group is rotated to change curl direction.
- * @param tex - The texture to rotate
- * @param rotationDegrees - The curl rotation in degrees (we apply the opposite)
- * @param isBackTexture - If true, account for the mirrored UV (back face)
- */
-function applyTextureCounterRotation(
-    tex: any,
-    rotationDegrees: number,
-    isBackTexture = false
-): void {
-    if (!tex) return
-    // Set rotation center to texture center (0.5, 0.5)
-    tex.center.set(0.5, 0.5)
-    // Counter-rotate: negative of the group rotation
-    // For back texture (mirrored), we need to negate again due to the horizontal flip
-    const rotationRad = -rotationDegrees * (Math.PI / 180)
-    tex.rotation = isBackTexture ? -rotationRad : rotationRad
-    tex.needsUpdate = true
-}
-
 // ============================================================================
 // FRAMER ANNOTATIONS
 // ============================================================================
@@ -297,20 +298,44 @@ function applyTextureCounterRotation(
 
 export default function Sticker({
     image,
-    curlAmount = 0.05,
-    curlRadius = 1,
-    curlStart = 0.45,
+
     curlRotation = 0, // 0° = curl from left, 90° = from bottom, 180° = from right, 270° = from top
     curlMode = "spiral",
+    animation = {
+        show: "initial",
+        curlAmountStart: 0.6,
+        curlAmountEnd: 0.6,
+        curlRadiusStart: 0.15,
+        curlRadiusEnd: 1,
+        curlStartStart: 0.5,
+        curlStartEnd: 1,
+    },
+    transition = {
+        type: "tween" as const,
+        duration: 0.6,
+        ease: "easeInOut",
+    } as {
+        type?: "tween" | "spring" | "keyframes" | "inertia"
+        duration?: number
+        ease?: string | number[]
+        delay?: number
+        stiffness?: number
+        damping?: number
+        mass?: number
+        bounce?: number
+        restDelta?: number
+        restSpeed?: number
+    },
     backColor = "rgba(255, 255, 255, 1)",
-    enableShadows = true,
-    animationDuration = 0.6,
-    shadowIntensity = 1,
+    animationDuration = 0.6, // Deprecated: use transition.duration instead, kept for backwards compatibility
     shadowPositionX = -400,
     shadowPositionY = 0,
     shadowBgColor = "rgba(0, 0, 0, 0)",
     castShadowOpacity = 0.3,
+    refresh = false,
     style,
+    borderRadius,
+    backgroundColor = "transparent",
 }: StickerProps) {
     // Refs
     const containerRef = useRef<HTMLDivElement>(null)
@@ -321,6 +346,7 @@ export default function Sticker({
     const meshRef = useRef<any>(null)
     const groupRef = useRef<any>(null) // Group for rotation around center
     const bonesRef = useRef<any[]>([])
+    const bonesInitialPositionsRef = useRef<any[]>([])
     const zoomProbeRef = useRef<HTMLDivElement>(null)
     const lastSizeRef = useRef({
         width: 0,
@@ -331,69 +357,125 @@ export default function Sticker({
     })
     const animationFrameRef = useRef<number | null>(null)
     const loadedImageRef = useRef<HTMLImageElement | null>(null)
-    const animatedCurlRef = useRef({ amount: curlAmount }) // Animated curl value for GSAP
+    const imageLoadAbortRef = useRef<boolean>(false) // Track if component is unmounting
+    // Detect environment
+    const resolvedImageUrl = resolveImageSource(image)
+    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+
+    // In Canvas mode, use the show prop to determine initial state
+    // In preview/live mode, always start with initial values
+    const shouldShowFinal = isCanvas && animation.show === "final"
+
+    // Use Framer Motion values for animated properties
+    const initialCurlAmount = shouldShowFinal
+        ? animation.curlAmountEnd
+        : animation.curlAmountStart
+    const initialCurlStart = shouldShowFinal
+        ? animation.curlStartEnd
+        : animation.curlStartStart
+    const initialCurlRadius = shouldShowFinal
+        ? animation.curlRadiusEnd
+        : animation.curlRadiusStart
+
+    const curlAmountMotion = useMotionValue(initialCurlAmount)
+    const curlStartMotion = useMotionValue(initialCurlStart)
+    const curlRadiusMotion = useMotionValue(initialCurlRadius)
+
+    // Keep refs for quick access in updateBones (motion values are read synchronously)
+    const animatedCurlRef = useRef({ amount: initialCurlAmount })
+    const animatedCurlStartRef = useRef({ start: initialCurlStart })
+    const animatedCurlRadiusRef = useRef({ radius: initialCurlRadius })
+
     const isHoveringRef = useRef(false) // Track if currently hovering over sticker
     const lightRef = useRef<any>(null)
     const ambientLightRef = useRef<any>(null)
     const backgroundPlaneRef = useRef<any>(null)
-    const internalRadiusRef = useRef(mapInteralRadiusToUIValue(curlRadius))
+    const curlRotationRef = useRef(curlRotation) // Store curlRotation in ref so updateBones always reads current value
     const imageAspectRatioRef = useRef<number | null>(null) // Store image aspect ratio for contain behavior
+    const lastMeshDimensionsRef = useRef<{
+        width: number
+        height: number
+    } | null>(null) // Track mesh dimensions to avoid unnecessary recreation
+    const pendingUpdateRef = useRef<boolean>(false) // Flag to batch bone updates into single RAF
+    const lastRetryAttemptRef = useRef<number>(0) // Track last retry attempt to prevent rapid retries
+    const previousRefreshRef = useRef<boolean | undefined>(undefined) // Track previous refresh value to detect changes
 
     // State
     const [textureLoaded, setTextureLoaded] = useState(false)
-
-    // Detect environment
-    const resolvedImageUrl = resolveImageSource(image)
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+    // Track WebGL context loss (happens when too many WebGL contexts are active)
+    // Browser limit is typically 8-16 contexts depending on the browser and hardware
+    const [contextLost, setContextLost] = useState(false)
+    // Track when scene is ready to trigger re-renders (refs don't trigger re-renders)
+    const [sceneReady, setSceneReady] = useState(false)
     const hasContent = !!resolvedImageUrl
 
-    const boneSegments = 150
-
     // ========================================================================
-    // CREATE STICKER GEOMETRY WITH SKINNING (like Reference.tsx)
+    // CREATE STICKER GEOMETRY WITH 2D BILINEAR SKINNING
     // ========================================================================
 
     const createStickerGeometry = useCallback(
-        (width: number, height: number, segments: number) => {
-            // Create box geometry with balanced segments for multi-directional curling
-            // Use 2:1 ratio (instead of 5:1) so geometry works well at all rotation angles
-            // At 0°: X segments handle horizontal curl. At 90°: Y segments handle vertical curl.
-            const ySegments = Math.max(2, Math.floor(segments / 2))
+        (width: number, height: number, gridX: number, gridY: number) => {
+            // High resolution geometry for smooth curves, independent of bone count
+            const xSegments = 150
+            const ySegments = 100
 
             const geometry = new BoxGeometry(
                 width,
                 height,
                 STICKER_DEPTH,
-                segments, // X segments for bending
-                ySegments, // Y segments for smooth lighting and rotation support
+                xSegments,
+                ySegments,
                 1
             )
 
-            // Translate so left edge is at origin (like book page)
-            geometry.translate(width / 2, 0, 0)
+            // Geometry is centered at origin (no translation needed for 2D grid approach)
+            // This keeps the sticker centered and simplifies fold line calculations
 
-            // Add skinning attributes (same as Reference.tsx)
+            // Add 2D bilinear skinning attributes
             const position = geometry.attributes.position
             const vertex = new Vector3()
             const skinIndexes: number[] = []
             const skinWeights: number[] = []
-            const segmentWidth = width / segments
+
+            // Bone grid spacing
+            const boneSpacingX = width / (gridX - 1)
+            const boneSpacingY = height / (gridY - 1)
 
             for (let i = 0; i < position.count; i++) {
                 vertex.fromBufferAttribute(position, i)
-                const x = vertex.x
 
-                // Calculate bone index based on X position
-                const skinIndex = Math.max(0, Math.floor(x / segmentWidth))
-                let skinWeight = (x % segmentWidth) / segmentWidth
+                // Convert vertex position to grid coordinates (0 to gridX-1, 0 to gridY-1)
+                // Geometry is centered, so vertex.x ranges from -width/2 to width/2
+                const normalizedX = (vertex.x + width / 2) / width // 0 to 1
+                const normalizedY = (vertex.y + height / 2) / height // 0 to 1
 
-                skinIndexes.push(
-                    skinIndex,
-                    Math.min(skinIndex + 1, segments),
-                    0,
-                    0
-                )
-                skinWeights.push(1 - skinWeight, skinWeight, 0, 0)
+                // Find the 4 nearest bones (bilinear interpolation)
+                const gridXPos = normalizedX * (gridX - 1)
+                const gridYPos = normalizedY * (gridY - 1)
+
+                const x0 = Math.floor(gridXPos)
+                const y0 = Math.floor(gridYPos)
+                const x1 = Math.min(x0 + 1, gridX - 1)
+                const y1 = Math.min(y0 + 1, gridY - 1)
+
+                // Bilinear interpolation weights
+                const tx = gridXPos - x0
+                const ty = gridYPos - y0
+
+                // Four bone indices in the grid (row-major order)
+                const idx00 = y0 * gridX + x0 // bottom-left
+                const idx10 = y0 * gridX + x1 // bottom-right
+                const idx01 = y1 * gridX + x0 // top-left
+                const idx11 = y1 * gridX + x1 // top-right
+
+                // Bilinear weights
+                const w00 = (1 - tx) * (1 - ty)
+                const w10 = tx * (1 - ty)
+                const w01 = (1 - tx) * ty
+                const w11 = tx * ty
+
+                skinIndexes.push(idx00, idx10, idx01, idx11)
+                skinWeights.push(w00, w10, w01, w11)
             }
 
             geometry.setAttribute(
@@ -406,7 +488,6 @@ export default function Sticker({
             )
 
             // Compute smooth normals AFTER skinning attributes to eliminate striations
-            // This makes lighting interpolate smoothly across segments
             geometry.computeVertexNormals()
 
             return geometry
@@ -419,13 +500,20 @@ export default function Sticker({
     // ========================================================================
 
     const setupScene = useCallback(() => {
-        if (!canvasRef.current || !containerRef.current) return null
+        if (!canvasRef.current || !containerRef.current) {
+            return null
+        }
 
         const container = containerRef.current
         const containerWidth =
             container.clientWidth || container.offsetWidth || 1
         const containerHeight =
             container.clientHeight || container.offsetHeight || 1
+
+        // Ensure we have valid dimensions (at least 1px)
+        if (containerWidth <= 0 || containerHeight <= 0) {
+            return null
+        }
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
 
         // Calculate contained dimensions (maintains image aspect ratio)
@@ -437,6 +525,7 @@ export default function Sticker({
         const width = contained.width
         const height = contained.height
 
+        // Canvas with small padding for shadows
         const canvasWidth = containerWidth * CANVAS_SCALE
         const canvasHeight = containerHeight * CANVAS_SCALE
 
@@ -455,26 +544,52 @@ export default function Sticker({
         camera.lookAt(0, 0, 0)
         cameraRef.current = camera
 
-        // Create renderer
-        const renderer = new WebGLRenderer({
-            canvas: canvasRef.current,
-            alpha: true,
-            antialias: true,
-        })
-        renderer.setSize(
-            Math.round(canvasWidth * dpr),
-            Math.round(canvasHeight * dpr),
-            false
-        )
-        renderer.setPixelRatio(1)
-
-        // Enable high-quality shadow maps if shadows are enabled
-        if (enableShadows) {
-            renderer.shadowMap.enabled = true
-            renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
+        // Dispose old renderer if it exists (prevent WebGL context accumulation)
+        if (rendererRef.current) {
+            try {
+                rendererRef.current.dispose()
+            } catch (error) {
+                // Silently handle disposal errors
+            }
+            rendererRef.current = null
         }
 
-        rendererRef.current = renderer
+        // Create renderer
+        let renderer
+        try {
+            renderer = new WebGLRenderer({
+                canvas: canvasRef.current,
+                alpha: true,
+                antialias: true,
+            })
+
+            // Check if context was actually created
+            const gl = renderer.getContext()
+            if (!gl || gl.isContextLost()) {
+                console.error("WebGL context is lost or unavailable")
+                setContextLost(true)
+                renderer.dispose()
+                return null
+            }
+
+            renderer.setSize(
+                Math.round(canvasWidth * dpr),
+                Math.round(canvasHeight * dpr),
+                false
+            )
+            renderer.setPixelRatio(1)
+
+            // Enable high-quality shadow maps (shadows always enabled)
+            renderer.shadowMap.enabled = true
+            renderer.shadowMap.type = PCFSoftShadowMap // High quality soft shadows
+
+            rendererRef.current = renderer
+        } catch (error) {
+            // WebGL context creation failed (too many contexts)
+            console.error("Failed to create WebGL context:", error)
+            setContextLost(true)
+            return null
+        }
 
         canvasRef.current.style.width = `${canvasWidth}px`
         canvasRef.current.style.height = `${canvasHeight}px`
@@ -482,22 +597,34 @@ export default function Sticker({
         // Create geometry with base dimensions (1:1 or image aspect ratio if known)
         // We'll scale the mesh uniformly to fit the container while maintaining aspect ratio
         const baseSize = Math.min(containerWidth, containerHeight)
-        const geometry = createStickerGeometry(baseSize, baseSize, boneSegments)
+        const geometry = createStickerGeometry(
+            baseSize,
+            baseSize,
+            BONE_GRID_X,
+            BONE_GRID_Y
+        )
 
-        // Create bones along X axis (like book page)
+        // Create 2D bone grid
+        // Bones are independent (not parented) - each bone controls a region of the sticker
+        // Position bones relative to geometry size (baseSize), not contained dimensions
+        // When mesh is scaled, bones will scale with it through the skeleton system
         const bones: any[] = []
-        const segmentWidth = width / boneSegments
+        const boneSpacingX = baseSize / (BONE_GRID_X - 1)
+        const boneSpacingY = baseSize / (BONE_GRID_Y - 1)
 
-        for (let i = 0; i <= boneSegments; i++) {
-            const bone = new Bone()
-            bone.position.x = i === 0 ? 0 : segmentWidth
-            if (i > 0) {
-                bones[i - 1].add(bone)
+        for (let y = 0; y < BONE_GRID_Y; y++) {
+            for (let x = 0; x < BONE_GRID_X; x++) {
+                const bone = new Bone()
+                // Position bones in a grid, centered at origin (relative to geometry size)
+                bone.position.x = -baseSize / 2 + x * boneSpacingX
+                bone.position.y = -baseSize / 2 + y * boneSpacingY
+                bone.position.z = 0
+                bones.push(bone)
             }
-            bones.push(bone)
         }
 
         bonesRef.current = bones
+        bonesInitialPositionsRef.current = bones.map((b) => b.position.clone())
         const skeleton = new Skeleton(bones)
 
         // Create materials for front and back
@@ -508,78 +635,38 @@ export default function Sticker({
         const resolvedBackColor = resolveTokenColor(backColor)
         const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-        let frontMaterial: any
-        let backMaterial: any
-        let sideMaterial: any
+        // All faces use MeshStandardMaterial with smooth roughness (shadows always enabled)
+        const frontMaterial = new MeshStandardMaterial({
+            color: 0xffffff,
+            side: FrontSide,
+            transparent: true,
+            roughness: 0.2, // Higher roughness = more diffuse, reduces contrast
+            metalness: 0.4,
+            // Add emissive to reduce lighting dependency and striations
+            emissive: 0xffffff,
+            emissiveIntensity: 0.8, // High emissive to reduce lighting contrast between segments
+        })
 
-        if (enableShadows) {
-            // All faces use MeshStandardMaterial with smooth roughness (like Reference.tsx)
-            frontMaterial = new MeshStandardMaterial({
-                color: 0xffffff,
-                side: FrontSide,
-                transparent: true,
-                roughness: 0.2, // Higher roughness = more diffuse, reduces contrast
-                metalness: 0.4,
-                // Add emissive to reduce lighting dependency and striations
-                emissive: 0xffffff,
-                emissiveIntensity: 0.8, // High emissive to reduce lighting contrast between segments
-            })
+        // Back face: transparent with image texture, but darker with shadow overlay
+        const backMaterial = new MeshStandardMaterial({
+            color: 0xffffff, // White base to show image colors
+            side: FrontSide,
+            transparent: true,
+            roughness: 0.3, // Slightly rougher for subtle shadow effect
+            metalness: 0.0,
+            // Lower emissive than front to allow shadow/lighting overlay
+            emissive: 0xffffff,
+            emissiveIntensity: 0.3, // Lower emissive = more affected by lighting/shadows
+        })
 
-            // Back face: transparent with image texture, but darker with shadow overlay
-            backMaterial = new MeshStandardMaterial({
-                color: 0xffffff, // White base to show image colors
-                side: FrontSide,
-                transparent: true,
-                roughness: 0.3, // Slightly rougher for subtle shadow effect
-                metalness: 0.0,
-                // Lower emissive than front to allow shadow/lighting overlay
-                emissive: 0xffffff,
-                emissiveIntensity: 0.3, // Lower emissive = more affected by lighting/shadows
-            })
-
-            // Side material: will use front texture when loaded (blends with front image), back color as fallback
-            sideMaterial = new MeshStandardMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                transparent: true,
-                opacity: 1, // Visible with back color until front texture loads
-                roughness: 0.1,
-                metalness: 0.0,
-            })
-        } else {
-            // No shadows: use MeshBasicMaterial for all (simpler, no lighting needed)
-            frontMaterial = new MeshBasicMaterial({
-                color: 0xffffff,
-                side: FrontSide,
-                transparent: true,
-            })
-
-            // Back material: use backColor directly (will be set via texture or color in loadTexture)
-            backMaterial = new MeshBasicMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                side: FrontSide,
-                transparent: true,
-                opacity: backColorRgba.a,
-            })
-
-            // Side material: will use front texture when loaded (blends with front image), back color as fallback
-            sideMaterial = new MeshBasicMaterial({
-                color: new Color(
-                    backColorRgba.r,
-                    backColorRgba.g,
-                    backColorRgba.b
-                ),
-                transparent: true,
-                opacity: 1, // Visible with back color until front texture loads
-            })
-        }
+        // Side material: will use front texture when loaded (blends with front image), back color as fallback
+        const sideMaterial = new MeshStandardMaterial({
+            color: new Color(backColorRgba.r, backColorRgba.g, backColorRgba.b),
+            transparent: true,
+            opacity: 1, // Visible with back color until front texture loads
+            roughness: 0.1,
+            metalness: 0.0,
+        })
 
         // Materials array for BoxGeometry faces
         // Order: +X, -X, +Y, -Y, +Z (front), -Z (back)
@@ -594,17 +681,30 @@ export default function Sticker({
 
         // Create skinned mesh
         const mesh = new SkinnedMesh(geometry, materials)
-        mesh.add(bones[0])
-        mesh.bind(skeleton)
         mesh.frustumCulled = false
 
-        // Enable shadows if configured
+        // Add all bones to the mesh and initialize their matrices
+        bones.forEach((bone) => {
+            mesh.add(bone)
+            // Initialize bone matrix to ensure it's ready for skeleton
+            bone.updateMatrixWorld(true)
+        })
+
+        // Bind skeleton AFTER bones are added and initialized
+        mesh.bind(skeleton)
+
+        // Update mesh and skeleton matrices
+        mesh.updateMatrixWorld(true)
+
+        // Update skeleton AFTER mesh matrix world is computed
+        // This ensures all bone matrices are ready
+        skeleton.update()
+
+        // Enable shadows (always enabled)
         // According to Three.js forum: setting both castShadow and receiveShadow can cause acne
         // The sticker casts shadows onto the background plane, but doesn't need to receive them
-        if (enableShadows) {
-            mesh.castShadow = true
-            mesh.receiveShadow = false // Don't receive shadows to avoid acne
-        }
+        mesh.castShadow = true
+        mesh.receiveShadow = false // Don't receive shadows to avoid acne
 
         // Calculate initial scale to fit container with aspect ratio (if image aspect ratio is known)
         // Otherwise, use container dimensions
@@ -625,105 +725,122 @@ export default function Sticker({
         }
         mesh.scale.set(initialScaleX, initialScaleY, 1)
 
-        // Create a group to rotate around the center
+        // Create a group (no rotation - image stays upright, curl direction is handled by bone rotation axis)
         const group = new Group()
         groupRef.current = group
 
-        // Position mesh so its center is at the group's origin
-        // The geometry is already translated by width/2, so we need to offset by -width/2 to center it
-        const meshWidth = baseSize * initialScaleX
-        mesh.position.set(-meshWidth / 2, 0, 0)
+        // Mesh is centered at origin (no position offset needed with 2D grid approach)
+        mesh.position.set(0, 0, 0)
 
         group.add(mesh)
         meshRef.current = mesh
+
+        // Initialize last mesh dimensions
+        lastMeshDimensionsRef.current = { width: baseSize, height: baseSize }
+
         scene.add(group)
 
-        // Apply curl direction rotation (Z axis rotates the curl direction)
-        group.rotation.x = 0
-        group.rotation.y = 0
-        group.rotation.z = curlRotation * (Math.PI / 180)
+        // Ensure mesh is immediately visible (will show back color until texture loads)
+        // This prevents the "white plane only" issue
 
-        // Offset group position to push curled portion outside visible bounds
-        const curlRotationRad = curlRotation * (Math.PI / 180)
-        const offsetMagnitude = baseSize * 0.15
-        group.position.x = -Math.cos(curlRotationRad) * offsetMagnitude
-        group.position.y = -Math.sin(curlRotationRad) * offsetMagnitude
+        // No group rotation - curlRotation is handled by rotating the fold line axis in updateBones()
 
-        // Add lighting if shadows are enabled
-        if (enableShadows) {
-            // Calculate initial light intensities based on shadowIntensity
-            // High shadowIntensity = strong directional, low ambient = dark shadows
-            // At shadowIntensity = 1, make shadows very dramatic (strong directional, low ambient)
-            const initialLightIntensity = 0.3 + shadowIntensity * 1.7 // 0.3 to 2.0 (more dramatic at max)
-            const initialAmbientIntensity = Math.max(
-                1.0 - shadowIntensity * 0.6,
-                0.4
-            ) // 1.0 to 0.4 (lower at max for drama)
+        // Add lighting (shadows always enabled with intensity = 1)
+        // Calculate initial light intensities for shadowIntensity = 1
+        // High shadowIntensity = strong directional, low ambient = dark shadows
+        // At shadowIntensity = 1, make shadows very dramatic (strong directional, low ambient)
+        const shadowIntensity = 1 // Hardcoded
+        const initialLightIntensity = 0.3 + shadowIntensity * 1.7 // 0.3 to 2.0 (more dramatic at max)
+        const initialAmbientIntensity = Math.max(
+            1.0 - shadowIntensity * 0.6,
+            0.4
+        ) // 1.0 to 0.4 (lower at max for drama)
 
-            // Ambient light for overall scene illumination
-            // Lower ambient allows shadows to be more visible
-            const ambientLight = new AmbientLight(
-                0xffffff,
-                initialAmbientIntensity
-            )
-            ambientLightRef.current = ambientLight
-            scene.add(ambientLight)
+        // Ambient light for overall scene illumination
+        // Lower ambient allows shadows to be more visible
+        const ambientLight = new AmbientLight(0xffffff, initialAmbientIntensity)
+        ambientLightRef.current = ambientLight
+        scene.add(ambientLight)
 
-            // Directional light for shadows (reduced intensity to minimize band contrast)
-            const directionalLight = new DirectionalLight(
-                0xffffff,
-                initialLightIntensity
-            )
-            directionalLight.position.set(shadowPositionX, shadowPositionY, 400)
-            directionalLight.castShadow = true
+        // Directional light for shadows (reduced intensity to minimize band contrast)
+        const directionalLight = new DirectionalLight(
+            0xffffff,
+            initialLightIntensity
+        )
+        directionalLight.position.set(shadowPositionX, shadowPositionY, 400)
+        directionalLight.castShadow = true
 
-            // Configure shadow map for high-quality, soft shadows
-            directionalLight.shadow.mapSize.width = 4096
-            directionalLight.shadow.mapSize.height = 4096
-            directionalLight.shadow.camera.near = 1
-            directionalLight.shadow.camera.far = 2000
-            // Use container dimensions for shadow camera (not contained dimensions)
-            directionalLight.shadow.camera.left = -containerWidth * 2
-            directionalLight.shadow.camera.right = containerWidth * 2
-            directionalLight.shadow.camera.top = containerHeight * 2
-            directionalLight.shadow.camera.bottom = -containerHeight * 2
-            // Very small bias to prevent acne while keeping shadow visible
-            directionalLight.shadow.bias = -0.00001
-            directionalLight.shadow.radius = 8 // Softer shadow edges
+        // Configure shadow map for high-quality, soft shadows
+        directionalLight.shadow.mapSize.width = 4096
+        directionalLight.shadow.mapSize.height = 4096
+        directionalLight.shadow.camera.near = 1
+        directionalLight.shadow.camera.far = 2000
+        // Shadow camera bounds need to account for:
+        // 1. Canvas size (which includes CANVAS_SCALE padding for shadows)
+        // 2. Light position offset (shadowPositionX/Y can be -500 to 500)
+        // 3. Shadow projection area (shadows extend in the direction opposite to light)
+        // Use canvas dimensions to ensure shadows don't clip
+        // Shadow camera should be at least as large as the canvas to prevent clipping
+        // The 3.5 multiplier provides padding for light offsets, but it was relative to container
+        // Now we scale it relative to canvas: use canvas size * (3.5 / CANVAS_SCALE) to maintain same padding ratio
+        // But to prevent clipping, ensure it's at least canvas size
+        const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+        const shadowCameraSize = Math.max(
+            baseShadowSize, // At least as large as canvas
+            baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding (maintains same absolute padding)
+        )
+        const shadowOffsetX = shadowPositionX * 0.3 // Account for light position
+        const shadowOffsetY = shadowPositionY * 0.3
+        directionalLight.shadow.camera.left =
+            -shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.right =
+            shadowCameraSize / 2 + shadowOffsetX
+        directionalLight.shadow.camera.top =
+            shadowCameraSize / 2 + shadowOffsetY
+        directionalLight.shadow.camera.bottom =
+            -shadowCameraSize / 2 + shadowOffsetY
+        // Very small bias to prevent acne while keeping shadow visible
+        directionalLight.shadow.bias = -0.00001
+        directionalLight.shadow.radius = 8 // Softer shadow edges
 
-            lightRef.current = directionalLight
-            scene.add(directionalLight)
+        lightRef.current = directionalLight
+        scene.add(directionalLight)
 
-            // Add background plane to receive shadows
-            // Add shadow-only plane (transparent background with visible shadow)
-            // ShadowMaterial shows ONLY shadows on transparent background
-            const shadowMat = new ShadowMaterial({
-                opacity: castShadowOpacity,
-                color: 0x000000, // Black shadow
-            })
+        // Add background plane to receive shadows
+        // Add shadow-only plane (transparent background with visible shadow)
+        // ShadowMaterial shows ONLY shadows on transparent background
+        const shadowMat = new ShadowMaterial({
+            opacity: castShadowOpacity,
+            color: 0x000000, // Black shadow
+        })
 
-            // Create plane sized to component (slightly larger for shadow overflow)
-            const planeWidth = Math.max(containerWidth, width) * 1.5
-            const planeHeight = Math.max(containerHeight, height) * 1.5
-            const planeGeometry = new PlaneGeometry(planeWidth, planeHeight)
-            const backgroundPlane = new Mesh(planeGeometry, shadowMat)
-            backgroundPlane.receiveShadow = true
-            // Position very slightly behind sticker
-            backgroundPlane.position.set(0, 0, -1)
-            backgroundPlaneRef.current = backgroundPlane
-            scene.add(backgroundPlane)
+        // Create plane sized to cover shadow camera area (larger to prevent clipping)
+        // Match shadow camera bounds to ensure all shadows are captured
+        // Use same calculation as shadow camera to ensure plane covers all shadows
+        const planeSize = shadowCameraSize
+        const planeGeometry = new PlaneGeometry(planeSize, planeSize)
+        const backgroundPlane = new Mesh(planeGeometry, shadowMat)
+        backgroundPlane.receiveShadow = true
+        // Position very slightly behind sticker
+        backgroundPlane.position.set(0, 0, -1)
+        backgroundPlaneRef.current = backgroundPlane
+        scene.add(backgroundPlane)
+
+        // Initial render to show mesh immediately (even without texture)
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera)
         }
+
+        // Mark scene as ready to trigger re-render and show canvas
+        setSceneReady(true)
 
         return { scene, camera, renderer, mesh, bones }
     }, [
         createStickerGeometry,
-        enableShadows,
-        shadowIntensity,
         shadowPositionX,
         shadowPositionY,
         castShadowOpacity,
-        boneSegments,
-        curlRotation,
+        backColor,
     ])
 
     // ========================================================================
@@ -733,6 +850,30 @@ export default function Sticker({
     const renderFrame = useCallback(() => {
         if (!rendererRef.current || !sceneRef.current || !cameraRef.current)
             return
+
+        // Check if WebGL context is lost - but don't update state here to avoid infinite loops
+        const gl = rendererRef.current.getContext()
+        if (!gl || gl.isContextLost()) {
+            return
+        }
+
+        // Ensure world matrices and skeleton are updated before rendering
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        if (meshRef.current && meshRef.current.skeleton) {
+            meshRef.current.updateMatrixWorld(true)
+            // Ensure all bones have valid matrices before skeleton update
+            const bones = meshRef.current.skeleton.bones
+            if (bones && bones.length > 0) {
+                // Update bone matrices individually to ensure they're ready
+                bones.forEach((bone: any) => {
+                    if (bone && typeof bone.updateMatrixWorld === "function") {
+                        bone.updateMatrixWorld(true)
+                    }
+                })
+            }
+            meshRef.current.skeleton.update()
+        }
+
         rendererRef.current.render(sceneRef.current, cameraRef.current)
     }, [])
 
@@ -809,7 +950,7 @@ export default function Sticker({
 
             return backTexture
         },
-        [enableShadows]
+        []
     )
 
     // ========================================================================
@@ -840,39 +981,88 @@ export default function Sticker({
                 aspectRatio
             )
 
-            // Remove old mesh if it exists
+            // Preserve textures before disposing materials
+            let preservedTextures: { front?: any; back?: any; side?: any } = {}
             if (meshRef.current) {
-                sceneRef.current.remove(meshRef.current)
-                meshRef.current.geometry.dispose()
-                if (Array.isArray(meshRef.current.material)) {
-                    meshRef.current.material.forEach((mat: any) =>
+                const oldMesh = meshRef.current
+                const oldMaterials = oldMesh.material as any[]
+                if (Array.isArray(oldMaterials)) {
+                    // Preserve textures before disposal
+                    if (oldMaterials[4]?.map)
+                        preservedTextures.front = oldMaterials[4].map
+                    if (oldMaterials[5]?.map)
+                        preservedTextures.back = oldMaterials[5].map
+                    if (oldMaterials[0]?.map)
+                        preservedTextures.side = oldMaterials[0].map
+                }
+
+                // Remove from scene and group first
+                if (groupRef.current) {
+                    groupRef.current.remove(oldMesh)
+                }
+                sceneRef.current.remove(oldMesh)
+
+                // Dispose geometry
+                if (oldMesh.geometry) {
+                    oldMesh.geometry.dispose()
+                }
+
+                // Dispose materials and textures
+                if (Array.isArray(oldMesh.material)) {
+                    oldMesh.material.forEach((mat: any) => {
+                        // Don't dispose textures - they're preserved
+                        if (
+                            mat.map &&
+                            mat.map !== preservedTextures.front &&
+                            mat.map !== preservedTextures.back &&
+                            mat.map !== preservedTextures.side
+                        ) {
+                            mat.map.dispose()
+                        }
                         mat.dispose()
-                    )
-                } else {
-                    meshRef.current.material.dispose()
+                    })
+                } else if (oldMesh.material) {
+                    oldMesh.material.dispose()
+                }
+
+                // Clear old skeleton bones (they're children of the mesh)
+                if (oldMesh.skeleton) {
+                    oldMesh.skeleton.bones.forEach((bone: any) => {
+                        if (bone.parent) {
+                            bone.parent.remove(bone)
+                        }
+                    })
                 }
             }
 
-            // Create SQUARE geometry for proper texture rotation at all angles
-            // Non-square geometry causes distortion when group rotates because
-            // texture UV rotation doesn't match visual rotation on stretched mesh
-            const baseSize = Math.max(contained.width, contained.height)
-            const geometry = createStickerGeometry(baseSize, baseSize, boneSegments)
+            // Create new geometry with correct aspect ratio using 2D bone grid
+            const geometry = createStickerGeometry(
+                contained.width,
+                contained.height,
+                BONE_GRID_X,
+                BONE_GRID_Y
+            )
 
-            // Recreate bones (based on square geometry)
+            // Recreate 2D bone grid
             const bones: any[] = []
-            const segmentWidth = baseSize / boneSegments
+            const boneSpacingX = contained.width / (BONE_GRID_X - 1)
+            const boneSpacingY = contained.height / (BONE_GRID_Y - 1)
 
-            for (let i = 0; i <= boneSegments; i++) {
-                const bone = new Bone()
-                bone.position.x = i === 0 ? 0 : segmentWidth
-                if (i > 0) {
-                    bones[i - 1].add(bone)
+            for (let y = 0; y < BONE_GRID_Y; y++) {
+                for (let x = 0; x < BONE_GRID_X; x++) {
+                    const bone = new Bone()
+                    // Position bones in a grid, centered at origin
+                    bone.position.x = -contained.width / 2 + x * boneSpacingX
+                    bone.position.y = -contained.height / 2 + y * boneSpacingY
+                    bone.position.z = 0
+                    bones.push(bone)
                 }
-                bones.push(bone)
             }
 
             bonesRef.current = bones
+            bonesInitialPositionsRef.current = bones.map((b) =>
+                b.position.clone()
+            )
             const skeleton = new Skeleton(bones)
 
             // Recreate materials (reuse existing material setup logic from setupScene)
@@ -880,73 +1070,39 @@ export default function Sticker({
             const resolvedBackColor = resolveTokenColor(backColor)
             const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-            let frontMaterial: any
-            let backMaterial: any
-            let sideMaterial: any
+            // All materials use MeshStandardMaterial (shadows always enabled)
+            const frontMaterial = new MeshStandardMaterial({
+                color: 0xffffff,
+                side: FrontSide,
+                transparent: true,
+                roughness: 0.2,
+                metalness: 0.4,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.8,
+            })
 
-            if (enableShadows) {
-                frontMaterial = new MeshStandardMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                    roughness: 0.2,
-                    metalness: 0.4,
-                    emissive: 0xffffff,
-                    emissiveIntensity: 0.8,
-                })
+            const backMaterial = new MeshStandardMaterial({
+                color: 0xffffff,
+                side: FrontSide,
+                transparent: true,
+                roughness: 0.3,
+                metalness: 0.0,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.3,
+            })
 
-                backMaterial = new MeshStandardMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                    roughness: 0.3,
-                    metalness: 0.0,
-                    emissive: 0xffffff,
-                    emissiveIntensity: 0.3,
-                })
-
-                // Side material: will use front texture when loaded (blends with front image), back color as fallback
-                sideMaterial = new MeshStandardMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    transparent: true,
-                    opacity: 1, // Visible with back color until front texture loads
-                    roughness: 0.1,
-                    metalness: 0.0,
-                })
-            } else {
-                frontMaterial = new MeshBasicMaterial({
-                    color: 0xffffff,
-                    side: FrontSide,
-                    transparent: true,
-                })
-
-                // Back material: use backColor directly (will be set via texture or color in loadTexture)
-                backMaterial = new MeshBasicMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    side: FrontSide,
-                    transparent: true,
-                    opacity: backColorRgba.a,
-                })
-
-                // Side material: will use front texture when loaded (blends with front image), back color as fallback
-                sideMaterial = new MeshBasicMaterial({
-                    color: new Color(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    ),
-                    transparent: true,
-                    opacity: 1, // Visible with back color until front texture loads
-                })
-            }
+            // Side material: will use front texture when loaded (blends with front image), back color as fallback
+            const sideMaterial = new MeshStandardMaterial({
+                color: new Color(
+                    backColorRgba.r,
+                    backColorRgba.g,
+                    backColorRgba.b
+                ),
+                transparent: true,
+                opacity: 1, // Visible with back color until front texture loads
+                roughness: 0.1,
+                metalness: 0.0,
+            })
 
             const materials = [
                 sideMaterial,
@@ -959,25 +1115,33 @@ export default function Sticker({
 
             // Create new mesh
             const mesh = new SkinnedMesh(geometry, materials)
-            mesh.add(bones[0])
-            mesh.bind(skeleton)
             mesh.frustumCulled = false
 
-            if (enableShadows) {
-                mesh.castShadow = true
-                mesh.receiveShadow = false
-            }
+            // Add all bones to the mesh and initialize their matrices
+            bones.forEach((bone) => {
+                mesh.add(bone)
+                // Initialize bone matrix to ensure it's ready for skeleton
+                bone.updateMatrixWorld(true)
+            })
 
-            // Scale mesh to achieve correct aspect ratio (geometry is square)
-            const scaleX = contained.width / baseSize
-            const scaleY = contained.height / baseSize
-            mesh.scale.set(scaleX, scaleY, 1)
+            // Bind skeleton AFTER bones are added and initialized
+            mesh.bind(skeleton)
 
-            // Position mesh so its center is at the group's origin
-            // Account for scale when calculating offset
-            mesh.position.set((-baseSize * scaleX) / 2, 0, 0)
+            // Update mesh and skeleton matrices
+            mesh.updateMatrixWorld(true)
 
-            // Create or get group for rotation around center
+            // Update skeleton AFTER mesh matrix world is computed
+            // This ensures all bone matrices are ready
+            skeleton.update()
+
+            // Shadows always enabled
+            mesh.castShadow = true
+            mesh.receiveShadow = false
+
+            // Mesh is centered at origin (no position offset needed with 2D grid approach)
+            mesh.position.set(0, 0, 0)
+
+            // Create or get group (no rotation - image stays upright)
             let group = groupRef.current
             if (!group) {
                 group = new Group()
@@ -995,38 +1159,45 @@ export default function Sticker({
 
             group.add(mesh)
 
-            // Apply curl direction rotation (Z axis rotates the curl direction)
-            group.rotation.x = 0
-            group.rotation.y = 0
-            group.rotation.z = curlRotation * (Math.PI / 180)
+            // No group rotation - curlRotation is handled by bone rotation axis in updateBones()
 
             meshRef.current = mesh
 
+            // Update last mesh dimensions
+            lastMeshDimensionsRef.current = {
+                width: contained.width,
+                height: contained.height,
+            }
+
             // Apply textures if they're already loaded
+            // Reuse preserved textures if available, otherwise create new ones
             if (loadedImageRef.current) {
                 const img = loadedImageRef.current
-                const texture = new Texture(img)
-                texture.needsUpdate = true
-                texture.minFilter = LinearFilter
-                texture.colorSpace = SRGBColorSpace
-                texture.format = RGBAFormat
-                // Apply counter-rotation so image stays upright when curl direction changes
-                applyTextureCounterRotation(texture, curlRotation, false)
+                // Reuse preserved texture if available, otherwise create new one
+                const texture = preservedTextures.front || new Texture(img)
+                if (!preservedTextures.front) {
+                    texture.needsUpdate = true
+                    texture.minFilter = LinearFilter
+                    texture.colorSpace = SRGBColorSpace
+                    texture.format = RGBAFormat
+                }
 
                 // Create back texture: blend backColor with front image
                 // If backColor is fully transparent (0% opacity), use front texture directly
                 const resolvedBackColor = resolveTokenColor(backColor)
                 const backColorRgba = parseColorToRgba(resolvedBackColor)
-                const rawBackTexture =
-                    backColorRgba.a <= 0
-                        ? texture
-                        : createBackTexture(img, backColor)
+                // Reuse preserved back texture if available and backColor hasn't changed
+                let rawBackTexture = preservedTextures.back
+                if (!rawBackTexture) {
+                    rawBackTexture =
+                        backColorRgba.a <= 0
+                            ? texture
+                            : createBackTexture(img, backColor)
+                }
                 const backTexture = makeBackTextureViewConsistent(
                     rawBackTexture,
                     texture
                 )
-                // Apply counter-rotation to back texture (mirrored, so isBackTexture=true)
-                applyTextureCounterRotation(backTexture, curlRotation, true)
 
                 const meshMaterials = mesh.material as any[]
                 if (Array.isArray(meshMaterials)) {
@@ -1046,57 +1217,32 @@ export default function Sticker({
                         const backColorRgba =
                             parseColorToRgba(resolvedBackColor)
 
-                        if (enableShadows) {
-                            // With shadows: use texture (MeshStandardMaterial)
-                            if (backTexture) {
-                                meshMaterials[5].map = backTexture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
+                        // With shadows: use texture (MeshStandardMaterial)
+                        if (backTexture) {
+                            meshMaterials[5].map = backTexture
+                            meshMaterials[5].transparent = true
+                            meshMaterials[5].alphaTest = 0.01
 
-                                // When using front texture (0% opacity), match front material properties for identical appearance
-                                if (
-                                    backColorRgba.a <= 0 &&
-                                    meshMaterials[5].emissiveIntensity !==
-                                        undefined
-                                ) {
-                                    meshMaterials[5].emissiveMap = texture
-                                    meshMaterials[5].emissive = new Color(
-                                        0xffffff
-                                    )
-                                    meshMaterials[5].emissiveIntensity = 0.8 // Match front material
-                                }
-                            }
-                        } else {
-                            // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                            if (backTexture && backColorRgba.a > 0) {
-                                // Use texture for blended effect
-                                meshMaterials[5].map = backTexture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
-                            } else if (backColorRgba.a <= 0) {
-                                // Fully transparent: use front texture
-                                meshMaterials[5].map = texture
-                                meshMaterials[5].transparent = true
-                                meshMaterials[5].alphaTest = 0.01
-                            } else {
-                                // Fully opaque: use flat color (no texture needed)
-                                meshMaterials[5].map = null
-                                meshMaterials[5].color.setRGB(
-                                    backColorRgba.r,
-                                    backColorRgba.g,
-                                    backColorRgba.b
-                                )
-                                meshMaterials[5].opacity = backColorRgba.a
+                            // When using front texture (0% opacity), match front material properties for identical appearance
+                            if (
+                                backColorRgba.a <= 0 &&
+                                meshMaterials[5].emissiveIntensity !== undefined
+                            ) {
+                                meshMaterials[5].emissiveMap = texture
+                                meshMaterials[5].emissive = new Color(0xffffff)
+                                meshMaterials[5].emissiveIntensity = 0.8 // Match front material
                             }
                         }
 
                         meshMaterials[5].needsUpdate = true
                     }
                     // Side faces (border): use front face texture - blends with front image, not background
+                    // Reuse preserved side texture if available
+                    const sideTexture = preservedTextures.side || texture
                     for (let i = 0; i < 4; i++) {
-                        if (meshMaterials[i] && texture) {
+                        if (meshMaterials[i] && sideTexture) {
                             // Use front face texture so border blends with front image
-                            meshMaterials[i].map = texture
+                            meshMaterials[i].map = sideTexture
                             meshMaterials[i].transparent = true
                             meshMaterials[i].alphaTest = 0.01
                             // Match front material properties if using MeshStandardMaterial
@@ -1106,7 +1252,7 @@ export default function Sticker({
                                 meshMaterials[4]?.emissiveIntensity !==
                                     undefined
                             ) {
-                                meshMaterials[i].emissiveMap = texture
+                                meshMaterials[i].emissiveMap = sideTexture
                                 meshMaterials[i].emissive =
                                     meshMaterials[4].emissive ||
                                     new Color(0xffffff)
@@ -1119,18 +1265,45 @@ export default function Sticker({
                 }
             }
 
-            renderFrame()
+            // Mark scene as ready and render after mesh recreation to ensure it's visible
+            setSceneReady(true)
+            // Use requestAnimationFrame to ensure textures are uploaded to GPU before rendering
+            requestAnimationFrame(() => {
+                if (!meshRef.current) return
+
+                // Force material updates to ensure textures are ready
+                const meshMaterials = mesh.material as any[]
+                if (Array.isArray(meshMaterials)) {
+                    meshMaterials.forEach((mat: any) => {
+                        if (mat && mat.needsUpdate !== undefined) {
+                            mat.needsUpdate = true
+                        }
+                    })
+                }
+
+                // Update skeleton and bones to ensure everything is in sync
+                if (mesh.skeleton) {
+                    mesh.updateMatrixWorld(true)
+                    mesh.skeleton.update()
+                }
+
+                // Render after texture is ready
+                renderFrame()
+
+                // Second frame: final render to ensure everything is displayed
+                requestAnimationFrame(() => {
+                    if (meshRef.current) {
+                        renderFrame()
+                    }
+                })
+            })
         },
-        [
-            createStickerGeometry,
-            boneSegments,
-            backColor,
-            enableShadows,
-            createBackTexture,
-            renderFrame,
-            curlRotation,
-        ]
+        [createStickerGeometry, backColor, createBackTexture, renderFrame]
     )
+
+    // Expose a function to trigger resize after mesh recreation
+    // This is needed to ensure responsiveness when image loads/changes
+    const triggerResizeRef = useRef<(() => void) | null>(null)
 
     // ========================================================================
     // TEXTURE LOADING
@@ -1143,11 +1316,13 @@ export default function Sticker({
         }
 
         setTextureLoaded(false)
+        imageLoadAbortRef.current = false // Reset abort flag
 
         const img = new Image()
         img.crossOrigin = "anonymous"
         img.onload = () => {
-            if (!meshRef.current?.material) return
+            // Check if component was unmounted during load
+            if (imageLoadAbortRef.current || !meshRef.current) return
 
             // Store reference for border color updates
             loadedImageRef.current = img
@@ -1160,31 +1335,67 @@ export default function Sticker({
                 // Recreate mesh with correct aspect ratio geometry
                 recreateMeshWithAspectRatio(aspectRatio)
 
-                // Update bones and rotation after mesh is recreated
-                setTimeout(() => {
-                    if (meshRef.current && groupRef.current) {
-                        // Apply curl direction rotation
-                        groupRef.current.rotation.x = 0
-                        groupRef.current.rotation.y = 0
-                        groupRef.current.rotation.z =
-                            curlRotation * (Math.PI / 180)
+                // Wait for next frame to ensure mesh is fully initialized before updating bones and triggering resize
+                // This prevents race conditions where skeleton isn't ready yet
+                requestAnimationFrame(() => {
+                    // Check if component unmounted during the frame delay
+                    if (imageLoadAbortRef.current) return
 
-                        if (bonesRef.current.length > 0) {
-                            updateBones()
+                    if (
+                        meshRef.current &&
+                        groupRef.current &&
+                        meshRef.current.skeleton
+                    ) {
+                        try {
+                            // Ensure skeleton is fully initialized before updating bones
+                            const bones = meshRef.current.skeleton.bones
+                            if (
+                                bones &&
+                                bones.length > 0 &&
+                                bonesRef.current.length > 0
+                            ) {
+                                // Double-check bones are ready
+                                meshRef.current.updateMatrixWorld(true)
+                                meshRef.current.skeleton.update()
+                                updateBones()
+                            }
+                        } catch (error) {
+                            // Silently handle initialization errors
                         }
-                        renderFrame()
                     }
-                }, 0)
+
+                    // Trigger resize to ensure mesh is properly sized for current container
+                    // This is critical for responsiveness when image first loads or changes
+                    if (triggerResizeRef.current && containerRef.current) {
+                        triggerResizeRef.current()
+                    }
+                })
             }
 
-            // Create main texture for front face
-            const texture = new Texture(img)
-            texture.needsUpdate = true
-            texture.minFilter = LinearFilter
-            texture.colorSpace = SRGBColorSpace
-            texture.format = RGBAFormat
-            // Apply counter-rotation so image stays upright when curl direction changes
-            applyTextureCounterRotation(texture, curlRotation, false)
+            // Check mesh is still valid after potential recreation
+            if (!meshRef.current?.material) return
+
+            // Check if textures are already applied (from recreateMeshWithAspectRatio)
+            // If so, we just need to ensure a render happens
+            const materials = meshRef.current.material as any[]
+            const hasTexture = Array.isArray(materials) && materials[4]?.map
+
+            // Only create new textures if they don't exist yet
+            let texture
+            if (hasTexture && Array.isArray(materials)) {
+                // Reuse existing texture, but ensure it's marked for update
+                texture = materials[4].map
+                if (texture && texture.needsUpdate !== undefined) {
+                    texture.needsUpdate = true
+                }
+            } else {
+                // Create main texture for front face
+                texture = new Texture(img)
+                texture.needsUpdate = true
+                texture.minFilter = LinearFilter
+                texture.colorSpace = SRGBColorSpace
+                texture.format = RGBAFormat
+            }
 
             // Create back face texture: blend backColor with front image
             // If backColor is fully transparent (0% opacity), use front texture directly
@@ -1198,16 +1409,20 @@ export default function Sticker({
                 rawBackTexture,
                 texture
             )
-            // Apply counter-rotation to back texture (mirrored, so isBackTexture=true)
-            applyTextureCounterRotation(backTexture, curlRotation, true)
 
-            // Apply textures to materials
-            const materials = meshRef.current.material as any[]
+            // Apply textures to materials (only if not already applied)
             if (Array.isArray(materials)) {
                 // Front face: image texture, use alphaTest for clean cutout
                 // When using MeshStandardMaterial, also set emissiveMap so colors stay bright
                 if (materials[4]) {
-                    materials[4].map = texture
+                    // Only apply if texture is different or not set
+                    if (materials[4].map !== texture) {
+                        materials[4].map = texture
+                        // Ensure texture is marked for update
+                        if (texture.needsUpdate !== undefined) {
+                            texture.needsUpdate = true
+                        }
+                    }
                     materials[4].transparent = true
                     materials[4].alphaTest = 0.01 // Discard nearly-transparent pixels
                     // If MeshStandardMaterial, use emissiveMap to keep image bright and reduce striations
@@ -1224,44 +1439,20 @@ export default function Sticker({
                     const resolvedBackColor = resolveTokenColor(backColor)
                     const backColorRgba = parseColorToRgba(resolvedBackColor)
 
-                    if (enableShadows) {
-                        // With shadows: use texture (MeshStandardMaterial)
-                        if (backTexture) {
-                            materials[5].map = backTexture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
+                    // With shadows: use texture (MeshStandardMaterial)
+                    if (backTexture) {
+                        materials[5].map = backTexture
+                        materials[5].transparent = true
+                        materials[5].alphaTest = 0.01
 
-                            // When using front texture (0% opacity), match front material properties for identical appearance
-                            if (
-                                backColorRgba.a <= 0 &&
-                                materials[5].emissiveIntensity !== undefined
-                            ) {
-                                materials[5].emissiveMap = texture
-                                materials[5].emissive = new Color(0xffffff)
-                                materials[5].emissiveIntensity = 0.8 // Match front material
-                            }
-                        }
-                    } else {
-                        // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                        if (backTexture && backColorRgba.a > 0) {
-                            // Use texture for blended effect
-                            materials[5].map = backTexture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
-                        } else if (backColorRgba.a <= 0) {
-                            // Fully transparent: use front texture
-                            materials[5].map = texture
-                            materials[5].transparent = true
-                            materials[5].alphaTest = 0.01
-                        } else {
-                            // Fully opaque: use flat color (no texture needed)
-                            materials[5].map = null
-                            materials[5].color.setRGB(
-                                backColorRgba.r,
-                                backColorRgba.g,
-                                backColorRgba.b
-                            )
-                            materials[5].opacity = backColorRgba.a
+                        // When using front texture (0% opacity), match front material properties for identical appearance
+                        if (
+                            backColorRgba.a <= 0 &&
+                            materials[5].emissiveIntensity !== undefined
+                        ) {
+                            materials[5].emissiveMap = texture
+                            materials[5].emissive = new Color(0xffffff)
+                            materials[5].emissiveIntensity = 0.8 // Match front material
                         }
                     }
 
@@ -1291,173 +1482,224 @@ export default function Sticker({
             }
 
             setTextureLoaded(true)
-            renderFrame()
+            // Ensure scene is marked as ready (triggers re-render to show canvas)
+            setSceneReady(true)
+            // Always render after textures are applied (only if still mounted)
+            // Use multiple requestAnimationFrame calls to ensure texture has uploaded to GPU
+            if (!imageLoadAbortRef.current && meshRef.current) {
+                // First frame: ensure materials and textures are marked for update
+                requestAnimationFrame(() => {
+                    if (imageLoadAbortRef.current || !meshRef.current) return
+
+                    // Force material and texture updates to ensure they're ready
+                    const materials = meshRef.current.material as any[]
+                    if (Array.isArray(materials)) {
+                        materials.forEach((mat: any) => {
+                            if (mat) {
+                                if (mat.needsUpdate !== undefined) {
+                                    mat.needsUpdate = true
+                                }
+                                // Ensure texture is marked for update
+                                if (
+                                    mat.map &&
+                                    mat.map.needsUpdate !== undefined
+                                ) {
+                                    mat.map.needsUpdate = true
+                                }
+                            }
+                        })
+                    }
+
+                    // Update skeleton and bones to ensure everything is in sync
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.updateMatrixWorld(true)
+                        meshRef.current.skeleton.update()
+                    }
+
+                    // Second frame: render after texture upload has been triggered
+                    requestAnimationFrame(() => {
+                        if (imageLoadAbortRef.current || !meshRef.current)
+                            return
+
+                        // Render to trigger texture upload
+                        renderFrame()
+
+                        // Third frame: final render to ensure texture is displayed
+                        requestAnimationFrame(() => {
+                            if (!imageLoadAbortRef.current && meshRef.current) {
+                                renderFrame()
+                                // Trigger resize after textures are applied to ensure proper sizing
+                                if (
+                                    triggerResizeRef.current &&
+                                    containerRef.current
+                                ) {
+                                    triggerResizeRef.current()
+                                }
+                            }
+                        })
+                    })
+                })
+            }
         }
         img.onerror = () => {
-            console.error("Texture loading error")
+            if (!imageLoadAbortRef.current) {
+                console.error("Texture loading error")
+            }
             setTextureLoaded(false)
+            // Still render even if texture fails (will show back color) - only if still mounted
+            if (!imageLoadAbortRef.current && meshRef.current) {
+                renderFrame()
+            }
         }
         img.src = resolvedImageUrl
     }, [
         resolvedImageUrl,
-        boneSegments,
         backColor,
         createBackTexture,
         renderFrame,
-        curlRotation,
+        recreateMeshWithAspectRatio,
     ])
 
+    // Note: updateBones is called in setTimeout inside loadTexture, so it doesn't need to be a dependency
+    // It will be available at runtime when the setTimeout executes
+
     // ========================================================================
-    // BONE ANIMATION (like book page flip)
+    // BONE ANIMATION (2D Bone Grid with Fold Line)
     // ========================================================================
 
     const updateBones = useCallback(() => {
-        if (!bonesRef.current.length || !meshRef.current) return
+        if (
+            !bonesRef.current.length ||
+            !meshRef.current ||
+            !bonesInitialPositionsRef.current.length
+        )
+            return
+
+        // Check if skeleton exists and has valid bones
+        if (!meshRef.current.skeleton) return
+        const skeletonBones = meshRef.current.skeleton.bones
+        if (!skeletonBones || skeletonBones.length === 0) return
+
+        // Force computation of world matrices BEFORE modifying bones
+        // This prevents "Cannot read properties of undefined (reading 'matrixWorld')" errors
+        // especially when curlRotation != 0 and bones have quaternion rotations
+        meshRef.current.updateMatrixWorld(true)
+
+        // Ensure all bones have valid matrices before skeleton update
+        skeletonBones.forEach((bone: any) => {
+            if (bone && typeof bone.updateMatrixWorld === "function") {
+                bone.updateMatrixWorld(true)
+            }
+        })
+
+        meshRef.current.skeleton.update()
 
         const bones = bonesRef.current
-        const curlFactor = animatedCurlRef.current.amount // 0 to 1, scales the curl
-        const r = internalRadiusRef.current // normalized radius
+        const initialPositions = bonesInitialPositionsRef.current
+        const curlFactor = Math.max(0.0001, animatedCurlRef.current.amount)
+        // Use animated radius value instead of internalRadiusRef
+        const r = mapInteralRadiusToUIValue(
+            animatedCurlRadiusRef.current.radius
+        )
 
-        // Arc length of a semicircle = π * r (normalized to sticker length)
-        const arcLength = Math.PI * r
-        const semicircleEnd = Math.min(curlStart + arcLength, 1) // end of semicircle section
+        const mesh = meshRef.current
+        // Use BASE geometry dimensions (without scale) for curl calculations
+        // This ensures curl appearance stays visually consistent when component is resized
+        // The scale is automatically applied through bone positions being children of the scaled mesh
+        const width = mesh.geometry.parameters.width
+        const height = mesh.geometry.parameters.height
 
-        if (curlMode === "semicircle") {
-            // SEMICIRCLE MODE: flat → semicircle → flat
-            // Define the three sections:
-            // 1. Flat from 0 to curlStart
-            // 2. Curved from curlStart to curlStart + arcLength
-            // 3. Flat from curlStart + arcLength to 1
-            const curlEnd = semicircleEnd
+        // Use ref to always get current curlRotation value (avoids stale closure issues in Canvas mode)
+        const curlRotationRad = (curlRotationRef.current * Math.PI) / 180
+        const dirX = Math.cos(curlRotationRad)
+        const dirY = Math.sin(curlRotationRad)
+        const axisX = -dirY
+        const axisY = dirX
+        const rotationAxis = new Vector3(axisX, axisY, 0).normalize()
 
-            // Count bones in the curved section for uniform rotation distribution
-            let bonesInCurve = 0
-            for (let i = 0; i < bones.length; i++) {
-                const t = i / (bones.length - 1)
-                if (t >= curlStart && t < curlEnd) bonesInCurve++
-            }
+        // Calculate the actual maximum distance along the curl direction
+        // For a rectangle, we need to find which corner is furthest along the direction vector
+        // The rectangle extends from -halfWidth to +halfWidth in X and -halfHeight to +halfHeight in Y
+        const halfWidth = width / 2
+        const halfHeight = height / 2
 
-            // For a semicircle with uniform curvature, each bone rotates by the same angle
-            // Total rotation = π (180°), distributed evenly across curved bones
-            const perBoneRotation =
-                bonesInCurve > 0 ? (Math.PI * curlFactor) / bonesInCurve : 0
+        // Check all 4 corners to find the maximum distance along the curl direction
+        // Corner coordinates: (w, h), (w, -h), (-w, h), (-w, -h)
+        // Distance along direction (dirX, dirY) = x * dirX + y * dirY
+        const corner1 = halfWidth * dirX + halfHeight * dirY // (w, h)
+        const corner2 = halfWidth * dirX - halfHeight * dirY // (w, -h)
+        const corner3 = -halfWidth * dirX + halfHeight * dirY // (-w, h)
+        const corner4 = -halfWidth * dirX - halfHeight * dirY // (-w, -h)
 
-            for (let i = 0; i < bones.length; i++) {
-                const bone = bones[i]
-                const t = i / (bones.length - 1)
+        // Maximum distance along curl direction (furthest corner in that direction)
+        const maxDistAlongDir = Math.max(corner1, corner2, corner3, corner4)
 
-                if (t < curlStart || t >= curlEnd) {
-                    // Flat sections: no rotation
-                    bone.rotation.y = 0
-                } else {
-                    // Curved section: uniform rotation per bone = perfect circle
-                    bone.rotation.y = -perBoneRotation
-                }
-            }
-        } else {
-            // SPIRAL MODE: flat → first semicircle (controlled by curl & radius) → additional semicircles with decreasing radii
-            // First semicircle is IDENTICAL to semicircle mode (curl and radius apply only to it)
-            // Additional semicircles fill remaining space with progressively smaller radii
+        // Keep maxDistFromCenter for radius calculations (uses diagonal for smooth curves)
+        const diagonalLength = Math.sqrt(width * width + height * height)
+        const maxDistFromCenter = diagonalLength / 2
 
-            // First semicircle (same as semicircle mode)
-            const firstArcLength = Math.PI * r
-            const firstSemicircleEnd = Math.min(curlStart + firstArcLength, 1)
+        // foldOffset: position of the fold line along the 'dir' axis
+        // Use animated curlStart value for smooth animations
+        // Use maxDistAlongDir to keep fold line within sticker bounds (0 = left/top edge, 1 = right/bottom edge)
+        const animatedStart = animatedCurlStartRef.current.start
+        const foldOffset =
+            -maxDistAlongDir + animatedStart * 2 * maxDistAlongDir
+        const radiusWorld = r * maxDistFromCenter
 
-            // Build list of all semicircles
-            const semicircles: Array<{
-                start: number
-                end: number
-                radius: number
-                isFirst: boolean
-            }> = []
+        // RPrime is the current bending radius. As f -> 0, RPrime -> infinity (flat)
+        const RPrime = radiusWorld / curlFactor
+        const arcLimit = Math.PI * radiusWorld
 
-            // Add first semicircle (controlled by curl amount)
-            semicircles.push({
-                start: curlStart,
-                end: firstSemicircleEnd,
-                radius: r,
-                isFirst: true,
-            })
+        for (let i = 0; i < bones.length; i++) {
+            const bone = bones[i]
+            const initialPos = initialPositions[i]
+            const distOnDir = initialPos.x * dirX + initialPos.y * dirY
+            const signedDist = distOnDir - foldOffset
 
-            // Add additional semicircles with decreasing radii to fill remaining space
-            const radiusDecay = 0.75 // Each subsequent semicircle has 90% of previous radius
-            const minRadius = 0.1 // Minimum radius to prevent infinite loops
+            if (signedDist > 0) {
+                let xRel, zRel, finalAngle
 
-            let currentPos = firstSemicircleEnd
-            let currentRadius = r * radiusDecay
-
-            while (currentPos < 1 && currentRadius >= minRadius) {
-                const arcLength = Math.PI * currentRadius
-                const endPos = Math.min(currentPos + arcLength, 1)
-
-                semicircles.push({
-                    start: currentPos,
-                    end: endPos,
-                    radius: currentRadius,
-                    isFirst: false,
-                })
-
-                currentPos = endPos
-                currentRadius *= radiusDecay
-            }
-
-            // Calculate cumulative rotation for each semicircle
-            let cumulativeRotation = 0
-            const semicircleData = semicircles.map((semicircle, index) => {
-                const rotationForThisSemicircle = semicircle.isFirst
-                    ? Math.PI * curlFactor // First semicircle respects curl amount
-                    : Math.PI // Subsequent semicircles are always full π rotation
-
-                const data = {
-                    ...semicircle,
-                    cumulativeRotationStart: cumulativeRotation,
-                    rotationAmount: rotationForThisSemicircle,
-                }
-
-                cumulativeRotation += rotationForThisSemicircle
-                return data
-            })
-
-            // Apply rotations
-            for (let i = 0; i < bones.length; i++) {
-                const bone = bones[i]
-                const t = i / (bones.length - 1)
-
-                if (t < curlStart) {
-                    // Flat section: no rotation
-                    bone.rotation.y = 0
-                } else {
-                    // Find which semicircle this bone belongs to
-                    let found = false
-                    for (const semicircle of semicircleData) {
-                        if (t >= semicircle.start && t < semicircle.end) {
-                            // Position within this semicircle [0, 1]
-                            const localT =
-                                (t - semicircle.start) /
-                                (semicircle.end - semicircle.start)
-
-                            // Rotation = cumulative rotation from previous semicircles + progress through current one
-                            const rotationInSemicircle =
-                                localT * semicircle.rotationAmount
-                            bone.rotation.y = -(
-                                semicircle.cumulativeRotationStart +
-                                rotationInSemicircle
-                            )
-                            found = true
-                            break
-                        }
+                if (curlMode === "semicircle") {
+                    // Semicircle: follow arc of radius RPrime for arcLimit distance, then go straight
+                    const angle_s = (signedDist * curlFactor) / radiusWorld
+                    if (signedDist <= arcLimit) {
+                        xRel = RPrime * Math.sin(angle_s)
+                        zRel = RPrime * (1 - Math.cos(angle_s))
+                        finalAngle = angle_s
+                    } else {
+                        const Phi = Math.PI * curlFactor
+                        const xArcEnd = RPrime * Math.sin(Phi)
+                        const zArcEnd = RPrime * (1 - Math.cos(Phi))
+                        const extra = signedDist - arcLimit
+                        // Part past the arc is straight along the tangent at Phi
+                        xRel = xArcEnd + extra * Math.cos(Phi)
+                        zRel = zArcEnd + extra * Math.sin(Phi)
+                        finalAngle = Phi
                     }
+                } else {
+                    // Spiral mode: tighten the radius as we wrap
+                    const angle_sp = (signedDist * curlFactor) / radiusWorld
+                    const spiralDecay = 0.85
+                    const effectiveR =
+                        radiusWorld * Math.pow(spiralDecay, angle_sp / Math.PI)
+                    const effectiveRPrime = effectiveR / curlFactor
 
-                    if (!found && semicircleData.length > 0) {
-                        // Past all semicircles: use final cumulative rotation
-                        const lastSemicircle =
-                            semicircleData[semicircleData.length - 1]
-                        bone.rotation.y = -(
-                            lastSemicircle.cumulativeRotationStart +
-                            lastSemicircle.rotationAmount
-                        )
-                    }
+                    xRel = effectiveRPrime * Math.sin(angle_sp)
+                    zRel = effectiveRPrime * (1 - Math.cos(angle_sp))
+                    finalAngle = angle_sp
                 }
+
+                const dx = xRel - signedDist
+                bone.position.x = initialPos.x + dx * dirX
+                bone.position.y = initialPos.y + dx * dirY
+                bone.position.z = initialPos.z + zRel
+
+                const quat = new Quaternion()
+                quat.setFromAxisAngle(rotationAxis, -finalAngle)
+                bone.quaternion.copy(quat)
+            } else {
+                bone.position.copy(initialPos)
+                bone.quaternion.identity()
             }
         }
 
@@ -1466,141 +1708,197 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [curlStart, curlMode, renderFrame, curlAmount])
+    }, [curlMode, renderFrame]) // curlRotation removed from deps - we use ref instead
+
+    // Batched bone update - only runs once per frame even if multiple values change
+    // This prevents 3x redundant updateBones() calls when all 3 motion values animate together
+    const scheduleBoneUpdate = useCallback(() => {
+        if (pendingUpdateRef.current) return // Already scheduled
+        pendingUpdateRef.current = true
+        requestAnimationFrame(() => {
+            pendingUpdateRef.current = false
+            updateBones()
+        })
+    }, [updateBones])
+
+    // Set up motion value event listeners to sync with refs and schedule batched update
+    // These must be after updateBones is defined
+    useMotionValueEvent(curlAmountMotion, "change", (latest) => {
+        animatedCurlRef.current.amount = latest
+        scheduleBoneUpdate()
+    })
+
+    useMotionValueEvent(curlStartMotion, "change", (latest) => {
+        animatedCurlStartRef.current.start = latest
+        scheduleBoneUpdate()
+    })
+
+    useMotionValueEvent(curlRadiusMotion, "change", (latest) => {
+        animatedCurlRadiusRef.current.radius = latest
+        scheduleBoneUpdate()
+    })
 
     // ========================================================================
-    // HOVER ANIMATION WITH GSAP
+    // HOVER ANIMATION WITH FRAMER MOTION
     // ========================================================================
 
-    // Check if mouse is over non-transparent part of sticker
-    const checkMouseOverSticker = useCallback(
-        (event: React.MouseEvent<HTMLCanvasElement>) => {
-            if (
-                !canvasRef.current ||
-                !containerRef.current ||
-                !loadedImageRef.current
-            ) {
-                return false
+    // Store animation controls refs to allow cancellation
+    const animationControlsRef = useRef<{
+        curlAmount?: ReturnType<typeof animate>
+        curlStart?: ReturnType<typeof animate>
+        curlRadius?: ReturnType<typeof animate>
+    }>({})
+
+    // Helper function to build transition config from ControlType.Transition
+    // Handles both tween and spring animation types with all their properties
+    const buildTransitionConfig = useCallback(
+        (
+            transitionValue: typeof transition,
+            fallbackDuration: number = animationDuration,
+            defaultEase?: string
+        ): any => {
+            const config: any = {
+                ...(transitionValue?.type && { type: transitionValue.type }),
             }
 
-            const canvas = canvasRef.current
-            const container = containerRef.current
-            const img = loadedImageRef.current
-            const rect = canvas.getBoundingClientRect()
+            // For tween animations
+            if (!transitionValue?.type || transitionValue.type === "tween") {
+                // ControlType.Transition already provides duration in seconds
+                // fallbackDuration (animationDuration) is also in seconds
+                const duration = transitionValue?.duration ?? fallbackDuration
+                config.duration = duration
+                if (transitionValue?.ease) {
+                    config.ease = transitionValue.ease
+                } else if (defaultEase) {
+                    config.ease = defaultEase
+                }
+                if (transitionValue?.delay !== undefined)
+                    config.delay = transitionValue.delay
+            }
 
-            // Get container dimensions
-            const containerWidth =
-                container.clientWidth || container.offsetWidth || 1
-            const containerHeight =
-                container.clientHeight || container.offsetHeight || 1
+            // For spring animations
+            if (transitionValue?.type === "spring") {
+                if (transitionValue.stiffness !== undefined)
+                    config.stiffness = transitionValue.stiffness
+                if (transitionValue.damping !== undefined)
+                    config.damping = transitionValue.damping
+                if (transitionValue.mass !== undefined)
+                    config.mass = transitionValue.mass
+                if (transitionValue.bounce !== undefined)
+                    config.bounce = transitionValue.bounce
+                if (transitionValue.restDelta !== undefined)
+                    config.restDelta = transitionValue.restDelta
+                if (transitionValue.restSpeed !== undefined)
+                    config.restSpeed = transitionValue.restSpeed
+                // Spring can also have duration if provided (already in seconds from ControlType.Transition)
+                if (transitionValue.duration !== undefined) {
+                    config.duration = transitionValue.duration
+                }
+            }
 
-            // Calculate contained dimensions (actual sticker size)
-            const contained = calculateContainedDimensions(
-                containerWidth,
-                containerHeight,
-                imageAspectRatioRef.current
+            return config
+        },
+        [animationDuration]
+    )
+
+    // Pointer enter handler: trigger animation forward when mouse enters container
+    const handleMouseEnter = useCallback(() => {
+        if (!isHoveringRef.current) {
+            isHoveringRef.current = true
+
+            // Update cursor
+            if (containerRef.current) {
+                containerRef.current.style.cursor = "pointer"
+            }
+
+            // Stop any existing animations
+            if (animationControlsRef.current.curlAmount)
+                animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart)
+                animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius)
+                animationControlsRef.current.curlRadius.stop()
+
+            // Build transition config
+            const transitionConfig = buildTransitionConfig(transition)
+
+            // Animate to end states
+            animationControlsRef.current.curlAmount = animate(
+                curlAmountMotion,
+                animation.curlAmountEnd,
+                transitionConfig
             )
-            const stickerWidth = contained.width
-            const stickerHeight = contained.height
+            animationControlsRef.current.curlStart = animate(
+                curlStartMotion,
+                animation.curlStartEnd,
+                transitionConfig
+            )
+            animationControlsRef.current.curlRadius = animate(
+                curlRadiusMotion,
+                animation.curlRadiusEnd,
+                transitionConfig
+            )
+        }
+    }, [
+        animation,
+        transition,
+        curlAmountMotion,
+        curlStartMotion,
+        curlRadiusMotion,
+        buildTransitionConfig,
+    ])
 
-            // Calculate mouse position relative to canvas
-            const canvasX = event.clientX - rect.left
-            const canvasY = event.clientY - rect.top
-
-            // Account for canvas scale offset (canvas is larger than container)
-            const canvasOffsetX = (rect.width - containerWidth) / 2
-            const canvasOffsetY = (rect.height - containerHeight) / 2
-
-            // Account for sticker centering within container (contained dimensions are smaller)
-            const stickerOffsetX = (containerWidth - stickerWidth) / 2
-            const stickerOffsetY = (containerHeight - stickerHeight) / 2
-
-            // Convert to sticker-relative coordinates
-            const stickerX = canvasX - canvasOffsetX - stickerOffsetX
-            const stickerY = canvasY - canvasOffsetY - stickerOffsetY
-
-            // Check if mouse is within sticker bounds
-            if (
-                stickerX < 0 ||
-                stickerX > stickerWidth ||
-                stickerY < 0 ||
-                stickerY > stickerHeight
-            ) {
-                return false
-            }
-
-            // Map sticker coordinates to image coordinates
-            const imageX = Math.floor((stickerX / stickerWidth) * img.width)
-            const imageY = Math.floor((stickerY / stickerHeight) * img.height)
-
-            // Clamp coordinates to image bounds
-            const clampedX = Math.max(0, Math.min(img.width - 1, imageX))
-            const clampedY = Math.max(0, Math.min(img.height - 1, imageY))
-
-            // Create temporary canvas to read pixel data
-            const tempCanvas = document.createElement("canvas")
-            tempCanvas.width = img.width
-            tempCanvas.height = img.height
-            const ctx = tempCanvas.getContext("2d")
-            if (!ctx) return false
-
-            ctx.drawImage(img, 0, 0)
-            const imageData = ctx.getImageData(clampedX, clampedY, 1, 1)
-            const alpha = imageData.data[3]
-
-            // Return true if pixel is not transparent (alpha > threshold)
-            return alpha > 10
-        },
-        []
-    )
-
-    // Mouse move handler: check if over sticker and trigger animations
-    const handleMouseMove = useCallback(
-        (event: React.MouseEvent<HTMLCanvasElement>) => {
-            const isOverSticker = checkMouseOverSticker(event)
-            const wasHovering = isHoveringRef.current
-
-            if (isOverSticker && !wasHovering) {
-                // Entering sticker: animate to flat
-                isHoveringRef.current = true
-                gsap.to(animatedCurlRef.current, {
-                    amount: 0,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
-            } else if (!isOverSticker && wasHovering) {
-                // Leaving sticker: animate back to original curl
-                isHoveringRef.current = false
-                gsap.to(animatedCurlRef.current, {
-                    amount: curlAmount,
-                    duration: animationDuration,
-                    ease: "power2.inOut",
-                    onUpdate: () => {
-                        updateBones()
-                    },
-                })
-            }
-        },
-        [checkMouseOverSticker, curlAmount, updateBones]
-    )
-
-    // Mouse leave handler: always reset when leaving canvas
+    // Pointer leave handler: reverse animation when leaving container
     const handleMouseLeave = useCallback(() => {
         if (isHoveringRef.current) {
             isHoveringRef.current = false
-            gsap.to(animatedCurlRef.current, {
-                amount: curlAmount,
-                duration: animationDuration,
-                ease: "power2.out",
-                onUpdate: () => {
-                    updateBones()
-                },
-            })
+
+            // Update cursor
+            if (containerRef.current) {
+                containerRef.current.style.cursor = "auto"
+            }
+
+            // Stop any existing animations
+            if (animationControlsRef.current.curlAmount)
+                animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart)
+                animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius)
+                animationControlsRef.current.curlRadius.stop()
+
+            // Build transition config (use easeOut for mouse leave)
+            const transitionConfig = buildTransitionConfig(
+                transition,
+                animationDuration,
+                "easeOut"
+            )
+
+            // Animate back to start states
+            animationControlsRef.current.curlAmount = animate(
+                curlAmountMotion,
+                animation.curlAmountStart,
+                transitionConfig
+            )
+            animationControlsRef.current.curlStart = animate(
+                curlStartMotion,
+                animation.curlStartStart,
+                transitionConfig
+            )
+            animationControlsRef.current.curlRadius = animate(
+                curlRadiusMotion,
+                animation.curlRadiusStart,
+                transitionConfig
+            )
         }
-    }, [curlAmount, updateBones])
+    }, [
+        animation,
+        transition,
+        animationDuration,
+        curlAmountMotion,
+        curlStartMotion,
+        curlRadiusMotion,
+        buildTransitionConfig,
+    ])
 
     // ========================================================================
     // RESIZE HANDLING
@@ -1617,6 +1915,7 @@ export default function Sticker({
                 return
 
             const dpr = Math.min(window.devicePixelRatio || 1, 2)
+            // Canvas with small padding for shadows
             const canvasWidth = containerWidth * CANVAS_SCALE
             const canvasHeight = containerHeight * CANVAS_SCALE
 
@@ -1647,199 +1946,551 @@ export default function Sticker({
             canvasRef.current.style.width = `${canvasWidth}px`
             canvasRef.current.style.height = `${canvasHeight}px`
 
-            // If we have an image aspect ratio, recreate mesh with correct geometry
-            // Otherwise, scale the existing mesh uniformly
-            if (imageAspectRatioRef.current && meshRef.current) {
-                // Recreate mesh with correct aspect ratio geometry
-                recreateMeshWithAspectRatio(imageAspectRatioRef.current)
-                // Restore curl after mesh recreation
-                setTimeout(() => {
-                    if (meshRef.current && bonesRef.current.length > 0) {
-                        updateBones()
-                        renderFrame()
-                    }
-                }, 0)
-            } else if (meshRef.current) {
-                // No image aspect ratio yet - scale uniformly based on container
-                const baseSize = meshRef.current.geometry.parameters.width
-                const uniformScale =
-                    Math.min(containerWidth, containerHeight) / baseSize
-                meshRef.current.scale.set(uniformScale, uniformScale, 1)
-                // Update mesh position to keep center at group origin
-                const meshWidth = baseSize * uniformScale
-                meshRef.current.position.set(-meshWidth / 2, 0, 0)
+            // Always scale the mesh to fit contained dimensions
+            // Only recreate if aspect ratio changed significantly (to avoid unnecessary recreation)
+            if (meshRef.current) {
+                const geometry = meshRef.current.geometry
+                const baseWidth = geometry.parameters.width
+                const baseHeight = geometry.parameters.height
+
+                // Check if aspect ratio changed significantly (needs recreation)
+                const aspectRatioChanged =
+                    imageAspectRatioRef.current &&
+                    lastMeshDimensionsRef.current &&
+                    Math.abs(
+                        lastMeshDimensionsRef.current.width /
+                            lastMeshDimensionsRef.current.height -
+                            width / height
+                    ) > 0.01
+
+                if (aspectRatioChanged && imageAspectRatioRef.current) {
+                    // Recreate mesh with new aspect ratio
+                    recreateMeshWithAspectRatio(imageAspectRatioRef.current)
+                    lastMeshDimensionsRef.current = { width, height }
+                    // Restore curl after mesh recreation
+                    setTimeout(() => {
+                        if (meshRef.current && bonesRef.current.length > 0) {
+                            // Ensure skeleton is initialized before updating bones
+                            if (meshRef.current.skeleton) {
+                                meshRef.current.skeleton.update()
+                            }
+                            updateBones()
+                            renderFrame()
+                        }
+                    }, 10)
+                } else {
+                    // Scale existing mesh to fit contained dimensions
+                    // This preserves textures and is much faster
+                    const scaleX = width / baseWidth
+                    const scaleY = height / baseHeight
+
+                    meshRef.current.scale.set(scaleX, scaleY, 1)
+                    // Mesh stays centered at origin (no position offset with 2D grid)
+                    meshRef.current.position.set(0, 0, 0)
+
+                    // Update last dimensions
+                    lastMeshDimensionsRef.current = { width, height }
+
+                    // Update bones to reflect new scale
+                    updateBones()
+                    renderFrame()
+                }
             }
 
-            // Update shadow camera if shadows are enabled
-            if (enableShadows && lightRef.current) {
-                lightRef.current.shadow.camera.left = -containerWidth * 2
-                lightRef.current.shadow.camera.right = containerWidth * 2
-                lightRef.current.shadow.camera.top = containerHeight * 2
-                lightRef.current.shadow.camera.bottom = -containerHeight * 2
+            // Update shadow camera (shadows always enabled)
+            if (lightRef.current) {
+                // Match shadow camera bounds from setupScene - use canvas dimensions
+                const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+                const shadowCameraSize = Math.max(
+                    baseShadowSize, // At least as large as canvas
+                    baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding
+                )
+                const shadowOffsetX = shadowPositionX * 0.3
+                const shadowOffsetY = shadowPositionY * 0.3
+                lightRef.current.shadow.camera.left =
+                    -shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.right =
+                    shadowCameraSize / 2 + shadowOffsetX
+                lightRef.current.shadow.camera.top =
+                    shadowCameraSize / 2 + shadowOffsetY
+                lightRef.current.shadow.camera.bottom =
+                    -shadowCameraSize / 2 + shadowOffsetY
                 lightRef.current.shadow.camera.updateProjectionMatrix()
             }
         },
-        [
-            boneSegments,
-            enableShadows,
-            recreateMeshWithAspectRatio,
-            updateBones,
-            renderFrame,
-        ]
+        [recreateMeshWithAspectRatio, updateBones, renderFrame]
     )
 
     // ========================================================================
     // EFFECTS
     // ========================================================================
 
+    // WebGL context loss detection - set up early
+    useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        const handleContextLost = (event: Event) => {
+            event.preventDefault() // Prevent default behavior
+            console.warn(
+                "WebGL context lost event fired. Too many WebGL contexts active. Try reducing the number of 3D components on the page."
+            )
+            setContextLost(true)
+        }
+
+        const handleContextRestored = () => {
+            console.log("WebGL context restored event fired")
+            setContextLost(false)
+            setSceneReady(false) // Reset before re-initialization
+            // Re-initialize the scene when context is restored
+            if (hasContent) {
+                const sceneSetup = setupScene()
+                if (sceneSetup && meshRef.current) {
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.skeleton.update()
+                    }
+                    updateBones()
+                    renderFrame()
+                    loadTexture()
+                }
+            }
+        }
+
+        canvas.addEventListener("webglcontextlost", handleContextLost, false)
+        canvas.addEventListener(
+            "webglcontextrestored",
+            handleContextRestored,
+            false
+        )
+
+        return () => {
+            canvas.removeEventListener("webglcontextlost", handleContextLost)
+            canvas.removeEventListener(
+                "webglcontextrestored",
+                handleContextRestored
+            )
+        }
+    }, [hasContent, setupScene, updateBones, renderFrame, loadTexture])
+
+    // Retry initialization when props change and context was lost
+    // This allows the component to recover when user tweaks props
+    useEffect(() => {
+        if (contextLost && hasContent) {
+            // Prevent rapid retry attempts - only allow once per 2 seconds
+            const now = Date.now()
+            if (now - lastRetryAttemptRef.current < 2000) {
+                return
+            }
+            lastRetryAttemptRef.current = now
+
+            console.log(
+                "Props changed while context lost - attempting to reinitialize..."
+            )
+            // Reset context lost state and scene ready state, then attempt to reinitialize
+            setContextLost(false)
+            setSceneReady(false)
+            imageLoadAbortRef.current = false
+
+            // Attempt to recreate the scene with a slight delay to ensure cleanup
+            const retryTimeout = setTimeout(() => {
+                console.log("Retrying scene setup after context loss...")
+                const sceneSetup = setupScene()
+                if (sceneSetup && meshRef.current) {
+                    // Successfully created new context
+                    console.log("Successfully recreated WebGL context!")
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.skeleton.update()
+                    }
+                    updateBones()
+                    renderFrame()
+                    loadTexture()
+                } else {
+                    console.warn(
+                        "Failed to recreate WebGL context - still unavailable"
+                    )
+                }
+            }, 100)
+
+            return () => clearTimeout(retryTimeout)
+        }
+    }, [
+        resolvedImageUrl,
+        curlRotation,
+        curlMode,
+        backColor,
+        shadowPositionX,
+        shadowPositionY,
+        castShadowOpacity,
+        animation.curlAmountStart,
+        animation.curlAmountEnd,
+        animation.curlRadiusStart,
+        animation.curlRadiusEnd,
+        animation.curlStartStart,
+        animation.curlStartEnd,
+        animation.show,
+        contextLost,
+        hasContent,
+        setupScene,
+        updateBones,
+        renderFrame,
+        loadTexture,
+    ])
+
     // Reset aspect ratio when image changes
     useEffect(() => {
         imageAspectRatioRef.current = null
     }, [resolvedImageUrl])
 
+    // Refresh toggle - force complete re-initialization when toggled
+    useEffect(() => {
+        // Only run when refresh value actually changes (not on initial mount)
+        if (previousRefreshRef.current === undefined) {
+            previousRefreshRef.current = refresh
+            return
+        }
+
+        // If refresh value hasn't changed, do nothing
+        if (previousRefreshRef.current === refresh) {
+            return
+        }
+
+        // Update the previous value
+        previousRefreshRef.current = refresh
+
+        if (!hasContent) return
+
+        // Clean up existing scene completely
+        if (rendererRef.current) {
+            try {
+                rendererRef.current.dispose()
+            } catch (error) {
+                // Silently handle disposal errors
+            }
+            rendererRef.current = null
+        }
+        if (sceneRef.current) {
+            try {
+                // Remove all children before clearing
+                while (sceneRef.current.children.length > 0) {
+                    const child = sceneRef.current.children[0]
+                    sceneRef.current.remove(child)
+                }
+                sceneRef.current.clear()
+            } catch (error) {
+                // Silently handle cleanup errors
+            }
+            sceneRef.current = null
+        }
+        if (meshRef.current) {
+            const oldMesh = meshRef.current
+            if (groupRef.current) {
+                groupRef.current.remove(oldMesh)
+            }
+            // Dispose skeleton bones
+            if (oldMesh.skeleton) {
+                oldMesh.skeleton.bones.forEach((bone: any) => {
+                    if (bone && bone.parent) {
+                        bone.parent.remove(bone)
+                    }
+                })
+            }
+            if (oldMesh.geometry) {
+                oldMesh.geometry.dispose()
+            }
+            if (Array.isArray(oldMesh.material)) {
+                oldMesh.material.forEach((mat: any) => {
+                    if (mat.map) mat.map.dispose()
+                    mat.dispose()
+                })
+            }
+            meshRef.current = null
+        }
+        groupRef.current = null
+        bonesRef.current = []
+        bonesInitialPositionsRef.current = []
+        lightRef.current = null
+        ambientLightRef.current = null
+        backgroundPlaneRef.current = null
+        loadedImageRef.current = null
+
+        // Reset context lost state and scene ready state
+        setContextLost(false)
+        setSceneReady(false)
+        imageLoadAbortRef.current = false
+
+        // Reinitialize scene after a brief delay to ensure cleanup is complete
+        setTimeout(() => {
+            const sceneSetup = setupScene()
+            if (sceneSetup && meshRef.current) {
+                if (meshRef.current.skeleton) {
+                    meshRef.current.skeleton.update()
+                }
+                updateBones()
+                renderFrame()
+                loadTexture()
+            }
+        }, 50)
+    }, [refresh, hasContent, setupScene, updateBones, renderFrame, loadTexture])
+
     // Initialize scene
     useEffect(() => {
         if (!hasContent) {
+            imageLoadAbortRef.current = true // Mark as aborting
+            setSceneReady(false) // Reset scene ready state
             if (rendererRef.current) {
-                rendererRef.current.dispose()
+                try {
+                    rendererRef.current.dispose()
+                } catch (error) {
+                    // Silently handle disposal errors
+                }
                 rendererRef.current = null
             }
             if (sceneRef.current) {
-                sceneRef.current.clear()
+                try {
+                    sceneRef.current.clear()
+                } catch (error) {
+                    // Silently handle cleanup errors
+                }
                 sceneRef.current = null
             }
             meshRef.current = null
             bonesRef.current = []
+            bonesInitialPositionsRef.current = []
             lightRef.current = null
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
             imageAspectRatioRef.current = null
+            loadedImageRef.current = null
             return
         }
 
-        setupScene()
+        imageLoadAbortRef.current = false // Reset abort flag when content is available
 
-        setTimeout(() => {
+        const sceneSetup = setupScene()
+
+        if (!sceneSetup) {
+            // If setupScene returns null, it might be:
+            // 1. Container not ready (retry)
+            // 2. WebGL context failed (contextLost already set in setupScene)
+            // Try again after a short delay
+            const retryTimeout = setTimeout(() => {
+                const retrySetup = setupScene()
+                if (retrySetup && meshRef.current) {
+                    // Initialize skeleton and bones immediately
+                    if (meshRef.current.skeleton) {
+                        meshRef.current.skeleton.update()
+                    }
+                    updateBones()
+                    // Render immediately to show mesh (even without texture)
+                    renderFrame()
+                    // Load texture asynchronously
+                    loadTexture()
+                } else if (!retrySetup) {
+                    // Retry failed - if contextLost isn't already set, this might be a context issue
+                    console.warn(
+                        "Scene setup failed on retry - context may be unavailable"
+                    )
+                }
+            }, 100)
+            return () => clearTimeout(retryTimeout)
+        }
+
+        // Initialize immediately - no setTimeout delays
+        if (meshRef.current) {
+            // Initialize skeleton and bones
+            if (meshRef.current.skeleton) {
+                meshRef.current.skeleton.update()
+            }
             updateBones()
+            // Render immediately to show mesh (even without texture - will show back color)
+            renderFrame()
+            // Load texture asynchronously - it will trigger another render when done
             loadTexture()
-        }, 0)
+
+            // Trigger initial resize to ensure proper sizing
+            // This ensures component is responsive from the start
+            requestAnimationFrame(() => {
+                if (
+                    !imageLoadAbortRef.current &&
+                    triggerResizeRef.current &&
+                    containerRef.current
+                ) {
+                    triggerResizeRef.current()
+                }
+            })
+        }
 
         return () => {
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
             }
+
+            // Reset scene ready state
+            setSceneReady(false)
+
+            // Dispose mesh and all its resources
+            if (meshRef.current) {
+                const oldMesh = meshRef.current
+
+                // Remove from scene and group
+                if (groupRef.current) {
+                    groupRef.current.remove(oldMesh)
+                }
+                if (sceneRef.current) {
+                    sceneRef.current.remove(oldMesh)
+                }
+
+                // Dispose geometry
+                if (oldMesh.geometry) {
+                    oldMesh.geometry.dispose()
+                }
+
+                // Dispose materials and textures
+                if (Array.isArray(oldMesh.material)) {
+                    oldMesh.material.forEach((mat: any) => {
+                        if (mat.map) mat.map.dispose()
+                        mat.dispose()
+                    })
+                } else if (oldMesh.material) {
+                    if ((oldMesh.material as any).map) {
+                        ;(oldMesh.material as any).map.dispose()
+                    }
+                    oldMesh.material.dispose()
+                }
+
+                // Clear skeleton bones
+                if (oldMesh.skeleton) {
+                    oldMesh.skeleton.bones.forEach((bone: any) => {
+                        if (bone && bone.parent) {
+                            bone.parent.remove(bone)
+                        }
+                    })
+                }
+
+                meshRef.current = null
+            }
+
+            // Clear bones refs
+            bonesRef.current = []
+            bonesInitialPositionsRef.current = []
+            groupRef.current = null
+
+            // Dispose renderer (this also disposes of its WebGL context)
             if (rendererRef.current) {
-                rendererRef.current.dispose()
+                try {
+                    rendererRef.current.dispose()
+                } catch (error) {
+                    // Silently handle disposal errors
+                }
                 rendererRef.current = null
             }
+
+            // Clear scene
             if (sceneRef.current) {
-                sceneRef.current.clear()
+                try {
+                    // Remove all remaining objects
+                    while (sceneRef.current.children.length > 0) {
+                        const child = sceneRef.current.children[0]
+                        sceneRef.current.remove(child)
+                        // Dispose if it has dispose method
+                        if (
+                            (child as any).dispose &&
+                            typeof (child as any).dispose === "function"
+                        ) {
+                            ;(child as any).dispose()
+                        }
+                    }
+                    sceneRef.current.clear()
+                } catch (error) {
+                    // Silently handle cleanup errors
+                }
                 sceneRef.current = null
             }
+
+            // Clear refs
+            cameraRef.current = null
             lightRef.current = null
             ambientLightRef.current = null
             backgroundPlaneRef.current = null
+            loadedImageRef.current = null
+            imageAspectRatioRef.current = null
+
+            // Stop any running animations
+            if (animationControlsRef.current.curlAmount)
+                animationControlsRef.current.curlAmount.stop()
+            if (animationControlsRef.current.curlStart)
+                animationControlsRef.current.curlStart.stop()
+            if (animationControlsRef.current.curlRadius)
+                animationControlsRef.current.curlRadius.stop()
+            animationControlsRef.current = {}
+
+            // Mark image loading as aborted to prevent callbacks from running after unmount
+            imageLoadAbortRef.current = true
         }
-    }, [hasContent, setupScene, loadTexture, recreateMeshWithAspectRatio])
+    }, [hasContent, setupScene, loadTexture, updateBones, renderFrame])
 
-    // Sync animated curl ref with prop changes
+    // Sync animated refs with animation prop changes (only when not hovering)
     useEffect(() => {
-        animatedCurlRef.current.amount = curlAmount
-    }, [curlAmount])
+        // Only update if not currently animating (not hovering)
+        if (!isHoveringRef.current) {
+            // In Canvas mode, respect the show prop to determine which state to display
+            // In preview/live mode, always use start values
+            const shouldShowFinal = isCanvas && animation.show === "final"
 
-    // Update internalRadius when curlRadius prop changes
-    useEffect(() => {
-        internalRadiusRef.current = mapInteralRadiusToUIValue(curlRadius)
-        updateBones()
-    }, [curlRadius, updateBones])
+            const targetCurlAmount = shouldShowFinal
+                ? animation.curlAmountEnd
+                : animation.curlAmountStart
+            const targetCurlStart = shouldShowFinal
+                ? animation.curlStartEnd
+                : animation.curlStartStart
+            const targetCurlRadius = shouldShowFinal
+                ? animation.curlRadiusEnd
+                : animation.curlRadiusStart
 
-    // Update bones when curlStart or curlMode changes
-    // Note: curlAmount is handled by GSAP animations via animatedCurlRef
-    useEffect(() => {
-        updateBones()
-    }, [curlStart, curlMode, updateBones])
+            // Set motion values directly (no animation when props change)
+            // Note: .set() doesn't trigger useMotionValueEvent, so we update refs manually
+            curlAmountMotion.set(targetCurlAmount)
+            curlStartMotion.set(targetCurlStart)
+            curlRadiusMotion.set(targetCurlRadius)
 
-    // Update curl direction rotation when curlRotation changes
-    useEffect(() => {
-        if (!groupRef.current) return
-        // Rotate group to change curl direction
-        groupRef.current.rotation.z = curlRotation * (Math.PI / 180)
-
-        // Offset group position to push curled portion outside visible bounds
-        const curlRotationRad = curlRotation * (Math.PI / 180)
-        const baseSize = meshRef.current?.geometry?.parameters?.width || 400
-        const offsetMagnitude = baseSize * 0.15
-        groupRef.current.position.x = -Math.cos(curlRotationRad) * offsetMagnitude
-        groupRef.current.position.y = -Math.sin(curlRotationRad) * offsetMagnitude
-
-        // Update texture counter-rotations so image stays upright
-        if (meshRef.current?.material) {
-            const materials = meshRef.current.material as any[]
-            if (Array.isArray(materials)) {
-                // Front face texture
-                if (materials[4]?.map) {
-                    applyTextureCounterRotation(
-                        materials[4].map,
-                        curlRotation,
-                        false
-                    )
-                    if (
-                        materials[4].emissiveMap &&
-                        materials[4].emissiveMap !== materials[4].map
-                    ) {
-                        applyTextureCounterRotation(
-                            materials[4].emissiveMap,
-                            curlRotation,
-                            false
-                        )
-                    }
-                    materials[4].needsUpdate = true
-                }
-                // Back face texture (mirrored)
-                if (materials[5]?.map) {
-                    applyTextureCounterRotation(
-                        materials[5].map,
-                        curlRotation,
-                        true
-                    )
-                    if (
-                        materials[5].emissiveMap &&
-                        materials[5].emissiveMap !== materials[5].map
-                    ) {
-                        applyTextureCounterRotation(
-                            materials[5].emissiveMap,
-                            curlRotation,
-                            true
-                        )
-                    }
-                    materials[5].needsUpdate = true
-                }
-                // Side faces (use front texture rotation)
-                for (let i = 0; i < 4; i++) {
-                    if (materials[i]?.map) {
-                        applyTextureCounterRotation(
-                            materials[i].map,
-                            curlRotation,
-                            false
-                        )
-                        if (
-                            materials[i].emissiveMap &&
-                            materials[i].emissiveMap !== materials[i].map
-                        ) {
-                            applyTextureCounterRotation(
-                                materials[i].emissiveMap,
-                                curlRotation,
-                                false
-                            )
-                        }
-                        materials[i].needsUpdate = true
-                    }
-                }
-            }
+            // Update refs directly and call updateBones
+            animatedCurlRef.current.amount = targetCurlAmount
+            animatedCurlStartRef.current.start = targetCurlStart
+            animatedCurlRadiusRef.current.radius = targetCurlRadius
+            updateBones()
         }
+    }, [
+        animation,
+        isCanvas,
+        curlAmountMotion,
+        curlStartMotion,
+        curlRadiusMotion,
+        updateBones,
+    ])
 
-        renderFrame()
-    }, [curlRotation, renderFrame])
+    // Update bones when curlMode changes
+    // Note: curlAmount and curlStart are handled by GSAP animations via animated refs
+    useEffect(() => {
+        updateBones()
+    }, [curlMode, updateBones])
+
+    // Update bones when curlRotation changes (fold line direction)
+    useEffect(() => {
+        // Update ref immediately so updateBones always uses current value
+        curlRotationRef.current = curlRotation
+        if (!meshRef.current || !bonesRef.current.length) return
+        updateBones()
+        // In Canvas mode, explicitly render to ensure the change is visible
+        if (
+            isCanvas &&
+            rendererRef.current &&
+            sceneRef.current &&
+            cameraRef.current
+        ) {
+            renderFrame()
+        }
+    }, [curlRotation, updateBones, isCanvas, renderFrame])
 
     // Update back color - recreate back texture when backColor changes
     useEffect(() => {
@@ -1866,8 +2517,6 @@ export default function Sticker({
             rawBackTexture,
             frontTexture
         )
-        // Apply counter-rotation to back texture (mirrored, so isBackTexture=true)
-        applyTextureCounterRotation(backTexture, curlRotation, true)
 
         if (materials[5]) {
             // Only dispose if it's a different texture (not the front texture)
@@ -1879,46 +2528,22 @@ export default function Sticker({
                 materials[5].map.dispose()
             }
 
-            if (enableShadows) {
-                // With shadows: use texture (MeshStandardMaterial)
-                if (backTexture) {
-                    materials[5].map = backTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
+            // With shadows: use texture (MeshStandardMaterial)
+            if (backTexture) {
+                materials[5].map = backTexture
+                materials[5].transparent = true
+                materials[5].alphaTest = 0.01
 
-                    // When using front texture (0% opacity), match front material properties more closely
-                    if (
-                        backColorRgba.a <= 0 &&
-                        materials[5].emissiveIntensity !== undefined
-                    ) {
-                        // Match front material emissive for identical appearance
-                        materials[5].emissiveIntensity =
-                            materials[4]?.emissiveIntensity ?? 0.8
-                        materials[5].emissive =
-                            materials[4]?.emissive ?? new Color(0xffffff)
-                    }
-                }
-            } else {
-                // No shadows: use texture if available, otherwise use flat color (MeshBasicMaterial)
-                if (backTexture && backColorRgba.a > 0) {
-                    // Use texture for blended effect
-                    materials[5].map = backTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
-                } else if (backColorRgba.a <= 0) {
-                    // Fully transparent: use front texture
-                    materials[5].map = frontTexture
-                    materials[5].transparent = true
-                    materials[5].alphaTest = 0.01
-                } else {
-                    // Fully opaque: use flat color (no texture needed)
-                    materials[5].map = null
-                    materials[5].color.setRGB(
-                        backColorRgba.r,
-                        backColorRgba.g,
-                        backColorRgba.b
-                    )
-                    materials[5].opacity = backColorRgba.a
+                // When using front texture (0% opacity), match front material properties more closely
+                if (
+                    backColorRgba.a <= 0 &&
+                    materials[5].emissiveIntensity !== undefined
+                ) {
+                    // Match front material emissive for identical appearance
+                    materials[5].emissiveIntensity =
+                        materials[4]?.emissiveIntensity ?? 0.8
+                    materials[5].emissive =
+                        materials[4]?.emissive ?? new Color(0xffffff)
                 }
             }
 
@@ -1960,32 +2585,60 @@ export default function Sticker({
         }
 
         renderFrame()
-    }, [backColor, createBackTexture, enableShadows, renderFrame, curlRotation])
+    }, [backColor, createBackTexture, renderFrame])
 
-    // Update shadow position when settings change
+    // Update shadow position when settings change (debounced to prevent lag)
     useEffect(() => {
-        if (!enableShadows || !lightRef.current) return
+        // Debounce shadow position updates to improve performance when dragging sliders
+        const timeoutId = setTimeout(() => {
+            if (!lightRef.current || !containerRef.current) return
 
-        lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
-        lightRef.current.shadow.mapSize.width = 4096
-        lightRef.current.shadow.mapSize.height = 4096
-        lightRef.current.shadow.bias = -0.00001
-        lightRef.current.shadow.radius = 8
-        lightRef.current.shadow.needsUpdate = true
+            lightRef.current.position.set(shadowPositionX, shadowPositionY, 400)
+            lightRef.current.shadow.mapSize.width = 4096
+            lightRef.current.shadow.mapSize.height = 4096
+            lightRef.current.shadow.bias = -0.00001
+            lightRef.current.shadow.radius = 8
 
-        renderFrame()
-    }, [enableShadows, shadowPositionX, shadowPositionY, renderFrame])
+            // Update shadow camera bounds to account for new light position (use canvas dimensions)
+            const container = containerRef.current
+            const containerWidth =
+                container.clientWidth || container.offsetWidth || 1
+            const containerHeight =
+                container.clientHeight || container.offsetHeight || 1
+            const canvasWidth = containerWidth * CANVAS_SCALE
+            const canvasHeight = containerHeight * CANVAS_SCALE
+            const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+            const shadowCameraSize = Math.max(
+                baseShadowSize, // At least as large as canvas
+                baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding
+            )
+            const shadowOffsetX = shadowPositionX * 0.3
+            const shadowOffsetY = shadowPositionY * 0.3
+            lightRef.current.shadow.camera.left =
+                -shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.right =
+                shadowCameraSize / 2 + shadowOffsetX
+            lightRef.current.shadow.camera.top =
+                shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.bottom =
+                -shadowCameraSize / 2 + shadowOffsetY
+            lightRef.current.shadow.camera.updateProjectionMatrix()
+            lightRef.current.shadow.needsUpdate = true
 
-    // Update shadow intensity (darkness) when settings change
+            renderFrame()
+        }, 50) // 50ms debounce to prevent lag when dragging sliders
+
+        return () => clearTimeout(timeoutId)
+    }, [shadowPositionX, shadowPositionY, renderFrame])
+
+    // Update shadow intensity (darkness) - hardcoded to 1
     useEffect(() => {
-        if (!enableShadows || !lightRef.current || !ambientLightRef.current)
-            return
+        if (!lightRef.current || !ambientLightRef.current) return
 
         // Shadow darkness is controlled by the ratio of directional to ambient light
-        // High shadowIntensity: strong directional light, low ambient = dark shadows
-        // Low shadowIntensity: weaker directional, high ambient = soft/no shadows
-        // At shadowIntensity = 1, make shadows very dramatic
+        // shadowIntensity = 1 (hardcoded), make shadows very dramatic
 
+        const shadowIntensity = 1 // Hardcoded
         // Directional light: 0.3 to 2.0 (more dramatic at max)
         const adjustedLightIntensity = 0.3 + shadowIntensity * 1.7
         lightRef.current.intensity = adjustedLightIntensity
@@ -1998,21 +2651,47 @@ export default function Sticker({
         )
 
         renderFrame()
-    }, [enableShadows, shadowIntensity, renderFrame])
+    }, [renderFrame])
 
-    // Update cast shadow opacity when it changes
+    // Update cast shadow opacity when it changes (debounced to prevent lag)
     useEffect(() => {
-        if (!enableShadows || !backgroundPlaneRef.current) return
+        // Debounce shadow opacity updates to improve performance when dragging sliders
+        const timeoutId = setTimeout(() => {
+            if (!backgroundPlaneRef.current || !containerRef.current) return
 
-        const material = backgroundPlaneRef.current.material as any
-        // ShadowMaterial: adjust opacity based on castShadowOpacity
-        material.opacity = castShadowOpacity
-        material.needsUpdate = true
+            const material = backgroundPlaneRef.current.material as any
+            // ShadowMaterial: adjust opacity based on castShadowOpacity
+            material.opacity = castShadowOpacity
+            material.needsUpdate = true
 
-        renderFrame()
-    }, [enableShadows, castShadowOpacity, renderFrame])
+            // Update plane size to match shadow camera bounds (use canvas dimensions)
+            const container = containerRef.current
+            const containerWidth =
+                container.clientWidth || container.offsetWidth || 1
+            const containerHeight =
+                container.clientHeight || container.offsetHeight || 1
+            const canvasWidth = containerWidth * CANVAS_SCALE
+            const canvasHeight = containerHeight * CANVAS_SCALE
+            const baseShadowSize = Math.max(canvasWidth, canvasHeight)
+            const planeSize = Math.max(
+                baseShadowSize, // At least as large as canvas
+                baseShadowSize * (3.5 / CANVAS_SCALE) // Or use scaled padding to match shadow camera
+            )
+
+            // Dispose old geometry and create new one with updated size
+            const oldGeometry = backgroundPlaneRef.current.geometry
+            const newGeometry = new PlaneGeometry(planeSize, planeSize)
+            backgroundPlaneRef.current.geometry = newGeometry
+            oldGeometry.dispose()
+
+            renderFrame()
+        }, 50) // 50ms debounce to prevent lag when dragging sliders
+
+        return () => clearTimeout(timeoutId)
+    }, [castShadowOpacity, renderFrame])
 
     // Size monitoring - optimized for Framer canvas
+    // Re-run when image changes to ensure responsiveness
     useEffect(() => {
         const container = containerRef.current
         if (!container) return
@@ -2020,20 +2699,57 @@ export default function Sticker({
         const handleResize = () => {
             const width = container.clientWidth || container.offsetWidth || 1
             const height = container.clientHeight || container.offsetHeight || 1
-            const last = lastSizeRef.current
-            const sizeChanged =
-                Math.abs(width - last.width) > 1 ||
-                Math.abs(height - last.height) > 1
-            if (sizeChanged) {
-                last.width = width
-                last.height = height
-                updateSize(width, height)
-                renderFrame()
+
+            // For preview/live mode, always update if dimensions are valid
+            // For canvas mode, only update if scene is initialized
+            if (width > 0 && height > 0) {
+                const last = lastSizeRef.current
+                const sizeChanged =
+                    Math.abs(width - last.width) > 0.5 ||
+                    Math.abs(height - last.height) > 0.5
+
+                if (sizeChanged || !last.width || !last.height) {
+                    // In preview/live mode, update immediately
+                    // In canvas mode, only update if scene is ready
+                    if (
+                        !isCanvas ||
+                        (rendererRef.current &&
+                            cameraRef.current &&
+                            meshRef.current)
+                    ) {
+                        last.width = width
+                        last.height = height
+                        updateSize(width, height)
+                        renderFrame()
+                    }
+                }
             }
         }
 
-        // Initial resize
+        // Store handleResize in ref so it can be called from image load callback
+        triggerResizeRef.current = handleResize
+
+        // Initial resize - delay to ensure scene is set up
+        // In preview mode, the scene might not be ready immediately
+        // Use multiple attempts to catch when container gets dimensions
+        let attemptCount = 0
+        const maxAttempts = 10
+        const attemptResize = () => {
+            if (attemptCount < maxAttempts) {
+                attemptCount++
+                handleResize()
+                // If scene isn't ready yet, try again
+                if (!rendererRef.current || !sceneRef.current) {
+                    setTimeout(attemptResize, isCanvas ? 50 : 100)
+                }
+            }
+        }
+        // Trigger immediately, then also schedule delayed attempts
         handleResize()
+        const initialResizeTimeout = setTimeout(
+            attemptResize,
+            isCanvas ? 0 : 50
+        )
 
         // Use requestAnimationFrame-based monitoring for canvas mode (like interactive-thermal3.tsx)
         const resizeCleanup = isCanvas
@@ -2068,15 +2784,22 @@ export default function Sticker({
                           Math.abs(ch - lastSizeRef.current.height) > 1
 
                       if (timeOk && (aspectChanged || sizeChanged)) {
-                          lastSizeRef.current = {
-                              width: cw,
-                              height: ch,
-                              aspect,
-                              zoom,
-                              ts: now || performance.now(),
+                          // Only update lastSizeRef if scene is ready (canvas mode requirement)
+                          if (
+                              rendererRef.current &&
+                              cameraRef.current &&
+                              meshRef.current
+                          ) {
+                              lastSizeRef.current = {
+                                  width: cw,
+                                  height: ch,
+                                  aspect,
+                                  zoom,
+                                  ts: now || performance.now(),
+                              }
+                              updateSize(cw, ch)
+                              renderFrame()
                           }
-                          updateSize(cw, ch)
-                          renderFrame()
                       }
 
                       rafId = requestAnimationFrame(tick)
@@ -2095,8 +2818,71 @@ export default function Sticker({
                   }
               })()
 
-        return resizeCleanup
-    }, [updateSize, renderFrame, isCanvas])
+        return () => {
+            clearTimeout(initialResizeTimeout)
+            resizeCleanup()
+            triggerResizeRef.current = null
+        }
+    }, [updateSize, renderFrame, isCanvas, hasContent, resolvedImageUrl])
+
+    // Periodic check for context loss (in case event doesn't fire)
+    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
+    useEffect(() => {
+        if (!hasContent || contextLost) return
+
+        let checkCount = 0
+        const maxFastChecks = 5 // First 5 checks are faster
+
+        const checkContext = () => {
+            if (rendererRef.current) {
+                const gl = rendererRef.current.getContext()
+                if (!gl || gl.isContextLost()) {
+                    console.warn("Detected context loss via periodic check")
+                    setContextLost(true)
+                }
+            }
+            checkCount++
+        }
+
+        // Start with faster checks (every 500ms for first 2.5 seconds)
+        // Then slow down to every 3 seconds
+        const fastInterval = setInterval(() => {
+            if (checkCount >= maxFastChecks) {
+                clearInterval(fastInterval)
+            } else {
+                checkContext()
+            }
+        }, 500)
+
+        const slowInterval = setInterval(() => {
+            if (checkCount >= maxFastChecks) {
+                checkContext()
+            }
+        }, 3000)
+
+        return () => {
+            clearInterval(fastInterval)
+            clearInterval(slowInterval)
+        }
+    }, [hasContent, contextLost])
+
+    // If we have content but no scene after a delay, assume context loss
+    // IMPORTANT: Must be before any conditional returns to follow React's rules of hooks
+    useEffect(() => {
+        if (!hasContent || contextLost || sceneReady) return
+
+        // After 2 seconds, if still no scene, assume WebGL context issue
+        const checkTimeout = setTimeout(() => {
+            if (!sceneRef.current && !contextLost) {
+                console.warn(
+                    "Scene failed to initialize after 2 seconds - assuming WebGL context unavailable"
+                )
+                setContextLost(true)
+            }
+        }, 2000)
+
+        return () => clearTimeout(checkTimeout)
+    }, [hasContent, contextLost, sceneReady])
 
     // ========================================================================
     // RENDER
@@ -2118,22 +2904,41 @@ export default function Sticker({
         )
     }
 
+    // Show error message when WebGL context is lost
+    if (contextLost) {
+        return (
+            <ComponentMessage
+                title="⚠️ Don't worry, this is normal."
+                subtitle="There are currently more stickers in Canvas than Browsers can handle. Tweak Refresh to see the sticker re-appear. If you don't add too many stickers, you won't have issues in preview or deployed website."
+            />
+        )
+    }
+
+    // Calculate offset to center the larger canvas within the container
+    // This gives extra space for shadows while keeping the sticker centered
     const offsetPercent = ((CANVAS_SCALE - 1) / 2) * 100
-    // Hide canvas until texture is loaded to avoid visual jump
-    const isReady = textureLoaded && meshRef.current !== null
 
     return (
         <div
             ref={containerRef}
+            onPointerEnter={handleMouseEnter}
+            onPointerLeave={handleMouseLeave}
             style={{
                 ...style,
                 position: "relative",
+
                 width: "100%",
                 height: "100%",
-                overflow: "hidden", // Clip extra bits that appear at diagonal angles
-                display: "block",
+                overflow: "visible",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
                 margin: 0,
                 padding: 0,
+                borderRadius: borderRadius,
+                backgroundColor: backgroundColor
+                    ? backgroundColor
+                    : "transparent",
             }}
         >
             <div
@@ -2148,15 +2953,22 @@ export default function Sticker({
             />
             <canvas
                 ref={canvasRef}
-                onMouseMove={handleMouseMove}
-                onMouseLeave={handleMouseLeave}
                 style={{
                     position: "absolute",
                     top: `-${offsetPercent}%`,
                     left: `-${offsetPercent}%`,
+                    // In canvas mode, use explicit dimensions for better responsiveness
+                    // In preview/live mode, let JavaScript set dimensions
+                    ...(isCanvas
+                        ? {
+                              width: `${CANVAS_SCALE * 100}%`,
+                              height: `${CANVAS_SCALE * 100}%`,
+                          }
+                        : {}),
                     display: "block",
-                    cursor: "pointer",
-                    opacity: isReady ? 1 : 0,
+                    pointerEvents: "none",
+                    cursor: "auto",
+                    opacity: sceneReady ? 1 : 0,
                 }}
             />
         </div>
@@ -2168,42 +2980,18 @@ export default function Sticker({
 // ============================================================================
 
 addPropertyControls(Sticker, {
+    refresh: {
+        type: ControlType.Boolean,
+        title: "Refresh",
+        defaultValue: false,
+        enabledTitle: "•",
+        disabledTitle: "•",
+        description:
+            "Toggle if the sticker is showing an error to see it again",
+    },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
-    },
-    curlAmount: {
-        type: ControlType.Number,
-        title: "Curl",
-        min: 0,
-        max: 1,
-        step: 0.05,
-        defaultValue: 0.05,
-    },
-    curlRadius: {
-        type: ControlType.Number,
-        title: "Radius",
-        min: 0.1,
-        max: 1,
-        step: 0.05,
-        defaultValue: 1,
-    },
-    curlStart: {
-        type: ControlType.Number,
-        title: "Start",
-        min: 0,
-        max: 1,
-        step: 0.05,
-        defaultValue: 0.45,
-    },
-    curlRotation: {
-        type: ControlType.Number,
-        title: "Direction",
-        min: 0,
-        max: 360,
-        step: 15,
-        defaultValue: 0,
-        unit: "°",
     },
     curlMode: {
         type: ControlType.Enum,
@@ -2214,22 +3002,82 @@ addPropertyControls(Sticker, {
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
     },
-    enableShadows: {
-        type: ControlType.Boolean,
-        title: "Ligthing",
-        defaultValue: true,
-        enabledTitle: "On",
-        disabledTitle: "Off",
+    animation: {
+        type: ControlType.Object,
+        title: "Animation",
+        controls: {
+            show: {
+                type: ControlType.Enum,
+                title: "Show",
+                options: ["initial", "final"],
+                optionTitles: ["Initial", "Final"],
+                defaultValue: "final",
+                displaySegmentedControl: true,
+                segmentedControlDirection: "vertical",
+                description: "The state to show in the canvas",
+            },
+            curlAmountStart: {
+                type: ControlType.Number,
+                title: "Curl Start",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.45,
+            },
+            curlRadiusStart: {
+                type: ControlType.Number,
+                title: "Radius Start",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.15,
+            },
+            curlStartStart: {
+                type: ControlType.Number,
+                title: "Start Start",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.8,
+            },
+            curlAmountEnd: {
+                type: ControlType.Number,
+                title: "Curl Final",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.45,
+            },
+
+            curlRadiusEnd: {
+                type: ControlType.Number,
+                title: "Radius Final",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.15,
+            },
+
+            curlStartEnd: {
+                type: ControlType.Number,
+                title: "Start Final",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.55,
+            },
+        },
     },
-    shadowIntensity: {
+    curlRotation: {
         type: ControlType.Number,
-        title: "Light",
-        min: 0.1,
-        max: 1,
-        step: 0.05,
-        defaultValue: 1,
-        hidden: (props) => !props.enableShadows,
+        title: "Direction",
+        min: 0,
+        max: 360,
+        step: 15,
+        defaultValue: 315,
+        unit: "°",
     },
+
     shadowPositionX: {
         type: ControlType.Number,
         title: "Light X",
@@ -2237,7 +3085,6 @@ addPropertyControls(Sticker, {
         max: 500,
         step: 10,
         defaultValue: -400,
-        hidden: (props) => !props.enableShadows,
     },
     shadowPositionY: {
         type: ControlType.Number,
@@ -2246,7 +3093,6 @@ addPropertyControls(Sticker, {
         max: 500,
         step: 10,
         defaultValue: 0,
-        hidden: (props) => !props.enableShadows,
     },
     castShadowOpacity: {
         type: ControlType.Number,
@@ -2255,7 +3101,6 @@ addPropertyControls(Sticker, {
         max: 1,
         step: 0.05,
         defaultValue: 0.3,
-        hidden: (props) => !props.enableShadows,
     },
     shadowBgColor: {
         type: ControlType.Color,
@@ -2263,19 +3108,31 @@ addPropertyControls(Sticker, {
         defaultValue: "rgba(0, 0, 0, 0)",
         hidden: () => true, // Hidden - ShadowMaterial handles transparency automatically
     },
-    animationDuration: {
-        type: ControlType.Number,
-        title: "Duration",
-        min: 0.1,
-        max: 5,
-        step: 0.1,
-        defaultValue: 0.6,
-        unit: "s",
-    },
     backColor: {
         type: ControlType.Color,
         title: "Back Color",
         defaultValue: "rgba(255, 255, 255, 1)",
+    },
+    borderRadius: {
+        //@ts-ignore - BorderRadius exists in the latest versions of Framer
+        type: ControlType.BorderRadius,
+        defaultValue: "0px",
+        title: "Radius",
+    },
+    backgroundColor: {
+        type: ControlType.Color,
+        title: "Background",
+
+        optional: true,
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.6,
+            ease: "easeInOut",
+        },
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },
@@ -2285,4 +3142,4 @@ addPropertyControls(Sticker, {
 // DISPLAY NAME
 // ============================================================================
 
-Sticker.displayName = "3D Sticker"
+Sticker.displayName = "Sticker Peeling"

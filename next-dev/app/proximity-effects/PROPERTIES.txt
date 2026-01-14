@@ -1,0 +1,36 @@
+Proximity Effects - Property Controls
+
+Mode
+Controls how the component affects elements. "Auto" applies effects directly to elements. "Components" applies border and border radius effects to the direct children of elements (useful when affecting component elements).
+
+Influence
+Controls the radius in pixels around the cursor where elements are affected. Elements within this radius will transition between their "Far" and "Near" states based on distance from the cursor. Range: 10-1000px.
+
+Magnet
+Controls the magnetic attraction or repulsion effect. Positive values attract elements toward the cursor (spring-like effect). Negative values repel elements away from the cursor. Range: -500 to 500px.
+
+Scale
+Controls the scale transformation applied to elements based on cursor proximity.
+- Near: The scale value when the cursor is at the element center. Range: 0.1-3.
+- Far: The scale value when the cursor is outside the influence radius. Range: 0.1-3.
+
+Rotation
+Controls the rotation transformation applied to elements based on cursor proximity.
+- Near: The rotation angle in degrees when the cursor is at the element center. Range: -360 to 360deg.
+- Far: The rotation angle in degrees when the cursor is outside the influence radius. Range: -360 to 360deg.
+
+Opacity
+Controls the opacity of elements based on cursor proximity.
+- Near: The opacity value when the cursor is at the element center. Range: 0-1.
+- Far: The opacity value when the cursor is outside the influence radius. Range: 0-1.
+
+Border
+Controls the border style applied to elements based on cursor proximity.
+- Near: The border style (width, style, color) when the cursor is at the element center.
+- Far: The border style (width, style, color) when the cursor is outside the influence radius.
+
+Radius
+Controls the border radius of elements based on cursor proximity.
+- Near: The border radius in pixels when the cursor is at the element center. Range: 0-100px.
+- Far: The border radius in pixels when the cursor is outside the influence radius. Range: 0-100px.
+

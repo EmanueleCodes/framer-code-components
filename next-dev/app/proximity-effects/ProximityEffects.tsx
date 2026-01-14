@@ -635,6 +635,10 @@ export default function ProximityEffects({
             resizeObserverRef.current.observe(parentElement)
         }
 
+        // Apply initial styles immediately to prevent FOUC
+        // Since mousePositionRef.current is null, this will apply "far" values to all elements
+        updateEffects()
+
         // Start animation loop
         rafId.current = requestAnimationFrame(render)
 

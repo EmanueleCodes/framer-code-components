@@ -185,7 +185,12 @@ export default function ParticleSphereRefactor({
     dragSpeed = 0.5,
     drag = true,
     particles: particlesConfig = { scale: 0.5, shape: "sphere" },
-    cursorConfig = { enabled: true, radius: 150, strength: 0.3, clickForce: 10 },
+    cursorConfig = {
+        enabled: true,
+        radius: 150,
+        strength: 0.3,
+        clickForce: 10,
+    },
     sphereColor = "#ffffff",
     style,
 }: ParticleSphereRefactorProps) {
@@ -482,9 +487,7 @@ export default function ParticleSphereRefactor({
 
             // Auto-rotation: add to target when not dragging and not hovering
             // In canvas mode, only rotate when preview is on
-            const canAutoRotate = isCanvas
-                ? previewRef.current
-                : true
+            const canAutoRotate = isCanvas ? previewRef.current : true
             if (
                 !isDragging &&
                 rotationSpeed !== 0 &&
@@ -664,18 +667,23 @@ export default function ParticleSphereRefactor({
                     i < particleScatterVelocitiesRef.current.length;
                     i++
                 ) {
-                    const scatterVelocity = particleScatterVelocitiesRef.current[i]
+                    const scatterVelocity =
+                        particleScatterVelocitiesRef.current[i]
                     const displacement = particleDisplacementsRef.current[i]
 
                     // Apply velocity to displacement (frame-rate independent)
-                    displacement.addScaledVector(scatterVelocity, deltaFactor * 0.1)
+                    displacement.addScaledVector(
+                        scatterVelocity,
+                        deltaFactor * 0.1
+                    )
 
                     // Apply friction to scatter velocity (decay over time)
                     const scatterFriction = Math.pow(0.95, deltaFactor)
                     scatterVelocity.multiplyScalar(scatterFriction)
 
                     // Apply return force to scatter velocity (spring back)
-                    const scatterReturnForce = CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
+                    const scatterReturnForce =
+                        CURSOR_PHYSICS.RETURN_FORCE * speed * deltaFactor
                     scatterVelocity.multiplyScalar(1 - scatterReturnForce)
                 }
             }
@@ -939,15 +947,15 @@ export default function ParticleSphereRefactor({
             // Create a ray from camera through the click point
             const clickRay = new Vector3(ndcX, ndcY, 0.5)
             clickRay.unproject(currentCamera)
-            
+
             // Get camera position in world space
             const cameraWorldPos = new Vector3()
             cameraWorldPos.setFromMatrixPosition(currentCamera.matrixWorld)
-            
+
             // Calculate direction from camera through click point
             const clickDirection = new Vector3()
             clickDirection.subVectors(clickRay, cameraWorldPos).normalize()
-            
+
             // Estimate click point in world space (at sphere distance)
             const sphereCenter = new Vector3(0, 0, 0)
             const cameraToCenter = new Vector3()
@@ -958,11 +966,7 @@ export default function ParticleSphereRefactor({
             clickWorldPos.addScaledVector(clickDirection, sphereDistance)
 
             // Apply scatter velocity to particles (velocity-based, radial in 3D)
-            for (
-                let i = 0;
-                i < baseParticlePositionsRef.current.length;
-                i++
-            ) {
+            for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
                 const basePos = baseParticlePositionsRef.current[i]
                 const displacement = particleDisplacementsRef.current[i]
                 const scatterVelocity = particleScatterVelocitiesRef.current[i]
@@ -978,13 +982,9 @@ export default function ParticleSphereRefactor({
                 worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
                 // Project 3D position to 2D screen space for distance check
-                const projected = worldPos
-                    .clone()
-                    .project(currentCamera)
-                const screenX =
-                    (projected.x * 0.5 + 0.5) * containerWidth
-                const screenY =
-                    (-projected.y * 0.5 + 0.5) * containerHeight
+                const projected = worldPos.clone().project(currentCamera)
+                const screenX = (projected.x * 0.5 + 0.5) * containerWidth
+                const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
 
                 // Calculate distance from click point to particle in screen space
                 const dx = clickX - screenX
@@ -998,16 +998,17 @@ export default function ParticleSphereRefactor({
                     // Calculate scatter force based on screen distance
                     const screenDistance = Math.sqrt(distanceSquared)
                     const force =
-                        ((cursorRadius - screenDistance) / cursorRadius) * clickForce
+                        ((cursorRadius - screenDistance) / cursorRadius) *
+                        clickForce
 
                     // Calculate radial direction in 3D: from click point to particle
                     const radialDirection = new Vector3()
                     radialDirection.subVectors(worldPos, clickWorldPos)
                     const radialDistance = radialDirection.length()
-                    
+
                     if (radialDistance > 0.001) {
                         radialDirection.normalize()
-                        
+
                         // Apply scatter velocity along radial direction (in world space)
                         const scatterMagnitude = force * 0.5 // Velocity multiplier
                         const worldScatter = new Vector3()
@@ -1063,15 +1064,15 @@ export default function ParticleSphereRefactor({
             // Create a ray from camera through the touch point
             const touchRay = new Vector3(ndcX, ndcY, 0.5)
             touchRay.unproject(currentCamera)
-            
+
             // Get camera position in world space
             const cameraWorldPos = new Vector3()
             cameraWorldPos.setFromMatrixPosition(currentCamera.matrixWorld)
-            
+
             // Calculate direction from camera through touch point
             const touchDirection = new Vector3()
             touchDirection.subVectors(touchRay, cameraWorldPos).normalize()
-            
+
             // Estimate touch point in world space (at sphere distance)
             const sphereCenter = new Vector3(0, 0, 0)
             const cameraToCenter = new Vector3()
@@ -1082,11 +1083,7 @@ export default function ParticleSphereRefactor({
             touchWorldPos.addScaledVector(touchDirection, sphereDistance)
 
             // Apply scatter velocity to particles (velocity-based, radial in 3D)
-            for (
-                let i = 0;
-                i < baseParticlePositionsRef.current.length;
-                i++
-            ) {
+            for (let i = 0; i < baseParticlePositionsRef.current.length; i++) {
                 const basePos = baseParticlePositionsRef.current[i]
                 const displacement = particleDisplacementsRef.current[i]
                 const scatterVelocity = particleScatterVelocitiesRef.current[i]
@@ -1102,13 +1099,9 @@ export default function ParticleSphereRefactor({
                 worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
                 // Project 3D position to 2D screen space for distance check
-                const projected = worldPos
-                    .clone()
-                    .project(currentCamera)
-                const screenX =
-                    (projected.x * 0.5 + 0.5) * containerWidth
-                const screenY =
-                    (-projected.y * 0.5 + 0.5) * containerHeight
+                const projected = worldPos.clone().project(currentCamera)
+                const screenX = (projected.x * 0.5 + 0.5) * containerWidth
+                const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
 
                 // Calculate distance from touch point to particle in screen space
                 const dx = touchX - screenX
@@ -1122,16 +1115,17 @@ export default function ParticleSphereRefactor({
                     // Calculate scatter force based on screen distance
                     const screenDistance = Math.sqrt(distanceSquared)
                     const force =
-                        ((cursorRadius - screenDistance) / cursorRadius) * clickForce
+                        ((cursorRadius - screenDistance) / cursorRadius) *
+                        clickForce
 
                     // Calculate radial direction in 3D: from touch point to particle
                     const radialDirection = new Vector3()
                     radialDirection.subVectors(worldPos, touchWorldPos)
                     const radialDistance = radialDirection.length()
-                    
+
                     if (radialDistance > 0.001) {
                         radialDirection.normalize()
-                        
+
                         // Apply scatter velocity along radial direction (in world space)
                         const scatterMagnitude = force * 0.5 // Velocity multiplier
                         const worldScatter = new Vector3()
