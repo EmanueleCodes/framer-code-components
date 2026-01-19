@@ -48,6 +48,7 @@ interface LineMaskSplitProps {
         opacityInitial?: number
         rotateInitial?: number
         scaleInitial?: number
+        blurInitial?: number
     }
 }
 
@@ -87,6 +88,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
         opacityInitial = 1,
         rotateInitial = 0,
         scaleInitial = 1,
+        blurInitial = 0,
     } = animation
 
     const textRef = useRef<HTMLElement>(null)
@@ -183,6 +185,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                 // Set initial state
                 element.style.opacity = opacityInitial.toString()
                 element.style.transform = `translate(${translateXInitial}px, ${translateYInitial}px) rotate(${rotateInitial}deg) scale(${scaleInitial})`
+                element.style.filter = `blur(${blurInitial}px)`
 
                 const control = animate(0, 1, {
                     ...transitionConfig,
@@ -193,8 +196,10 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                         const rotation = rotateInitial * (1 - progress)
                         const scale = scaleInitial + (1 - scaleInitial) * progress
                         const opacity = opacityInitial + (1 - opacityInitial) * progress
+                        const blur = blurInitial * (1 - progress)
                         element.style.opacity = opacity.toString()
                         element.style.transform = `translate(${x}px, ${y}px) rotate(${rotation}deg) scale(${scale})`
+                        element.style.filter = `blur(${blur}px)`
                     },
                 })
                 animationControlsRef.current.push(control)
@@ -209,8 +214,10 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                         const rotation = rotateInitial * (1 - progress)
                         const scale = scaleInitial + (1 - scaleInitial) * progress
                         const opacity = opacityInitial + (1 - opacityInitial) * progress
+                        const blur = blurInitial * (1 - progress)
                         element.style.opacity = opacity.toString()
                         element.style.transform = `translate(${x}px, ${y}px) rotate(${rotation}deg) scale(${scale})`
+                        element.style.filter = `blur(${blur}px)`
                     },
                 })
                 animationControlsRef.current.push(control)
@@ -255,6 +262,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
         elements.forEach((el) => {
             el.style.opacity = opacityInitial.toString()
             el.style.transform = `translate(${translateXInitial}px, ${translateYInitial}px) rotate(${rotateInitial}deg) scale(${scaleInitial})`
+            el.style.filter = `blur(${blurInitial}px)`
         })
 
         return () => {
@@ -265,7 +273,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
             }
             scrollElementsRef.current = null
         }
-    }, [trigger, text, splitMode, maskLines, translateXInitial, translateYInitial, opacityInitial, rotateInitial, scaleInitial])
+    }, [trigger, text, splitMode, maskLines, translateXInitial, translateYInitial, opacityInitial, rotateInitial, scaleInitial, blurInitial])
 
     // Update scroll alignment state for scroll trigger
     useEffect(() => {
@@ -327,6 +335,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
         const firstEl = elements[0]
         const currentOpacity = parseFloat(firstEl.style.opacity) || 1
         const currentTransform = firstEl.style.transform || ""
+        const currentFilter = firstEl.style.filter || ""
         
         // Check if opacity matches initial
         const opacityMatches = Math.abs(currentOpacity - opacityInitial) < 0.01
@@ -336,7 +345,12 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                                  currentTransform.includes(`${translateYInitial}px`) ||
                                  (rotateInitial !== 0 && currentTransform.includes(`${rotateInitial}deg`))
         
-        return opacityMatches && hasInitialOffset
+        // Check if blur matches initial
+        const blurMatches = blurInitial === 0 ? 
+            (!currentFilter || currentFilter.includes("blur(0px)")) :
+            currentFilter.includes(`blur(${blurInitial}px)`)
+        
+        return opacityMatches && hasInitialOffset && blurMatches
     }
 
     // Handle scroll trigger animations
@@ -356,6 +370,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                 elements.forEach((el) => {
                     el.style.opacity = opacityInitial.toString()
                     el.style.transform = `translate(${translateXInitial}px, ${translateYInitial}px) rotate(${rotateInitial}deg) scale(${scaleInitial})`
+                    el.style.filter = `blur(${blurInitial}px)`
                 })
                 hasAnimatedRef.current = false
             }
@@ -369,7 +384,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
             hasAnimatedRef.current = true
             animateElements(elements, true)
         }
-    }, [isInView, isOutOfView, reverse, trigger, translateXInitial, translateYInitial, opacityInitial, rotateInitial, scaleInitial])
+    }, [isInView, isOutOfView, reverse, trigger, translateXInitial, translateYInitial, opacityInitial, rotateInitial, scaleInitial, blurInitial])
 
     // Resize handler - re-split without animating
     useEffect(() => {
@@ -408,6 +423,7 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
                     result.elements.forEach((el) => {
                         el.style.opacity = "1"
                         el.style.transform = "translate(0px, 0px) rotate(0deg) scale(1)"
+                        el.style.filter = "blur(0px)"
                     })
                 }
             }, 50)
@@ -468,32 +484,19 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
 // ------------------------------------------------------------ //
 
 addPropertyControls(LineMaskSplit, {
-    splitMode: {
-        type: ControlType.Enum,
-        title: "Split Mode",
-        options: ["words", "chars", "lines"],
-        optionTitles: ["Words", "Characters", "Lines"],
-        displaySegmentedControl: true,
-        segmentedControlDirection: "vertical",
-        defaultValue: "lines",
-    },
+
     trigger: {
         type: ControlType.Enum,
         title: "Trigger",
         options: ["Appear", "Scroll"],
+        optionTitles: ["Appear", "Layer in View"],
         displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
         defaultValue: "Appear",
-    },
-    
-    reverse: {
-        type: ControlType.Boolean,
-        title: "Replay",
-        defaultValue: false,
-        hidden: (props: any) => props.trigger !== "Scroll",
     },
     scrollTriggerPosition: {
         type: ControlType.Enum,
-        title: "Start At",
+        title: "Start",
         options: ["top", "center", "bottom"],
         optionTitles: ["Top", "Center", "Bottom"],
         displaySegmentedControl: true,
@@ -501,12 +504,105 @@ addPropertyControls(LineMaskSplit, {
         defaultValue: "center",
         hidden: (props: any) => props.trigger !== "Scroll",
     },
+    reverse: {
+        type: ControlType.Boolean,
+        title: "Replay",
+        defaultValue: false,
+        hidden: (props: any) => props.trigger !== "Scroll",
+    },
+    splitMode: {
+        type: ControlType.Enum,
+        title: "Per",
+        options: ["words", "chars", "lines"],
+        optionTitles: ["Words", "Characters", "Lines"],
+        displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
+        defaultValue: "lines",
+    },
     maskLines: {
         type: ControlType.Boolean,
         title: "Mask Lines",
         defaultValue: true,
         enabledTitle: "On",
         disabledTitle: "Off",
+    },
+    staggerAmount: {
+        type: ControlType.Number,
+        title: "Stagger",
+        unit: "s",
+        min: 0,
+        max: 2,
+        step: 0.01,
+        defaultValue: 0.05,
+    },
+    animation: {
+        type: ControlType.Object,
+        title: "Animation",
+        icon: "effect",
+        controls: {
+            opacityInitial: {
+                type: ControlType.Number,
+                title: "Opacity",
+                min: 0,
+                max: 1,
+                step: 0.1,
+                defaultValue: 1,
+            },
+            scaleInitial: {
+                type: ControlType.Number,
+                title: "Scale",
+                unit: "x",
+                min: 0,
+                max: 2,
+                step: 0.01,
+                defaultValue: 1,
+            },
+            blurInitial: {
+                type: ControlType.Number,
+                title: "Blur",
+                unit: "px",
+                min: 0,
+                max: 100,
+                step: 1,
+                defaultValue: 0,
+            },
+            rotateInitial: {
+                type: ControlType.Number,
+                title: "Rotate",
+                unit: "deg",
+                min: -360,
+                max: 360,
+                step: 1,
+                defaultValue: 0,
+            },
+            translateXInitial: {
+                type: ControlType.Number,
+                title: "Offset X",
+                unit: "px",
+                min: -100,
+                max: 100,
+                step: 1,
+                defaultValue: 0,
+            },
+            translateYInitial: {
+                type: ControlType.Number,
+                title: "Offset Y",
+                unit: "px",
+                min: -100,
+                max: 100,
+                step: 1,
+                defaultValue: 100,
+            },
+        },
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.4,
+            ease: "easeOut",
+        },
     },
     text: {
         type: ControlType.String,
@@ -536,76 +632,12 @@ addPropertyControls(LineMaskSplit, {
         title: "Tag",
         options: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span"],
         defaultValue: "h1",
-    },
-    staggerAmount: {
-        type: ControlType.Number,
-        title: "Stagger",
-        unit: "s",
-        min: 0,
-        max: 2,
-        step: 0.01,
-        defaultValue: 0.05,
-    },
-    animation: {
-        type: ControlType.Object,
-        title: "Animation",
-        controls: {
-            translateXInitial: {
-                type: ControlType.Number,
-                title: "Offset X",
-                unit: "px",
-                min: -100,
-                max: 100,
-                step: 1,
-                defaultValue: 0,
-            },
-            translateYInitial: {
-                type: ControlType.Number,
-                title: "Offset Y",
-                unit: "px",
-                min: -100,
-                max: 100,
-                step: 1,
-                defaultValue: 100,
-            },
-            opacityInitial: {
-                type: ControlType.Number,
-                title: "Opacity",
-                min: 0,
-                max: 1,
-                step: 0.1,
-                defaultValue: 1,
-            },
-            rotateInitial: {
-                type: ControlType.Number,
-                title: "Rotate",
-                unit: "deg",
-                min: -360,
-                max: 360,
-                step: 1,
-                defaultValue: 0,
-            },
-            scaleInitial: {
-                type: ControlType.Number,
-                title: "Scale",
-                unit: "x",
-                min: 0,
-                max: 2,
-                step: 0.01,
-                defaultValue: 1,
-            },
-        },
-    },
-    transition: {
-        type: ControlType.Transition,
-        title: "Transition",
-        defaultValue: {
-            type: "tween",
-            duration: 0.4,
-            ease: "easeOut",
-        },
         description: "More components at [Framer University](https://frameruni.link/cc).",
+
     },
+    
+    
+    
 })
 
 LineMaskSplit.displayName = "Line Mask Split"

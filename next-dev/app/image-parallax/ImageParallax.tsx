@@ -1,15 +1,6 @@
-import { addPropertyControls, ControlType, RenderTarget } from "framer"
-import { useRef, useLayoutEffect, useMemo } from "react"
+import { addPropertyControls, ControlType } from "framer"
+import { useRef, useLayoutEffect } from "react"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
-
-// GSAP imports from CDN
-// If CDN imports fail, use the bundled version instead:
-import { gsap, ScrollTrigger } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/gsap-scrolltrigger.js"
-// import { gsap } from "https://cdn.jsdelivr.net/npm/gsap@3.12.5/index.esm.js"
-// import { ScrollTrigger } from "https://cdn.jsdelivr.net/npm/gsap@3.12.5/ScrollTrigger.esm.js"
-
-// Register ScrollTrigger plugin
-gsap.registerPlugin(ScrollTrigger)
 
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
@@ -48,121 +39,89 @@ export default function ImageParallax(props: {
     // Reference to the container and image elements
     const containerRef = useRef<HTMLDivElement>(null)
     const imageRef = useRef<HTMLDivElement>(null)
-    
-    // Detect if we're in canvas mode (memoized to avoid recalculation)
-    const isCanvas = useMemo(() => RenderTarget.current() === RenderTarget.canvas, [])
 
-    // Setup GSAP ScrollTrigger for vertical parallax effect
+    // Simple, performant parallax using requestAnimationFrame (like many CodePen examples)
     useLayoutEffect(() => {
-        if (isCanvas || !containerRef.current || !imageRef.current) return
+        if (!containerRef.current || !imageRef.current) return
 
         const container = containerRef.current
         const image = imageRef.current
 
-        // Create GSAP animation with ScrollTrigger for vertical parallax
-        // Using a function for y value so it recalculates on refresh
-        const verticalAnimation = gsap.fromTo(
-            image,
-            {
-                y: 0,
-            },
-            {
-                y: () => {
-                    // Convert percentage to pixels based on current container height
-                    const containerHeight = container.offsetHeight
-                    return (verticalParallaxAmount / 100) * containerHeight
-                },
-                ease: "none", // Linear easing for smooth scrubbing
-                scrollTrigger: {
-                    trigger: container,
-                    start: "top bottom",
-                    end: "bottom top",
-                    scrub: true, // Smooth scrubbing - this eliminates jitter!
-                    invalidateOnRefresh: true, // Recalculate on resize
-                },
-            }
-        )
+        // Enable hardware acceleration via CSS
+        image.style.transform = "translate3d(0, 0, 0)"
+        image.style.willChange = "transform"
 
-        // Cleanup function
-        return () => {
-            verticalAnimation.kill()
-            // Kill ScrollTrigger associated with this container
-            const triggers = ScrollTrigger.getAll()
-            for (let i = 0; i < triggers.length; i++) {
-                const trigger = triggers[i] as any
-                if (trigger.vars?.trigger === container) {
-                    trigger.kill()
-                }
-            }
-        }
-    }, [isCanvas, verticalParallaxAmount])
+        let rafId: number | null = null
+        let ticking = false
 
-    // Setup horizontal parallax based on viewport position (like reference)
-    // This uses ScrollTrigger's refresh mechanism to update on scroll
-    useLayoutEffect(() => {
-        if (isCanvas || horizontalParallaxAmount === 0 || !containerRef.current || !imageRef.current) {
-            if (imageRef.current) {
-                gsap.set(imageRef.current, { x: 0 })
-            }
-            return
-        }
-
-        const container = containerRef.current
-        const image = imageRef.current
-
-        // Function to calculate horizontal position based on viewport (matching reference logic)
-        const updateHorizontalPosition = () => {
+        const updateParallax = () => {
             if (!container || !image) return
-            
+
             const rect = container.getBoundingClientRect()
-            const viewportWidth = window.innerWidth
+            const containerHeight = container.offsetHeight
             const containerWidth = container.offsetWidth
             
-            // Same calculation as reference: 1 - (rect.left + rect.width) / (viewportWidth + rect.width)
-            const horizontalProgress = 1 - (rect.left + rect.width) / (viewportWidth + rect.width)
+            // Calculate vertical parallax based on scroll position
+            // Mimics ScrollTrigger behavior: start="top bottom", end="bottom top"
+            // Progress goes from 0 (top hits bottom of viewport) to 1 (bottom hits top of viewport)
+            const viewportHeight = window.innerHeight
+            const scrollProgress = Math.max(0, Math.min(1, 
+                (viewportHeight - rect.top) / (viewportHeight + containerHeight)
+            ))
             
-            // Convert percentage to pixels based on container width
-            const xAmount = (horizontalParallaxAmount / 100) * containerWidth
-            const xPosition = horizontalProgress * xAmount
+            // Vertical parallax: move image based on scroll progress
+            const yOffset = scrollProgress * (verticalParallaxAmount / 100) * containerHeight
             
-            // Use GSAP for smooth updates
-            gsap.set(image, { x: xPosition })
+            // Horizontal parallax: based on viewport position
+            let xOffset = 0
+            if (horizontalParallaxAmount !== 0) {
+                const viewportWidth = window.innerWidth
+                const horizontalProgress = 1 - (rect.left + rect.width) / (viewportWidth + rect.width)
+                xOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
+            }
+            
+            // Apply transforms using translate3d for GPU acceleration
+            image.style.transform = `translate3d(${xOffset}px, ${yOffset}px, 0)`
+            
+            ticking = false
         }
 
-        // Create ScrollTrigger that refreshes on scroll to update horizontal position
-        const horizontalTrigger = ScrollTrigger.create({
-            trigger: container,
-            start: "top bottom",
-            end: "bottom top",
-            onUpdate: () => {
-                updateHorizontalPosition()
-            },
-            onRefresh: () => {
-                updateHorizontalPosition()
-            },
-        })
+        const requestTick = () => {
+            if (!ticking) {
+                rafId = requestAnimationFrame(updateParallax)
+                ticking = true
+            }
+        }
 
-        // Initial position
-        updateHorizontalPosition()
-
-        // Update on scroll and resize
+        // Use passive scroll listener for better performance
         const handleScroll = () => {
-            updateHorizontalPosition()
+            requestTick()
         }
+
         const handleResize = () => {
-            updateHorizontalPosition()
-            ScrollTrigger.refresh()
+            // Debounce resize
+            if (rafId !== null) {
+                cancelAnimationFrame(rafId)
+            }
+            rafId = requestAnimationFrame(updateParallax)
         }
-        
+
+        // Initial update
+        updateParallax()
+
+        // Add event listeners
         window.addEventListener("scroll", handleScroll, { passive: true })
         window.addEventListener("resize", handleResize, { passive: true })
 
+        // Cleanup
         return () => {
-            horizontalTrigger.kill()
+            if (rafId !== null) {
+                cancelAnimationFrame(rafId)
+            }
             window.removeEventListener("scroll", handleScroll)
             window.removeEventListener("resize", handleResize)
         }
-    }, [isCanvas, horizontalParallaxAmount])
+    }, [verticalParallaxAmount, horizontalParallaxAmount])
 
     // Check if image is provided
     const imageSrc = image?.src || (typeof image === "string" ? image : null)
@@ -211,29 +170,9 @@ export default function ImageParallax(props: {
                     title="Image Parallax"
                     subtitle="Add an image to create a parallax effect that moves as you scroll"
                 />
-            ) : isCanvas ? (
-                // Canvas mode: render simple image without parallax
-                <img
-                    src={imageSrc}
-                    srcSet={image?.srcSet}
-                    alt={image?.alt || ""}
-                    style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        objectPosition: image?.positionX && image?.positionY 
-                            ? `${image.positionX} ${image.positionY}` 
-                            : "center",
-                        userSelect: "none",
-                        pointerEvents: "none",
-                    }}
-                />
             ) : (
-                // Preview/production mode: render parallax effect with GSAP
-                // Extend beyond boundaries to allow room for parallax movement (matching reference)
+                // Render parallax effect
+                // Extend beyond boundaries to allow room for parallax movement
                 <div
                     ref={imageRef}
                     style={{
@@ -253,7 +192,8 @@ export default function ImageParallax(props: {
                             ? `${image.positionX} ${image.positionY}` 
                             : "center",
                         borderRadius: borderRadius,
-                        willChange: "transform",
+                        willChange: "transform", // Hint browser to optimize transforms
+                        backfaceVisibility: "hidden", // Prevent flickering on transforms
                         userSelect: "none",
                         pointerEvents: "none",
                     }}
@@ -315,6 +255,6 @@ addPropertyControls(ImageParallax, {
         // @ts-ignore - ControlType.BoxShadow exists but may not be in types
         type: ControlType.BoxShadow,
         title: "Shadow",
-        optional: true,
+        
     },
 })
