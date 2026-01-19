@@ -144,7 +144,7 @@ function mapSpeedUiToInternal(ui: number): number {
 // Scale: UI [0..1] → scale multiplier [0.5..3.0] (overall sphere size multiplier)
 function mapScaleUiToMultiplier(ui: number): number {
     const clamped = Math.max(0, Math.min(1, ui))
-    return mapLinear(clamped, 0, 1.0, 0.5, 3.0)
+    return mapLinear(clamped, 0, 1.0, 0.25, 1.25)
 }
 
 // Particle Size: UI [0.1..1] → size [0.01..0.1] (individual particle size)
@@ -170,8 +170,8 @@ const CURSOR_PHYSICS = {
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
- * @framerIntrinsicWidth 400
- * @framerIntrinsicHeight 400
+ * @framerIntrinsicWidth 500
+ * @framerIntrinsicHeight 500
  * @framerDisableUnlink
  */
 export default function ParticleSphereRefactor({
@@ -267,13 +267,25 @@ export default function ParticleSphereRefactor({
         const containerHeight =
             container.clientHeight || container.offsetHeight || 400
 
+        // Canvas overflow multiplier - makes canvas larger than container to prevent clipping
+        // The sphere and camera remain the same, just more "empty space" around the edges
+        const canvasOverflowMultiplier = 2.5 // 50% larger canvas on each side
+        const canvasWidth = containerWidth * canvasOverflowMultiplier
+        const canvasHeight = containerHeight * canvasOverflowMultiplier
+
         // Scene setup
         const scene = new Scene()
         sceneRef.current = scene
 
+        // Calculate adjusted FOV to keep sphere the same size regardless of canvas overflow
+        // When canvas is larger, we need a wider FOV to show the same content at the same size
+        // FOV adjustment: tan(newFOV/2) = tan(baseFOV/2) * canvasOverflowMultiplier
+        const baseFOV = 50
+        const adjustedFOV = 2 * Math.atan(Math.tan((baseFOV * Math.PI / 180) / 2) * canvasOverflowMultiplier) * (180 / Math.PI)
+
         const camera = new PerspectiveCamera(
-            50,
-            containerWidth / containerHeight,
+            adjustedFOV,
+            canvasWidth / canvasHeight, // Use canvas aspect ratio for correct projection
             0.1,
             1000
         )
@@ -289,16 +301,20 @@ export default function ParticleSphereRefactor({
         camera.position.z = cameraDistance
         cameraRef.current = camera
 
-        // Renderer setup
+        // Renderer setup - canvas is larger than container to prevent clipping
         const renderer = new WebGLRenderer({ antialias: true, alpha: true })
-        renderer.setSize(containerWidth, containerHeight)
+        renderer.setSize(canvasWidth, canvasHeight)
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
         renderer.outputColorSpace = "srgb"
         const canvas = renderer.domElement
         canvas.style.position = "absolute"
-        canvas.style.inset = "0"
-        canvas.style.width = "100%"
-        canvas.style.height = "100%"
+        // Center the larger canvas within the container
+        const offsetX = (canvasWidth - containerWidth) / 2
+        const offsetY = (canvasHeight - containerHeight) / 2
+        canvas.style.left = `-${offsetX}px`
+        canvas.style.top = `-${offsetY}px`
+        canvas.style.width = `${canvasWidth}px`
+        canvas.style.height = `${canvasHeight}px`
         canvas.style.display = "block"
         container.appendChild(canvas)
         rendererRef.current = renderer
@@ -544,8 +560,11 @@ export default function ParticleSphereRefactor({
             particlesGroup.updateMatrixWorld(true)
 
             // Get container and camera info for both cursor interaction and color updates
-            const containerWidth = containerRef.current?.clientWidth || 400
-            const containerHeight = containerRef.current?.clientHeight || 400
+            // Use canvas dimensions for projection since mouse coordinates are in canvas space
+            const currentContainerWidth = containerRef.current?.clientWidth || 400
+            const currentContainerHeight = containerRef.current?.clientHeight || 400
+            const currentCanvasWidth = currentContainerWidth * canvasOverflowMultiplier
+            const currentCanvasHeight = currentContainerHeight * canvasOverflowMultiplier
             const currentCamera = cameraRef.current
             const cursorRadiusSquared = cursorRadius * cursorRadius
 
@@ -576,14 +595,14 @@ export default function ParticleSphereRefactor({
                         worldPos.copy(currentLocalPos)
                         worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
-                        // Project 3D position to 2D screen space
+                        // Project 3D position to 2D screen space (using canvas dimensions)
                         const projected = worldPos
                             .clone()
                             .project(currentCamera)
                         const screenX =
-                            (projected.x * 0.5 + 0.5) * containerWidth
+                            (projected.x * 0.5 + 0.5) * currentCanvasWidth
                         const screenY =
-                            (-projected.y * 0.5 + 0.5) * containerHeight
+                            (-projected.y * 0.5 + 0.5) * currentCanvasHeight
 
                         // Calculate distance from cursor to particle in screen space
                         const dx = mouse.x - screenX
@@ -849,15 +868,15 @@ export default function ParticleSphereRefactor({
         const handleMouseMoveHover = (event: MouseEvent) => {
             if (!stopOnHover) return
 
-            // Simple check: if mouse is over canvas, consider it hovering
-            const rect = canvas.getBoundingClientRect()
-            const mouseX = event.clientX - rect.left
-            const mouseY = event.clientY - rect.top
+            // Check if mouse is over the logical container area (not the extended canvas)
+            const containerRect = container.getBoundingClientRect()
+            const mouseX = event.clientX - containerRect.left
+            const mouseY = event.clientY - containerRect.top
             isHovering =
                 mouseX >= 0 &&
-                mouseX <= rect.width &&
+                mouseX <= containerRect.width &&
                 mouseY >= 0 &&
-                mouseY <= rect.height
+                mouseY <= containerRect.height
         }
 
         if (stopOnHover) {
@@ -865,20 +884,22 @@ export default function ParticleSphereRefactor({
         }
 
         // Track cursor position for particle repulsion
+        // Mouse coordinates need to be relative to the container center, then offset to canvas coordinates
         const handleMouseMoveCursor = (event: MouseEvent) => {
-            const rect = canvas.getBoundingClientRect()
-            const mouseX = event.clientX - rect.left
-            const mouseY = event.clientY - rect.top
-            // Only track if mouse is over canvas
+            const containerRect = container.getBoundingClientRect()
+            const mouseXInContainer = event.clientX - containerRect.left
+            const mouseYInContainer = event.clientY - containerRect.top
+            // Only track if mouse is over the logical container area
             if (
-                mouseX >= 0 &&
-                mouseX <= rect.width &&
-                mouseY >= 0 &&
-                mouseY <= rect.height
+                mouseXInContainer >= 0 &&
+                mouseXInContainer <= containerRect.width &&
+                mouseYInContainer >= 0 &&
+                mouseYInContainer <= containerRect.height
             ) {
+                // Convert container coordinates to canvas coordinates (add offset)
                 mouseRef.current = {
-                    x: mouseX,
-                    y: mouseY,
+                    x: mouseXInContainer + offsetX,
+                    y: mouseYInContainer + offsetY,
                 }
                 // Start animation if not running (needed for cursor interaction to work)
                 startAnimation()
@@ -894,21 +915,22 @@ export default function ParticleSphereRefactor({
         // Track touch position for particle repulsion
         const handleTouchMove = (event: TouchEvent) => {
             event.preventDefault() // Prevent scrolling
-            const rect = canvas.getBoundingClientRect()
+            const containerRect = container.getBoundingClientRect()
             const touch = event.touches[0]
             if (touch) {
-                const touchX = touch.clientX - rect.left
-                const touchY = touch.clientY - rect.top
-                // Only track if touch is over canvas
+                const touchXInContainer = touch.clientX - containerRect.left
+                const touchYInContainer = touch.clientY - containerRect.top
+                // Only track if touch is over the logical container area
                 if (
-                    touchX >= 0 &&
-                    touchX <= rect.width &&
-                    touchY >= 0 &&
-                    touchY <= rect.height
+                    touchXInContainer >= 0 &&
+                    touchXInContainer <= containerRect.width &&
+                    touchYInContainer >= 0 &&
+                    touchYInContainer <= containerRect.height
                 ) {
+                    // Convert container coordinates to canvas coordinates (add offset)
                     mouseRef.current = {
-                        x: touchX,
-                        y: touchY,
+                        x: touchXInContainer + offsetX,
+                        y: touchYInContainer + offsetY,
                     }
                     // Start animation if not running (needed for cursor interaction to work)
                     startAnimation()
@@ -929,20 +951,23 @@ export default function ParticleSphereRefactor({
             // Update matrix to ensure it's current
             particlesGroup.updateMatrixWorld(true)
 
-            const rect = canvas.getBoundingClientRect()
-            const clickX = event.clientX - rect.left
-            const clickY = event.clientY - rect.top
+            const containerRect = container.getBoundingClientRect()
+            // Convert container coordinates to canvas coordinates (add offset)
+            const clickX = event.clientX - containerRect.left + offsetX
+            const clickY = event.clientY - containerRect.top + offsetY
             const cursorRadiusSquared = cursorRadius * cursorRadius
             const clickForce = cursorConfig.clickForce || 10
 
-            const containerWidth = containerRef.current?.clientWidth || 400
-            const containerHeight = containerRef.current?.clientHeight || 400
+            const clickContainerWidth = containerRef.current?.clientWidth || 400
+            const clickContainerHeight = containerRef.current?.clientHeight || 400
+            const clickCanvasWidth = clickContainerWidth * canvasOverflowMultiplier
+            const clickCanvasHeight = clickContainerHeight * canvasOverflowMultiplier
             const currentCamera = cameraRef.current
 
             // Convert click point from screen space to 3D world space
-            // Normalize click coordinates to NDC (Normalized Device Coordinates)
-            const ndcX = (clickX / containerWidth) * 2 - 1
-            const ndcY = 1 - (clickY / containerHeight) * 2
+            // Normalize click coordinates to NDC (Normalized Device Coordinates) using canvas dimensions
+            const ndcX = (clickX / clickCanvasWidth) * 2 - 1
+            const ndcY = 1 - (clickY / clickCanvasHeight) * 2
 
             // Create a ray from camera through the click point
             const clickRay = new Vector3(ndcX, ndcY, 0.5)
@@ -981,10 +1006,10 @@ export default function ParticleSphereRefactor({
                 worldPos.copy(currentLocalPos)
                 worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
-                // Project 3D position to 2D screen space for distance check
+                // Project 3D position to 2D screen space for distance check (using canvas dimensions)
                 const projected = worldPos.clone().project(currentCamera)
-                const screenX = (projected.x * 0.5 + 0.5) * containerWidth
-                const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
+                const screenX = (projected.x * 0.5 + 0.5) * clickCanvasWidth
+                const screenY = (-projected.y * 0.5 + 0.5) * clickCanvasHeight
 
                 // Calculate distance from click point to particle in screen space
                 const dx = clickX - screenX
@@ -1043,23 +1068,26 @@ export default function ParticleSphereRefactor({
             // Update matrix to ensure it's current
             particlesGroup.updateMatrixWorld(true)
 
-            const rect = canvas.getBoundingClientRect()
+            const containerRect = container.getBoundingClientRect()
             const touch = event.touches[0]
             if (!touch) return
 
-            const touchX = touch.clientX - rect.left
-            const touchY = touch.clientY - rect.top
+            // Convert container coordinates to canvas coordinates (add offset)
+            const touchX = touch.clientX - containerRect.left + offsetX
+            const touchY = touch.clientY - containerRect.top + offsetY
             const cursorRadiusSquared = cursorRadius * cursorRadius
             const clickForce = cursorConfig.clickForce || 10
 
-            const containerWidth = containerRef.current?.clientWidth || 400
-            const containerHeight = containerRef.current?.clientHeight || 400
+            const touchContainerWidth = containerRef.current?.clientWidth || 400
+            const touchContainerHeight = containerRef.current?.clientHeight || 400
+            const touchCanvasWidth = touchContainerWidth * canvasOverflowMultiplier
+            const touchCanvasHeight = touchContainerHeight * canvasOverflowMultiplier
             const currentCamera = cameraRef.current
 
             // Convert touch point from screen space to 3D world space
-            // Normalize touch coordinates to NDC (Normalized Device Coordinates)
-            const ndcX = (touchX / containerWidth) * 2 - 1
-            const ndcY = 1 - (touchY / containerHeight) * 2
+            // Normalize touch coordinates to NDC (Normalized Device Coordinates) using canvas dimensions
+            const ndcX = (touchX / touchCanvasWidth) * 2 - 1
+            const ndcY = 1 - (touchY / touchCanvasHeight) * 2
 
             // Create a ray from camera through the touch point
             const touchRay = new Vector3(ndcX, ndcY, 0.5)
@@ -1098,10 +1126,10 @@ export default function ParticleSphereRefactor({
                 worldPos.copy(currentLocalPos)
                 worldPos.applyMatrix4(particlesGroup.matrixWorld)
 
-                // Project 3D position to 2D screen space for distance check
+                // Project 3D position to 2D screen space for distance check (using canvas dimensions)
                 const projected = worldPos.clone().project(currentCamera)
-                const screenX = (projected.x * 0.5 + 0.5) * containerWidth
-                const screenY = (-projected.y * 0.5 + 0.5) * containerHeight
+                const screenX = (projected.x * 0.5 + 0.5) * touchCanvasWidth
+                const screenY = (-projected.y * 0.5 + 0.5) * touchCanvasHeight
 
                 // Calculate distance from touch point to particle in screen space
                 const dx = touchX - screenX
@@ -1184,7 +1212,13 @@ export default function ParticleSphereRefactor({
                 containerRef.current.offsetHeight ||
                 400
 
-            cameraRef.current.aspect = newWidth / newHeight
+            // Calculate new canvas dimensions with overflow
+            const newCanvasWidth = newWidth * canvasOverflowMultiplier
+            const newCanvasHeight = newHeight * canvasOverflowMultiplier
+            const newOffsetX = (newCanvasWidth - newWidth) / 2
+            const newOffsetY = (newCanvasHeight - newHeight) / 2
+
+            cameraRef.current.aspect = newCanvasWidth / newCanvasHeight // Use canvas aspect ratio
             cameraRef.current.updateProjectionMatrix()
 
             // Update camera distance based on scale - ensure it stays outside sphere
@@ -1196,7 +1230,14 @@ export default function ParticleSphereRefactor({
             )
             cameraRef.current.position.z = cameraDistance
 
-            rendererRef.current.setSize(newWidth, newHeight)
+            // Update canvas size and position
+            rendererRef.current.setSize(newCanvasWidth, newCanvasHeight)
+            const canvasEl = rendererRef.current.domElement
+            canvasEl.style.left = `-${newOffsetX}px`
+            canvasEl.style.top = `-${newOffsetY}px`
+            canvasEl.style.width = `${newCanvasWidth}px`
+            canvasEl.style.height = `${newCanvasHeight}px`
+
             rendererRef.current.render(sceneRef.current!, cameraRef.current)
         }
 
@@ -1405,6 +1446,7 @@ export default function ParticleSphereRefactor({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        overflow: "visible", // Allow canvas to extend beyond container bounds
     }
 
     return (
@@ -1420,7 +1462,7 @@ export default function ParticleSphereRefactor({
                     pointerEvents: "none",
                 }}
             />
-            <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+            <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "visible" }} />
         </div>
     )
 }
@@ -1497,7 +1539,7 @@ addPropertyControls(ParticleSphereRefactor, {
         min: 0,
         max: 1,
         step: 0.1,
-        defaultValue: 0.3,
+        defaultValue: 1,
     },
     particles: {
         title: "Particles",
@@ -1537,7 +1579,7 @@ addPropertyControls(ParticleSphereRefactor, {
                 min: 0,
                 max: 600,
                 step: 10,
-                defaultValue: 150,
+                defaultValue: 75,
                 unit: "px",
             },
             strength: {
@@ -1546,7 +1588,7 @@ addPropertyControls(ParticleSphereRefactor, {
                 min: 0,
                 max: 1,
                 step: 0.1,
-                defaultValue: 0.3,
+                defaultValue: 1,
             },
             clickForce: {
                 type: ControlType.Number,
@@ -1554,7 +1596,7 @@ addPropertyControls(ParticleSphereRefactor, {
                 min: 0,
                 max: 10,
                 step: 1,
-                defaultValue: 3,
+                defaultValue: 5,
             },
         },
     },

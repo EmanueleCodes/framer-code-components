@@ -1,0 +1,45 @@
+Pixel Art Reveal - Property Controls
+
+Preview
+Controls whether the animation preview is active in the Framer canvas. "On" enables the animation preview. "Off" freezes the animation in canvas mode.
+
+Image
+The source image that will be converted into pixels and revealed. Supports Framer image components and image URLs.
+
+Mode
+Controls when the pixel reveal animation triggers.
+- Appear: Animation plays immediately when the component mounts or when preview is enabled.
+- Layer in View: Animation triggers when the component enters the viewport (requires the component to be in a scrollable container).
+
+Start At
+Controls the viewport position threshold for triggering the animation in "Layer in View" mode. "Top" triggers when the top edge enters the viewport. "Center" triggers when the center enters the viewport. "Bottom" triggers when the bottom edge enters the viewport.
+
+Replay
+Controls whether the animation replays when the component re-enters the viewport in "Layer in View" mode. "On" allows the animation to replay multiple times. "Off" plays the animation only once.
+
+Pixel Size
+Controls the size of each pixel in the reveal effect. Higher values create larger, more blocky pixels. Lower values create smaller, more detailed pixels. Range: 1-100px.
+
+Order
+Controls the order in which pixels are revealed during the animation.
+- Random: Pixels appear in random order.
+- Top Left: Pixels appear starting from the top-left corner, moving right then down.
+- Top Right: Pixels appear starting from the top-right corner, moving left then down.
+- Bottom Left: Pixels appear starting from the bottom-left corner, moving right then up.
+- Bottom Right: Pixels appear starting from the bottom-right corner, moving left then up.
+
+Delay
+Controls the initial delay before the pixel reveal animation begins. Higher values create a longer pause before animation starts. Range: 0.0-5.0s.
+
+Duration
+Controls the duration of each individual pixel's reveal animation. Higher values create slower, more gradual pixel appearances. Lower values create faster, snappier reveals. Range: 0.0-5.0s.
+
+Stagger
+Controls the time delay between each pixel's animation start. Higher values create more sequential, wave-like reveals. Lower values create more simultaneous pixel appearances. Range: 0.0-1.0s.
+
+Animation Config
+Controls the animation properties for each pixel's reveal.
+- Opacity Start: The initial opacity of pixels before animation. Range: 0.0-1.0.
+- Scale Start: The initial scale of pixels before animation. Range: 0.0-1.0.
+- Opacity End: The final opacity of pixels after animation completes. Range: 0.0-1.0.
+- Scale End: The final scale of pixels after animation completes. Range: 0.0-1.0.

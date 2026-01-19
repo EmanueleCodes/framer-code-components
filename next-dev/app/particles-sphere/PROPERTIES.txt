@@ -1,0 +1,43 @@
+Particle Sphere - Property Controls
+
+Preview
+Controls whether the animation preview is active in the Framer canvas. "On" enables the animation preview. "Off" freezes the animation in canvas mode.
+
+Count
+The number of particles displayed in the sphere. Higher values create denser, more detailed spheres but may impact performance. Lower values create sparser, more minimal spheres. Range: 100-10000.
+
+Rotation
+Controls the direction of the sphere's automatic rotation. "Clockwise" rotates the sphere to the right. "Anticlockwise" rotates the sphere to the left.
+
+Speed
+Controls the base rotation speed of the particle sphere. Higher values create faster rotation. Lower values create slower, more subtle rotation. Range: 0.1-1.0.
+
+Drag
+Controls whether users can drag to rotate the sphere manually. "On" enables drag interaction. "Off" disables drag interaction and the sphere rotates automatically only.
+
+Smoothing
+Controls the smoothness of rotation transitions when dragging or when rotation changes. Higher values create smoother, more fluid motion with momentum. Lower values create more immediate, snappy rotation. Range: 0.0-1.0.
+
+Drag Speed
+Controls the sensitivity of drag rotation. Higher values make the sphere rotate more quickly in response to mouse movement. Lower values create more subtle drag rotation. Range: 0.0-1.0.
+
+On Hover
+Controls the behavior when the cursor hovers over the sphere. "Stop" pauses automatic rotation on hover. "Rotate" continues rotation even when hovering.
+
+Scale
+Controls the overall size of the particle sphere. Higher values create larger spheres. Lower values create smaller, more compact spheres. Range: 0.0-1.0.
+
+Particles
+Controls the appearance of individual particles.
+- Shape: Controls the shape of each particle. "Sphere" creates round, glowing particles. "Cube" creates square, pixel-like particles.
+- Size: Controls the size of individual particles. Higher values create larger, more visible particles. Lower values create smaller, finer particles. Range: 0.1-1.0.
+
+Cursor
+Controls cursor interaction effects with the particle sphere.
+- Enabled: Controls whether cursor interaction is active. "On" enables particles to react to cursor movement and clicks. "Off" disables cursor interaction.
+- Radius: Controls the radius of the cursor interaction area in pixels. Particles within this radius will be affected by cursor movement. Higher values create larger interaction zones. Range: 0-600px.
+- Strength: Controls the intensity of the cursor repulsion effect. Higher values create stronger particle displacement when the cursor approaches. Lower values create subtler interaction. Range: 0.0-1.0.
+- Click Force: Controls the force applied to particles when clicking or tapping. Higher values create more dramatic scatter effects. Lower values create gentler particle movement. Range: 0-10.
+
+Color
+The color of the particles. Supports hex colors, rgba values, and Framer color tokens. The opacity component of rgba values controls particle transparency.
