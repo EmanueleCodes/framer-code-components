@@ -1,4 +1,4 @@
-import { addPropertyControls, ControlType } from "framer"
+import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { useRef, useLayoutEffect } from "react"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
@@ -40,8 +40,14 @@ export default function ImageParallax(props: {
     const containerRef = useRef<HTMLDivElement>(null)
     const imageRef = useRef<HTMLDivElement>(null)
 
+    // Check if we're in canvas mode - if so, skip parallax and just show the image
+    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+
     // Simple, performant parallax using requestAnimationFrame (like many CodePen examples)
+    // Only run parallax logic in preview/live mode, not in canvas
     useLayoutEffect(() => {
+        // Skip parallax in canvas mode
+        if (isCanvas) return
         if (!containerRef.current || !imageRef.current) return
 
         const container = containerRef.current
@@ -66,19 +72,22 @@ export default function ImageParallax(props: {
             if (containerHeight === 0 || containerWidth === 0) return
             
             // Calculate vertical parallax based on scroll position
-            // Mimics ScrollTrigger behavior: start="top bottom", end="bottom top"
             // Progress goes from 0 (top hits bottom of viewport) to 1 (bottom hits top of viewport)
+            // When element is vertically centered (progress = 0.5), image should be centered
             const viewportHeight = window.innerHeight
             const scrollProgress = Math.max(0, Math.min(1, 
                 (viewportHeight - rect.top) / (viewportHeight + containerHeight)
             ))
             
-            // Vertical parallax: move image based on scroll progress
-            const yOffset = scrollProgress * (verticalParallaxAmount / 100) * containerHeight
+            // Vertical parallax: center around midpoint (0.5)
+            // When scrollProgress = 0.5 (centered), yOffset = 0
+            // When scrollProgress = 0 (top), yOffset = -parallaxAmount/2
+            // When scrollProgress = 1 (bottom), yOffset = +parallaxAmount/2
+            const yOffset = (scrollProgress - 0.5) * (verticalParallaxAmount / 100) * containerHeight
             
             // Horizontal parallax: based purely on element's horizontal position in viewport
             // Works independently of scroll - responds to horizontal movement/looping
-            // When element is centered, image should be centered (xOffset compensates for initial CSS offset)
+            // When element is centered, image should be centered (no offset)
             let xOffset = 0
             if (horizontalParallaxAmount !== 0) {
                 const viewportWidth = window.innerWidth
@@ -89,20 +98,12 @@ export default function ImageParallax(props: {
                 // Normalize based on viewport width so it works regardless of element position
                 const horizontalProgress = (elementCenter - viewportCenter) / viewportWidth
                 
-                // Base offset to center image when element is centered
-                // The image CSS has left: -horizontalParallaxAmount%, making it extend left
-                // To center the image when element is centered, we shift right by half the parallax amount
-                const centerOffset = (horizontalParallaxAmount / 100) * containerWidth / 2
-                
                 // Apply parallax movement based on element position relative to viewport center
                 // horizontalProgress: negative when element is left of center, positive when right of center
                 // When element is left of center, image shifts left (negative offset)
                 // When element is right of center, image shifts right (positive offset)
-                const parallaxOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
-                
-                // Total offset: center compensation + parallax movement
-                // When element is centered (horizontalProgress = 0), xOffset = centerOffset (image centered)
-                xOffset = centerOffset + parallaxOffset
+                // When element is centered (horizontalProgress = 0), xOffset = 0 (image centered)
+                xOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
             }
             
             // Apply transforms using translate3d for GPU acceleration
@@ -168,7 +169,7 @@ export default function ImageParallax(props: {
             window.removeEventListener("scroll", handleScroll)
             window.removeEventListener("resize", handleResize)
         }
-    }, [verticalParallaxAmount, horizontalParallaxAmount])
+    }, [verticalParallaxAmount, horizontalParallaxAmount, isCanvas])
 
     // Check if image is provided
     const imageSrc = image?.src || (typeof image === "string" ? image : null)
@@ -217,19 +218,34 @@ export default function ImageParallax(props: {
                     title="Image Parallax"
                     subtitle="Add an image to create a parallax effect that moves as you scroll"
                 />
+            ) : isCanvas ? (
+                // Canvas mode: simple responsive image, no parallax
+                <img
+                    src={imageSrc}
+                    alt=""
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        borderRadius: borderRadius,
+                        userSelect: "none",
+                        pointerEvents: "none",
+                    }}
+                />
             ) : (
-                // Render parallax effect
+                // Preview/Live mode: render parallax effect
                 // Extend beyond boundaries to allow room for parallax movement
                 <div
                     ref={imageRef}
                     style={{
                         position: "absolute",
-                        // Use percentage-based offsets - GSAP will handle the pixel conversion
-                        // The negative values extend the image beyond boundaries for parallax movement
-                        top: verticalParallaxAmount < 0 ? 0 : `-${Math.abs(verticalParallaxAmount)}%`,
-                        left: horizontalParallaxAmount < 0 ? 0 : `-${Math.abs(horizontalParallaxAmount)}%`,
-                        right: horizontalParallaxAmount > 0 ? 0 : `-${Math.abs(horizontalParallaxAmount)}%`,
-                        bottom: verticalParallaxAmount > 0 ? 0 : `-${Math.abs(verticalParallaxAmount)}%`,
+                        // ALWAYS center the image by extending equally on both sides
+                        // This ensures the image is centered when element is centered, regardless of parallax direction
+                        // The sign of parallax only affects the direction of movement, not the centering
+                        top: `-${Math.abs(verticalParallaxAmount) / 2}%`,
+                        left: `-${Math.abs(horizontalParallaxAmount) / 2}%`,
+                        right: `-${Math.abs(horizontalParallaxAmount) / 2}%`,
+                        bottom: `-${Math.abs(verticalParallaxAmount) / 2}%`,
                         // Always use Math.abs so the image is larger than container regardless of direction
                         width: `calc(100% + ${Math.abs(horizontalParallaxAmount)}%)`,
                         height: `calc(100% + ${Math.abs(verticalParallaxAmount)}%)`,
