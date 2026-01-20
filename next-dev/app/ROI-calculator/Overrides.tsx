@@ -601,19 +601,8 @@ export function withStepListener<T extends OverrideProps>(
         useEffect(() => {
             const targetVariant =
                 variantMap[variantStore.currentStep] || "Step 1"
-            console.log("🎨 withStepListener: store changed", {
-                currentStep: variantStore.currentStep,
-                targetVariant,
-                currentLocalVariant: localVariant,
-            })
             setLocalVariant(targetVariant)
         }, [variantStore.currentStep])
-
-        console.log("🎨 withStepListener: rendering", {
-            currentStep: variantStore.currentStep,
-            localVariant,
-            propsVariant: props.variant,
-        })
 
         return <Component {...props} variant={localVariant} />
     }
@@ -623,7 +612,7 @@ export function withStepListener<T extends OverrideProps>(
 // Determines next step based on flowType:
 // - "1to3": Step 1 → Step 3
 // - "1to2to3": Step 1 → Step 2
-// All other transitions (Step 2 → Step 3) are handled by Framer variants
+// Step 2 → Step 3 transitions are handled by withDisableEmailButton
 export function withStepButton<T extends OverrideProps>(
     Component: ComponentType<T>
 ): ComponentType<T> {
@@ -632,15 +621,8 @@ export function withStepButton<T extends OverrideProps>(
         const [variantStore, setVariantStore] = useVariantStore()
 
         const handleClick = () => {
-            console.log("🔘 withStepButton: button clicked", {
-                currentStep: variantStore.currentStep,
-                flowType: variantStore.flowType,
-                formStore,
-            })
-
             // ONLY handle clicks when on Step 1
             if (variantStore.currentStep !== 1) {
-                console.log("⚠️ withStepButton: ignoring click, not on Step 1")
                 return
             }
 
@@ -651,13 +633,7 @@ export function withStepButton<T extends OverrideProps>(
             const errors = validateForm(formStore)
             const hasErrors = Object.values(errors).some(Boolean)
 
-            console.log("✅ withStepButton: validation result", {
-                errors,
-                hasErrors,
-            })
-
             if (hasErrors) {
-                console.log("❌ withStepButton: showing errors")
                 displayErrorMessages(errors)
             } else {
                 // Determine next step based on flow type
@@ -668,11 +644,6 @@ export function withStepButton<T extends OverrideProps>(
                 } else if (variantStore.flowType === "1to2to3") {
                     nextStep = 2 // Go to Step 2 (email gate)
                 }
-
-                console.log("🚀 withStepButton: advancing to next step", {
-                    flowType: variantStore.flowType,
-                    nextStep,
-                })
 
                 setVariantStore({
                     ...variantStore,
@@ -790,7 +761,7 @@ export function withWorkEmailCheck<T extends OverrideProps>(
         // Initialize input value from store on mount
         useEffect(() => {
             const input = document.querySelector(
-                'input[name="Email"]'
+                'input[name="email"]'
             ) as HTMLInputElement
 
             if (!input) {
@@ -892,6 +863,7 @@ export function withWorkEmailCheck<T extends OverrideProps>(
 }
 
 // 10. withDisableEmailButton - Disables button when email is invalid or inputs are incomplete
+// Also handles click to advance from Step 2 to Step 3
 export function withDisableEmailButton<T extends OverrideProps>(
     Component: ComponentType<T>
 ): ComponentType<T> {
@@ -909,9 +881,32 @@ export function withDisableEmailButton<T extends OverrideProps>(
         const isDisabled = !formStore.isWorkEmailValid || inputsInvalid
         const buttonVariant = isDisabled ? "Disabled" : "Default"
 
+        // Handle click to advance from Step 2 to Step 3
+        const handleClick = () => {
+            if (isDisabled) {
+                return
+            }
+
+            // Only handle clicks when on Step 2
+            if (variantStore.currentStep === 2) {
+                setVariantStore({
+                    ...variantStore,
+                    currentStep: 3,
+                })
+                // Call original onClick if provided
+                if (props.onClick && typeof props.onClick === "function") {
+                    props.onClick()
+                }
+            } else {
+                // If not on Step 2, just pass through the click
+                if (props.onClick && typeof props.onClick === "function") {
+                    props.onClick()
+                }
+            }
+        }
+
         return (
             <>
-
             {isDisabled ?
                 <Component
                 {...props}
@@ -920,12 +915,12 @@ export function withDisableEmailButton<T extends OverrideProps>(
                     ...props.style,
                     cursor: isDisabled ? "not-allowed" : "pointer",
                 }}
-                onClick={(e:Event)=>{e.preventDefault()}}
+                onClick={handleClick}
             />
                 :
                 <Component
                 {...props}
-                
+                onClick={handleClick}
                 style={{
                     ...props.style,
                 }}

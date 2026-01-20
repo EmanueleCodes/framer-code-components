@@ -53,6 +53,7 @@ export default function ImageParallax(props: {
 
         let rafId: number | null = null
         let ticking = false
+        let animationFrameId: number | null = null
 
         const updateParallax = () => {
             if (!container || !image) return
@@ -60,6 +61,9 @@ export default function ImageParallax(props: {
             const rect = container.getBoundingClientRect()
             const containerHeight = container.offsetHeight
             const containerWidth = container.offsetWidth
+            
+            // Skip if container has no dimensions
+            if (containerHeight === 0 || containerWidth === 0) return
             
             // Calculate vertical parallax based on scroll position
             // Mimics ScrollTrigger behavior: start="top bottom", end="bottom top"
@@ -72,12 +76,33 @@ export default function ImageParallax(props: {
             // Vertical parallax: move image based on scroll progress
             const yOffset = scrollProgress * (verticalParallaxAmount / 100) * containerHeight
             
-            // Horizontal parallax: based on viewport position
+            // Horizontal parallax: based purely on element's horizontal position in viewport
+            // Works independently of scroll - responds to horizontal movement/looping
+            // When element is centered, image should be centered (xOffset compensates for initial CSS offset)
             let xOffset = 0
             if (horizontalParallaxAmount !== 0) {
                 const viewportWidth = window.innerWidth
-                const horizontalProgress = 1 - (rect.left + rect.width) / (viewportWidth + rect.width)
-                xOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
+                const viewportCenter = viewportWidth / 2
+                const elementCenter = rect.left + rect.width / 2
+                
+                // Calculate progress from -1 (left) to +1 (right), 0 when centered
+                // Normalize based on viewport width so it works regardless of element position
+                const horizontalProgress = (elementCenter - viewportCenter) / viewportWidth
+                
+                // Base offset to center image when element is centered
+                // The image CSS has left: -horizontalParallaxAmount%, making it extend left
+                // To center the image when element is centered, we shift right by half the parallax amount
+                const centerOffset = (horizontalParallaxAmount / 100) * containerWidth / 2
+                
+                // Apply parallax movement based on element position relative to viewport center
+                // horizontalProgress: negative when element is left of center, positive when right of center
+                // When element is left of center, image shifts left (negative offset)
+                // When element is right of center, image shifts right (positive offset)
+                const parallaxOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
+                
+                // Total offset: center compensation + parallax movement
+                // When element is centered (horizontalProgress = 0), xOffset = centerOffset (image centered)
+                xOffset = centerOffset + parallaxOffset
             }
             
             // Apply transforms using translate3d for GPU acceleration
@@ -93,7 +118,25 @@ export default function ImageParallax(props: {
             }
         }
 
-        // Use passive scroll listener for better performance
+        // Continuous animation loop for horizontal parallax (works with looping elements)
+        const startAnimationLoop = () => {
+            if (horizontalParallaxAmount !== 0) {
+                const animate = () => {
+                    updateParallax()
+                    animationFrameId = requestAnimationFrame(animate)
+                }
+                animationFrameId = requestAnimationFrame(animate)
+            }
+        }
+
+        const stopAnimationLoop = () => {
+            if (animationFrameId !== null) {
+                cancelAnimationFrame(animationFrameId)
+                animationFrameId = null
+            }
+        }
+
+        // Use passive scroll listener for vertical parallax
         const handleScroll = () => {
             requestTick()
         }
@@ -109,12 +152,16 @@ export default function ImageParallax(props: {
         // Initial update
         updateParallax()
 
-        // Add event listeners
+        // Start continuous loop for horizontal parallax if enabled
+        startAnimationLoop()
+
+        // Add event listeners for vertical parallax
         window.addEventListener("scroll", handleScroll, { passive: true })
         window.addEventListener("resize", handleResize, { passive: true })
 
         // Cleanup
         return () => {
+            stopAnimationLoop()
             if (rafId !== null) {
                 cancelAnimationFrame(rafId)
             }
@@ -219,7 +266,7 @@ addPropertyControls(ImageParallax, {
     verticalParallaxAmount: {
         type: ControlType.Number,
         title: "Parallax Y",
-        defaultValue: 50,
+        defaultValue: 30,
         step: 5,
         max: 100,
         min: -100,

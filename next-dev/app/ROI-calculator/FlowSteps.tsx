@@ -38,20 +38,17 @@ export function withOneStepFlow<T extends OverrideProps>(
     return (props: T) => {
         const [variantStore, setVariantStore] = useVariantStore()
 
+        // Initialize on mount
         useEffect(() => {
-            console.log("🎯 withOneStepFlow: reset triggered", { 
-                currentStep: variantStore.currentStep,
-                currentFlowType: variantStore.flowType,
-                resetCounter: variantStore.resetCounter
-            })
-            
-            // Always set to Step 3 with "direct" flow type when Orchestrator resets
-            setVariantStore({
-                ...variantStore,
-                currentStep: 3,
-                flowType: "direct",
-            })
-        }, [variantStore.resetCounter]) // Watch resetCounter from Orchestrator
+            // Always set to Step 3 with "direct" flow type
+            if (variantStore.currentStep !== 3 || variantStore.flowType !== "direct") {
+                setVariantStore({
+                    ...variantStore,
+                    currentStep: 3,
+                    flowType: "direct",
+                })
+            }
+        }, []) // Run once on mount
 
         return <Component {...props} />
     }
@@ -71,20 +68,17 @@ export function withTwoStepFlow_1to3<T extends OverrideProps>(
     return (props: T) => {
         const [variantStore, setVariantStore] = useVariantStore()
 
+        // Initialize on mount
         useEffect(() => {
-            console.log("🎯 withTwoStepFlow_1to3: reset triggered", { 
-                currentStep: variantStore.currentStep,
-                currentFlowType: variantStore.flowType,
-                resetCounter: variantStore.resetCounter
-            })
-            
-            // Set to Step 1 with "1to3" flow type when Orchestrator resets
-            setVariantStore({
-                ...variantStore,
-                currentStep: 1,
-                flowType: "1to3",
-            })
-        }, [variantStore.resetCounter]) // Watch resetCounter from Orchestrator
+            // Set to Step 1 with "1to3" flow type
+            if (variantStore.currentStep !== 1 || variantStore.flowType !== "1to3") {
+                setVariantStore({
+                    ...variantStore,
+                    currentStep: 1,
+                    flowType: "1to3",
+                })
+            }
+        }, []) // Run once on mount
 
         return <Component {...props} />
     }
@@ -104,20 +98,17 @@ export function withThreeStepFlow<T extends OverrideProps>(
     return (props: T) => {
         const [variantStore, setVariantStore] = useVariantStore()
 
+        // Initialize on mount
         useEffect(() => {
-            console.log("🎯 withThreeStepFlow: reset triggered", { 
-                currentStep: variantStore.currentStep,
-                currentFlowType: variantStore.flowType,
-                resetCounter: variantStore.resetCounter
-            })
-            
-            // Set to Step 1 with "1to2to3" flow type when Orchestrator resets
-            setVariantStore({
-                ...variantStore,
-                currentStep: 1,
-                flowType: "1to2to3",
-            })
-        }, [variantStore.resetCounter]) // Watch resetCounter from Orchestrator
+            // Set to Step 1 with "1to2to3" flow type
+            if (variantStore.currentStep !== 1 || variantStore.flowType !== "1to2to3") {
+                setVariantStore({
+                    ...variantStore,
+                    currentStep: 1,
+                    flowType: "1to2to3",
+                })
+            }
+        }, []) // Run once on mount
 
         return <Component {...props} />
     }
@@ -138,20 +129,17 @@ export function withTwoStepFlow_2to3<T extends OverrideProps>(
     return (props: T) => {
         const [variantStore, setVariantStore] = useVariantStore()
 
+        // Initialize on mount
         useEffect(() => {
-            console.log("🎯 withTwoStepFlow_2to3: reset triggered", { 
-                currentStep: variantStore.currentStep,
-                currentFlowType: variantStore.flowType,
-                resetCounter: variantStore.resetCounter
-            })
-            
-            // Set to Step 2 with "2to3" flow type when Orchestrator resets
-            setVariantStore({
-                ...variantStore,
-                currentStep: 2,
-                flowType: "2to3",
-            })
-        }, [variantStore.resetCounter]) // Watch resetCounter from Orchestrator
+            // Set to Step 2 with "2to3" flow type
+            if (variantStore.currentStep !== 2 || variantStore.flowType !== "2to3") {
+                setVariantStore({
+                    ...variantStore,
+                    currentStep: 2,
+                    flowType: "2to3",
+                })
+            }
+        }, []) // Run once on mount
 
         return <Component {...props} />
     }

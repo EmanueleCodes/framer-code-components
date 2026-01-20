@@ -110,16 +110,19 @@ export default function LineMaskSplit(props: LineMaskSplitProps) {
     const buildTransitionConfig = (transitionValue: typeof transition) => {
         const config: any = {}
 
-        if (!transitionValue?.type || transitionValue.type === "tween") {
-            if (transitionValue?.duration !== undefined) config.duration = transitionValue.duration
-            if (transitionValue?.ease) config.ease = transitionValue.ease
-        }
-
         if (transitionValue?.type === "spring") {
+            config.type = "spring"
             if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
             if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
             if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
             if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
+            if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
+            if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
+        } else {
+            // Default to tween if no type specified
+            config.type = transitionValue?.type || "tween"
+            if (transitionValue?.duration !== undefined) config.duration = transitionValue.duration
+            if (transitionValue?.ease) config.ease = transitionValue.ease
         }
 
         return config
@@ -539,6 +542,7 @@ addPropertyControls(LineMaskSplit, {
         type: ControlType.Object,
         title: "Animation",
         icon: "effect",
+        buttonTitle: "Effect",
         controls: {
             opacityInitial: {
                 type: ControlType.Number,
@@ -553,8 +557,8 @@ addPropertyControls(LineMaskSplit, {
                 title: "Scale",
                 unit: "x",
                 min: 0,
-                max: 2,
-                step: 0.01,
+                max: 4,
+                step: 0.1,
                 defaultValue: 1,
             },
             blurInitial: {
@@ -569,7 +573,7 @@ addPropertyControls(LineMaskSplit, {
             rotateInitial: {
                 type: ControlType.Number,
                 title: "Rotate",
-                unit: "deg",
+                unit: "°",
                 min: -360,
                 max: 360,
                 step: 1,
@@ -579,8 +583,8 @@ addPropertyControls(LineMaskSplit, {
                 type: ControlType.Number,
                 title: "Offset X",
                 unit: "px",
-                min: -100,
-                max: 100,
+                min: -500,
+                max: 500,
                 step: 1,
                 defaultValue: 0,
             },
@@ -588,8 +592,8 @@ addPropertyControls(LineMaskSplit, {
                 type: ControlType.Number,
                 title: "Offset Y",
                 unit: "px",
-                min: -100,
-                max: 100,
+                min: -500,
+                max: 500,
                 step: 1,
                 defaultValue: 100,
             },
@@ -640,4 +644,4 @@ addPropertyControls(LineMaskSplit, {
     
 })
 
-LineMaskSplit.displayName = "Line Mask Split"
+LineMaskSplit.displayName = "Text Mask Animation"
