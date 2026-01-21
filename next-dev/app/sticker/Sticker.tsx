@@ -33,7 +33,6 @@ import {
     PCFSoftShadowMap,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
-import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/3D-text-rug.js"
 
 // ============================================================================
 // TYPES
