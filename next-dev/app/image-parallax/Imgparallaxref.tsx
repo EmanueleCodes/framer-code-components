@@ -248,6 +248,7 @@ addPropertyControls(ImageParallax, {
         max: 1000,
         min: -1000,
         unit: "px",
+        description: "Only seen if image moves horizontally.",
     },
     border: {
         // @ts-ignore - ControlType.Border exists but may not be in types
