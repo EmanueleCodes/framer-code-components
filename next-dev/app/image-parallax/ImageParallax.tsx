@@ -67,24 +67,32 @@ export default function ImageParallax(props: {
             const rect = container.getBoundingClientRect()
             const containerHeight = container.offsetHeight
             const containerWidth = container.offsetWidth
-            
+
             // Skip if container has no dimensions
             if (containerHeight === 0 || containerWidth === 0) return
-            
+
             // Calculate vertical parallax based on scroll position
             // Progress goes from 0 (top hits bottom of viewport) to 1 (bottom hits top of viewport)
             // When element is vertically centered (progress = 0.5), image should be centered
             const viewportHeight = window.innerHeight
-            const scrollProgress = Math.max(0, Math.min(1, 
-                (viewportHeight - rect.top) / (viewportHeight + containerHeight)
-            ))
-            
+            const scrollProgress = Math.max(
+                0,
+                Math.min(
+                    1,
+                    (viewportHeight - rect.top) /
+                        (viewportHeight + containerHeight)
+                )
+            )
+
             // Vertical parallax: center around midpoint (0.5)
             // When scrollProgress = 0.5 (centered), yOffset = 0
             // When scrollProgress = 0 (top), yOffset = -parallaxAmount/2
             // When scrollProgress = 1 (bottom), yOffset = +parallaxAmount/2
-            const yOffset = (scrollProgress - 0.5) * (verticalParallaxAmount / 100) * containerHeight
-            
+            const yOffset =
+                (scrollProgress - 0.5) *
+                (verticalParallaxAmount / 100) *
+                containerHeight
+
             // Horizontal parallax: based purely on element's horizontal position in viewport
             // Works independently of scroll - responds to horizontal movement/looping
             // When element is centered, image should be centered (no offset)
@@ -93,22 +101,26 @@ export default function ImageParallax(props: {
                 const viewportWidth = window.innerWidth
                 const viewportCenter = viewportWidth / 2
                 const elementCenter = rect.left + rect.width / 2
-                
+
                 // Calculate progress from -1 (left) to +1 (right), 0 when centered
                 // Normalize based on viewport width so it works regardless of element position
-                const horizontalProgress = (elementCenter - viewportCenter) / viewportWidth
-                
+                const horizontalProgress =
+                    (elementCenter - viewportCenter) / viewportWidth
+
                 // Apply parallax movement based on element position relative to viewport center
                 // horizontalProgress: negative when element is left of center, positive when right of center
                 // When element is left of center, image shifts left (negative offset)
                 // When element is right of center, image shifts right (positive offset)
                 // When element is centered (horizontalProgress = 0), xOffset = 0 (image centered)
-                xOffset = horizontalProgress * (horizontalParallaxAmount / 100) * containerWidth
+                xOffset =
+                    horizontalProgress *
+                    (horizontalParallaxAmount / 100) *
+                    containerWidth
             }
-            
+
             // Apply transforms using translate3d for GPU acceleration
             image.style.transform = `translate3d(${xOffset}px, ${yOffset}px, 0)`
-            
+
             ticking = false
         }
 
@@ -186,25 +198,26 @@ export default function ImageParallax(props: {
                 height: "100%",
                 borderRadius: borderRadius,
                 boxShadow: boxShadow || undefined,
-               
             }}
         >
             {/* Border overlay */}
             {hasImage && (
-                <div style={{
-                    width: "100%",
-                    zIndex: 1000,
-                    height: "100%",
-                    borderRadius: borderRadius,
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    ...(border || {}),
-                }}/>
+                <div
+                    style={{
+                        width: "100%",
+                        zIndex: 1000,
+                        height: "100%",
+                        borderRadius: borderRadius,
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        ...(border || {}),
+                    }}
+                />
             )}
-            
+
             {/* No image placeholder */}
             {!hasImage ? (
                 <ComponentMessage
@@ -249,11 +262,14 @@ export default function ImageParallax(props: {
                         // Always use Math.abs so the image is larger than container regardless of direction
                         width: `calc(100% + ${Math.abs(horizontalParallaxAmount)}%)`,
                         height: `calc(100% + ${Math.abs(verticalParallaxAmount)}%)`,
-                        backgroundImage: imageSrc ? `url(${imageSrc})` : undefined,
+                        backgroundImage: imageSrc
+                            ? `url(${imageSrc})`
+                            : undefined,
                         backgroundSize: "cover",
-                        backgroundPosition: image?.positionX && image?.positionY 
-                            ? `${image.positionX} ${image.positionY}` 
-                            : "center",
+                        backgroundPosition:
+                            image?.positionX && image?.positionY
+                                ? `${image.positionX} ${image.positionY}`
+                                : "center",
                         borderRadius: borderRadius,
                         willChange: "transform", // Hint browser to optimize transforms
                         backfaceVisibility: "hidden", // Prevent flickering on transforms
@@ -296,13 +312,14 @@ addPropertyControls(ImageParallax, {
         max: 100,
         min: -100,
         unit: "%",
+        description: "Only seen if image moves horizontally.",
     },
     border: {
         // @ts-ignore - ControlType.Border exists but may not be in types
         type: ControlType.Border,
-        
+
         title: "Border",
-        optional:true,
+        optional: true,
     },
     borderRadius: {
         // @ts-ignore - ControlType.BorderRadius exists but may not be in types
@@ -318,6 +335,7 @@ addPropertyControls(ImageParallax, {
         // @ts-ignore - ControlType.BoxShadow exists but may not be in types
         type: ControlType.BoxShadow,
         title: "Shadow",
-        
     },
 })
+
+ImageParallax.displayName = "Image Parallax"

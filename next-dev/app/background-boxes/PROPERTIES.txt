@@ -1,0 +1,67 @@
+Background Boxes - Property Controls
+
+Background
+The background color of the container. This color shows through the gaps between boxes and around the grid edges.
+
+Box Size
+Controls the size of each individual box in pixels. Smaller values create a finer grid pattern, larger values create a coarser pattern. Range: 4 to 64px.
+
+Border
+Controls the width of the border around each box in pixels. Set to 0 to remove borders completely. Higher values create thicker grid lines. Range: 0 to 10px.
+
+Rotate X
+Controls the rotation angle around the X-axis (horizontal tilt) in degrees. Positive values tilt the grid forward, negative values tilt backward. Range: -45° to 45°.
+
+Rotate Y
+Controls the rotation angle around the Y-axis (vertical tilt) in degrees. Positive values tilt the grid right, negative values tilt left. Range: -45° to 45°.
+
+Rotate Z
+Controls the rotation angle around the Z-axis (2D rotation) in degrees. Positive values rotate clockwise, negative values rotate counterclockwise. Range: -45° to 45°.
+
+Time In
+Controls the duration in seconds for the color transition when hovering over a box. Set to 0 for instant color changes. Range: 0 to 10 seconds.
+
+Time Out
+Controls the duration in seconds for the color transition when the mouse leaves a box. This creates a fade-out effect back to the original color. Range: 0 to 10 seconds.
+
+Border
+The color of the borders around each box. Can be any valid CSS color value including hex codes, RGB, or RGBA with transparency.
+
+Fill Grid
+Controls the safety margin multiplier for grid coverage. Higher values add more rows and columns to ensure the grid fully covers the container even with high rotation angles. Increase this value for extreme rotations to prevent gaps. Range: 1 to 2.
+
+Colors
+A group of controls that define the color palette used when boxes are hovered. Each box randomly selects a color from this palette on hover.
+
+Palette Size
+Controls how many colors are available in the palette. Set this value first, then configure the individual colors. Range: 1 to 10 colors.
+
+Color 1
+The first color in the palette. Always visible.
+
+Color 2
+The second color in the palette. Only visible when Palette Size is 2 or greater.
+
+Color 3
+The third color in the palette. Only visible when Palette Size is 3 or greater.
+
+Color 4
+The fourth color in the palette. Only visible when Palette Size is 4 or greater.
+
+Color 5
+The fifth color in the palette. Only visible when Palette Size is 5 or greater.
+
+Color 6
+The sixth color in the palette. Only visible when Palette Size is 6 or greater.
+
+Color 7
+The seventh color in the palette. Only visible when Palette Size is 7 or greater.
+
+Color 8
+The eighth color in the palette. Only visible when Palette Size is 8 or greater.
+
+Color 9
+The ninth color in the palette. Only visible when Palette Size is 9 or greater.
+
+Color 10
+The tenth color in the palette. Only visible when Palette Size is 10. More components at Framer University.

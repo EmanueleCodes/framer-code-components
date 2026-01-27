@@ -1,0 +1,4 @@
+Dark/Light Mode Toggle - Property Controls
+
+Theme
+Controls the active theme for the entire page. "Light" applies the light theme colors and tokens. "Dark" applies the dark theme colors and tokens. The component automatically extracts CSS custom properties (tokens) from your Framer design and applies them based on the selected theme. The theme preference is also saved to localStorage for persistence across page reloads.

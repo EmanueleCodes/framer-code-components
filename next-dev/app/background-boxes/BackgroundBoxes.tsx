@@ -13,19 +13,7 @@ interface BackgroundBoxesProps {
     safetyMargin?: number
     inDuration?: number
     outDuration?: number
-    colors?: {
-        paletteCount?: number
-        color1?: string
-        color2?: string
-        color3?: string
-        color4?: string
-        color5?: string
-        color6?: string
-        color7?: string
-        color8?: string
-        color9?: string
-        color10?: string
-    }
+    colors?: string[]
     style?: React.CSSProperties
 }
 
@@ -59,18 +47,7 @@ export default function BackgroundBoxes({
     rotateY = 0,
     rotateZ = 0,
     safetyMargin = 1.2,
-    colors: colorsProp = {
-        paletteCount: 9,
-        color1: "rgb(125 211 252)",
-        color2: "rgb(249 168 212)",
-        color3: "rgb(134 239 172)",
-        color4: "rgb(253 224 71)",
-        color5: "rgb(252 165 165)",
-        color6: "rgb(216 180 254)",
-        color7: "rgb(147 197 253)",
-        color8: "rgb(165 180 252)",
-        color9: "rgb(196 181 253)",
-    },
+    colors: colorsProp = DEFAULT_COLORS,
     inDuration = 0,
     outDuration = 2,
     style,
@@ -80,26 +57,21 @@ export default function BackgroundBoxes({
     const [rows, setRows] = useState(35)
     const [cols, setCols] = useState(35)
     
-    // Build colors array from props
+    // Use colors array directly, filtering out empty values
     const colors = useMemo(() => {
-        const entries: string[] = []
-        if (colorsProp) {
-            const paletteCount = colorsProp.paletteCount || 9
-            for (let i = 1; i <= paletteCount; i++) {
-                const key = `color${i}` as keyof typeof colorsProp
-                const value = colorsProp[key]
-                if (typeof value === "string" && value.trim().length > 0) {
-                    entries.push(value.trim())
-                }
-            }
-        }
-
-        // Fallback to default colors if no colors provided
-        if (entries.length === 0) {
+        if (!colorsProp || colorsProp.length === 0) {
             return DEFAULT_COLORS
         }
-
-        return entries
+        
+        // Filter out empty or invalid color values
+        const validColors = colorsProp
+            .filter((color): color is string => 
+                typeof color === "string" && color.trim().length > 0
+            )
+            .map(color => color.trim())
+        
+        // Fallback to default colors if no valid colors provided
+        return validColors.length > 0 ? validColors : DEFAULT_COLORS
     }, [colorsProp])
 
     const getRandomColor = () => {
@@ -387,78 +359,14 @@ addPropertyControls(BackgroundBoxes, {
         description: "Add rows and columns. Increase for high rotations.",
     },
     colors: {
-        type: ControlType.Object,
+        type: ControlType.Array,
         title: "Colors",
-        description: "More components at [Framer University](https://frameruni.link/cc).",
-        controls: {
-            paletteCount: {
-                type: ControlType.Number,
-                title: "Palette Size",
-                min: 1,
-                max: 10,
-                step: 1,
-                defaultValue: 9,
-            },
-            color1: {
-                type: ControlType.Color,
-                title: "Color 1",
-                defaultValue: "rgb(125 211 252)",
-            },
-            color2: {
-                type: ControlType.Color,
-                title: "Color 2",
-                defaultValue: "rgb(249 168 212)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 2,
-            },
-            color3: {
-                type: ControlType.Color,
-                title: "Color 3",
-                defaultValue: "rgb(134 239 172)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 3,
-            },
-            color4: {
-                type: ControlType.Color,
-                title: "Color 4",
-                defaultValue: "rgb(253 224 71)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 4,
-            },
-            color5: {
-                type: ControlType.Color,
-                title: "Color 5",
-                defaultValue: "rgb(252 165 165)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 5,
-            },
-            color6: {
-                type: ControlType.Color,
-                title: "Color 6",
-                defaultValue: "rgb(216 180 254)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 6,
-            },
-            color7: {
-                type: ControlType.Color,
-                title: "Color 7",
-                defaultValue: "rgb(147 197 253)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 7,
-            },
-            color8: {
-                type: ControlType.Color,
-                title: "Color 8",
-                defaultValue: "rgb(165 180 252)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 8,
-            },
-            color9: {
-                type: ControlType.Color,
-                title: "Color 9",
-                defaultValue: "rgb(196 181 253)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 9,
-            },
-            color10: {
-                type: ControlType.Color,
-                title: "Color 10",
-                defaultValue: "rgb(125 211 252)",
-                hidden: (props: any) => (props?.paletteCount ?? 9) < 10,
-            },
+        defaultValue: DEFAULT_COLORS,
+        control: {
+            type: ControlType.Color,
+            title: "Color",
         },
+        description: "Add as many colors as you want. More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 

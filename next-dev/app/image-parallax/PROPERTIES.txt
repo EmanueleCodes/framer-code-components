@@ -1,0 +1,19 @@
+Image Parallax - Property Controls
+
+Image
+The image to display with parallax effect. The image will move at a different speed than the container as you scroll, creating a depth effect.
+
+Parallax Y
+Controls the vertical parallax movement amount as a percentage. Positive values make the image move down faster than the container when scrolling down. Negative values make it move up faster. Higher absolute values create more dramatic parallax effects. Range: -100% to 100%.
+
+Parallax X
+Controls the horizontal parallax movement amount as a percentage. The image shifts horizontally based on its position relative to the viewport center. This effect is only visible when the image moves horizontally (e.g., in looping animations or horizontal scrolling). Range: -100% to 100%.
+
+Border
+Optional border styling for the image container. Configure width, style, and color for the border.
+
+Radius
+Controls the border radius of the image container in pixels. Higher values create more rounded corners. Set to 0 for sharp corners. Range: 0 to 100px.
+
+Shadow
+Controls the box shadow effect applied to the image container. Add depth and elevation to the image with customizable shadow properties.

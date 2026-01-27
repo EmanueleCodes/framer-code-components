@@ -156,6 +156,7 @@ export default {
 async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
   const results = {
     profile: null as any,
+    subscription: null as any,
     event: null as any,
     list: null as any,
   };
@@ -188,6 +189,27 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
       }
     }
     
+    // Build location object if any address fields are present
+    const locationFields: Record<string, any> = {};
+    if (formData.address || formData.Address || formData.address1 || formData.Address1) {
+      locationFields.address1 = formData.address || formData.Address || formData.address1 || formData.Address1;
+    }
+    if (formData.address2 || formData.Address2) {
+      locationFields.address2 = formData.address2 || formData.Address2;
+    }
+    if (formData.city || formData.City || formData.location || formData.Location) {
+      locationFields.city = formData.city || formData.City || formData.location || formData.Location;
+    }
+    if (formData.state || formData.State || formData.region || formData.Region) {
+      locationFields.region = formData.state || formData.State || formData.region || formData.Region;
+    }
+    if (formData.country || formData.Country) {
+      locationFields.country = formData.country || formData.Country;
+    }
+    if (formData.zip || formData.Zip || formData.postalCode || formData.PostalCode) {
+      locationFields.zip = formData.zip || formData.Zip || formData.postalCode || formData.PostalCode;
+    }
+
     const profilePayload: any = {
       data: {
         type: 'profile',
@@ -195,6 +217,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
           email: email,
           // Map common form fields
           ...(formData.name && { first_name: formData.name }),
+          ...(formData.Name && { first_name: formData.Name }),
           ...(formData.firstName && { first_name: formData.firstName }),
           ...(formData.first_name && { first_name: formData.first_name }),
           ...(formData.lastName && { last_name: formData.lastName }),
@@ -203,26 +226,10 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
           ...(formData.Phone && { phone_number: formData.Phone }),
           ...(formData.phoneNumber && { phone_number: formData.phoneNumber }),
           ...(formData.phone_number && { phone_number: formData.phone_number }),
-          // Map address fields directly (NOT as a location object!)
-          // Klaviyo uses: address1, address2, city, state, country, zip as direct attributes
-          ...((formData.address || formData.Address || formData.address1 || formData.Address1) && {
-            address1: formData.address || formData.Address || formData.address1 || formData.Address1
-          }),
-          ...((formData.address2 || formData.Address2) && {
-            address2: formData.address2 || formData.Address2
-          }),
-          ...((formData.city || formData.City || formData.location || formData.Location) && { 
-            city: formData.city || formData.City || formData.location || formData.Location 
-          }),
-          ...((formData.state || formData.State || formData.region || formData.Region) && {
-            state: formData.state || formData.State || formData.region || formData.Region
-          }),
-          ...((formData.country || formData.Country) && { country: formData.country || formData.Country }),
-          ...((formData.zip || formData.Zip || formData.postalCode || formData.PostalCode) && {
-            zip: formData.zip || formData.Zip || formData.postalCode || formData.PostalCode
-          }),
           // Add any other standard properties
           ...(formData.company && { organization: formData.company }),
+          // Location object (per Klaviyo API 2024-10-15)
+          ...(Object.keys(locationFields).length > 0 && { location: locationFields }),
         },
       },
     };
@@ -237,7 +244,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
       headers: {
         'Authorization': `Klaviyo-API-Key ${apiKey}`,
         'Content-Type': 'application/json',
-        'revision': '2024-10-15', // Use latest API version
+        'revision': '2026-01-15', // Use latest API version
       },
       body: JSON.stringify(profilePayload),
     });
@@ -254,7 +261,84 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
     throw error;
   }
 
-  // Step 2: Track Form Submission Event
+  // Step 2: Subscribe Profile with Email Consent
+  try {
+    // Subscribe profile to email marketing with SUBSCRIBED consent
+    // Reference: https://developers.klaviyo.com/en/reference/bulk_subscribe_profiles
+    // IMPORTANT: The payload structure requires nested profiles.data array with type/attributes,
+    // and subscriptions must use the nested email.marketing.consent structure
+    const subscribePayload: any = {
+      data: {
+        type: 'profile-subscription-bulk-create-job',
+        attributes: {
+          profiles: {
+            data: [
+              {
+                type: 'profile',
+                attributes: {
+                  email: email,
+                  subscriptions: {
+                    email: {
+                      marketing: {
+                        consent: 'SUBSCRIBED',
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    // If list ID is provided, add it via relationships (not attributes)
+    if (listId) {
+      subscribePayload.data.relationships = {
+        list: {
+          data: {
+            type: 'list',
+            id: listId,
+          },
+        },
+      };
+    }
+
+    const subscribeResponse = await fetch(`${KLAVIYO_BASE_URL}/profile-subscription-bulk-create-jobs/`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Klaviyo-API-Key ${apiKey}`,
+        'Content-Type': 'application/json',
+        'revision': '2026-01-15',
+      },
+      body: JSON.stringify(subscribePayload),
+    });
+
+    if (!subscribeResponse.ok) {
+      const errorText = await subscribeResponse.text();
+      console.warn('⚠️ Warning: Could not subscribe profile:', errorText);
+      // Don't throw - profile was created successfully, subscription is optional
+      results.subscription = { error: `Subscription failed: ${subscribeResponse.status} - ${errorText}` };
+    } else {
+      const subscribeText = await subscribeResponse.text();
+      if (subscribeText && subscribeText.trim().length > 0) {
+        try {
+          results.subscription = JSON.parse(subscribeText);
+        } catch {
+          results.subscription = { success: true, message: 'Profile subscribed with email consent' };
+        }
+      } else {
+        results.subscription = { success: true, message: 'Profile subscribed with email consent' };
+      }
+      console.log('✅ Profile subscribed with email consent (SUBSCRIBED)');
+    }
+  } catch (error) {
+    console.error('❌ Error subscribing profile:', error);
+    // Don't throw here - profile was created successfully
+    results.subscription = { error: error instanceof Error ? error.message : 'Unknown subscription error' };
+  }
+
+  // Step 3: Track Form Submission Event
   try {
     // Klaviyo Events API requires profile and metric to be wrapped in "data" objects
     // Reference: https://developers.klaviyo.com/en/reference/create_event
@@ -292,7 +376,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
       headers: {
         'Authorization': `Klaviyo-API-Key ${apiKey}`,
         'Content-Type': 'application/json',
-        'revision': '2024-10-15',
+        'revision': '2026-01-15',
       },
       body: JSON.stringify(eventPayload),
     });
@@ -320,7 +404,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
     results.event = { error: error instanceof Error ? error.message : 'Unknown error' };
   }
 
-  // Step 3: Add Profile to List (if list ID is provided)
+  // Step 4: Add Profile to List (if list ID is provided)
   if (listId) {
     try {
       // First, we need to get the profile ID from the created profile
@@ -338,7 +422,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
             headers: {
               'Authorization': `Klaviyo-API-Key ${apiKey}`,
               'Content-Type': 'application/json',
-              'revision': '2024-10-15',
+              'revision': '2026-01-15',
             },
           }
         );
@@ -370,7 +454,7 @@ async function sendToKlaviyo(formData: any, apiKey: string, listId?: string) {
             headers: {
               'Authorization': `Klaviyo-API-Key ${apiKey}`,
               'Content-Type': 'application/json',
-              'revision': '2024-10-15',
+              'revision': '2026-01-15',
             },
             body: JSON.stringify(listPayload),
           }

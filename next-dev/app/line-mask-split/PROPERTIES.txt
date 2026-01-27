@@ -1,0 +1,55 @@
+Text Mask Animation - Property Controls
+
+Trigger
+Controls when the animation starts. "Appear" triggers the animation immediately when the component loads. "Layer in View" triggers the animation when the component enters the viewport based on the Start position.
+
+Start
+Controls which part of the component triggers the animation when using "Layer in View" mode. "Top" triggers when the top of the component reaches the bottom of the viewport. "Center" triggers when the center of the component reaches the bottom of the viewport. "Bottom" triggers when the bottom of the component reaches the bottom of the viewport. Only visible when Trigger is set to "Layer in View".
+
+Replay
+When enabled, the animation reverses when the component scrolls out of view and replays when it scrolls back into view. Only visible when Trigger is set to "Layer in View".
+
+Per
+Controls how the text is split for animation. "Words" animates each word individually. "Characters" animates each character individually. "Lines" animates each line of text as a whole.
+
+Mask Lines
+When enabled, each line of text is masked to prevent overflow during animation. When disabled, text may overflow its container during the animation effect.
+
+Stagger
+Controls the delay in seconds between each element's animation start. Higher values create a more pronounced cascading effect. Range: 0 to 2 seconds.
+
+Animation
+A group of controls that define the initial animation state before elements animate into view. Configure opacity, scale, blur, rotation, and position offsets.
+
+Opacity
+The initial opacity of text elements before animation. 0 is fully transparent, 1 is fully opaque. Range: 0 to 1.
+
+Scale
+The initial scale of text elements before animation. 1 is normal size, values less than 1 make elements smaller, values greater than 1 make elements larger. Range: 0 to 4x.
+
+Blur
+The initial blur amount applied to text elements before animation in pixels. Higher values create more blur. Range: 0 to 100px.
+
+Rotate
+The initial rotation angle of text elements before animation in degrees. Positive values rotate clockwise, negative values rotate counterclockwise. Range: -360° to 360°.
+
+Offset X
+The initial horizontal offset of text elements before animation in pixels. Positive values shift right, negative values shift left. Range: -500 to 500px.
+
+Offset Y
+The initial vertical offset of text elements before animation in pixels. Positive values shift down, negative values shift up. Range: -500 to 500px.
+
+Transition
+Controls the animation timing and easing. Choose between tween (smooth transitions) or spring (physics-based) animations. Configure duration, easing curves, and spring physics parameters.
+
+Text
+The text content to display and animate. Supports multi-line text with line breaks.
+
+Color
+The text color. Can be any valid CSS color value including hex codes, RGB, or named colors.
+
+Font
+Extended font controls including font family, size, weight, style, decoration, letter spacing, and line height. Configure all typography properties for the text.
+
+Tag
+The HTML tag used to render the text element. Choose from h1-h6 for headings, p for paragraphs, or div/span for generic containers. More components at Framer University.
