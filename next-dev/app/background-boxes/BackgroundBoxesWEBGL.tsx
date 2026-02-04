@@ -5,6 +5,7 @@ import React, {
     useState,
     useLayoutEffect,
     useCallback,
+    useEffect,
 } from "react"
 import { motion } from "framer-motion"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
@@ -44,7 +45,7 @@ const DEFAULT_COLORS = [
  * @framerDisableUnlink
  */
 
-export default function BackgroundBoxes({
+export default function BackgroundBoxesWEBGL({
     backgroundColor,
     boxSize = 16,
     borderWidth,
@@ -58,9 +59,15 @@ export default function BackgroundBoxes({
     style,
 }: BackgroundBoxesProps) {
     const containerRef = useRef<HTMLDivElement>(null)
-    const zoomProbeRef = useRef<HTMLDivElement>(null)
+    const gridRef = useRef<HTMLDivElement>(null)
     const [rows, setRows] = useState(35)
     const [cols, setCols] = useState(35)
+    
+    // Track which boxes are currently colored with their colors and fade timers
+    const coloredBoxesRef = useRef<Map<string, { color: string; fadeStartTime: number | null }>>(new Map())
+    const [, forceUpdate] = useState({})
+    const lastHoveredRef = useRef<string | null>(null)
+    const rafIdRef = useRef<number | null>(null)
 
     // Use colors array directly, filtering out empty values
     const colors = useMemo(() => {
@@ -68,7 +75,6 @@ export default function BackgroundBoxes({
             return DEFAULT_COLORS
         }
 
-        // Filter out empty or invalid color values
         const validColors = colorsProp
             .filter(
                 (color): color is string =>
@@ -76,14 +82,13 @@ export default function BackgroundBoxes({
             )
             .map((color) => color.trim())
 
-        // Fallback to default colors if no valid colors provided
         return validColors.length > 0 ? validColors : DEFAULT_COLORS
     }, [colorsProp])
 
-    const getRandomColor = () => {
+    const getRandomColor = useCallback(() => {
         if (colors.length === 0) return DEFAULT_COLORS[0] || "rgb(125 211 252)"
         return colors[Math.floor(Math.random() * colors.length)]
-    }
+    }, [colors])
 
     // Calculate grid dimensions based on container size and rotation
     const calculateGrid = useCallback(() => {
@@ -93,47 +98,28 @@ export default function BackgroundBoxes({
         const w = container.clientWidth || container.offsetWidth || 1
         const h = container.clientHeight || container.offsetHeight || 1
 
-        // Convert rotation angles to radians
         const radX = Math.abs(rotateX) * (Math.PI / 180)
         const radY = Math.abs(rotateY) * (Math.PI / 180)
         const radZ = Math.abs(rotateZ) * (Math.PI / 180)
 
-        // Calculate the diagonal of the viewport - this is the worst-case dimension
         const diagonal = Math.sqrt(w * w + h * h)
 
-        // For 3D rotations, we need to account for:
-        // 1. RotateZ (2D rotation): expands bounding box
-        // 2. RotateX/Y (3D tilt): foreshortens the plane
-
-        // Calculate Z rotation expansion
         const cosZ = Math.abs(Math.cos(radZ))
         const sinZ = Math.abs(Math.sin(radZ))
         const zRotatedWidth = w * cosZ + h * sinZ
         const zRotatedHeight = w * sinZ + h * cosZ
 
-        // Calculate 3D tilt compensation factors
-        // When tilted, the plane appears smaller, so we need more coverage
-        // Use conservative minimums to ensure we always have enough
         const cosX = Math.max(Math.abs(Math.cos(radX)), 0.2)
         const cosY = Math.max(Math.abs(Math.cos(radY)), 0.2)
 
-        // Compensation factors: inverse of cosine (how much larger we need)
         const compensateX = 1 / cosX
         const compensateY = 1 / cosY
 
-        // Apply all compensations
-        // X rotation affects vertical dimension (height)
-        // Y rotation affects horizontal dimension (width)
         let requiredWidth = zRotatedWidth * compensateY
         let requiredHeight = zRotatedHeight * compensateX
 
-        // For extreme rotations, ensure we cover at least the diagonal
-        // This handles cases where combined rotations create very large projections
         requiredWidth = Math.max(requiredWidth, diagonal)
         requiredHeight = Math.max(requiredHeight, diagonal)
-
-        // Additional safety margin for edge cases (40% margin)
-        // This ensures corners and edges are always covered
 
         const calculatedCols = Math.ceil(
             (requiredWidth * safetyMargin) / boxSize
@@ -146,12 +132,11 @@ export default function BackgroundBoxes({
         setCols(Math.max(10, calculatedCols))
     }, [boxSize, rotateX, rotateY, rotateZ, safetyMargin])
 
-    // Handle resize with zoom probe method for canvas mode
+    // Handle resize
     useLayoutEffect(() => {
         const isCanvas = RenderTarget.current() === RenderTarget.canvas
 
         if (isCanvas) {
-            // Canvas mode: use zoom probe polling method
             let rafId = 0
             const TICK_MS = 100
             let lastCalc = 0
@@ -175,9 +160,7 @@ export default function BackgroundBoxes({
                 if (rafId) cancelAnimationFrame(rafId)
             }
         } else {
-            // Preview mode: use window resize events
-            calculateGrid() // Initial calculation
-
+            calculateGrid()
             window.addEventListener("resize", calculateGrid)
             return () => {
                 window.removeEventListener("resize", calculateGrid)
@@ -185,22 +168,136 @@ export default function BackgroundBoxes({
         }
     }, [calculateGrid])
 
-    // Initial calculation and recalculation when rotation changes
     useLayoutEffect(() => {
         calculateGrid()
     }, [calculateGrid, rotateX, rotateY, rotateZ])
 
-    // Calculate actual grid dimensions
     const gridWidth = cols * boxSize
     const gridHeight = rows * boxSize
 
-    // Boxes component
+    // Throttled mouse move handler
+    const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        // Throttle with requestAnimationFrame
+        if (rafIdRef.current !== null) return
+        
+        rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = null
+            
+            // Get the element directly under the cursor - this handles all transforms correctly
+            const elementUnderCursor = document.elementFromPoint(e.clientX, e.clientY)
+            if (!elementUnderCursor) return
+
+            // Check if it's a box element by looking for data attributes
+            const boxElement = elementUnderCursor.closest('[data-box]')
+            if (!boxElement) return
+
+            const row = parseInt(boxElement.getAttribute('data-row') || '-1', 10)
+            const col = parseInt(boxElement.getAttribute('data-col') || '-1', 10)
+
+            if (row < 0 || col < 0 || row >= rows || col >= cols) return
+
+            const key = `${row}-${col}`
+            
+            // If it's a new box or re-hovering a fading box
+            if (lastHoveredRef.current !== key) {
+                // If there was a previous box, start its fade
+                if (lastHoveredRef.current !== null) {
+                    const prevBoxData = coloredBoxesRef.current.get(lastHoveredRef.current)
+                    if (prevBoxData && prevBoxData.fadeStartTime === null) {
+                        prevBoxData.fadeStartTime = Date.now()
+                    }
+                }
+                
+                lastHoveredRef.current = key
+                
+                // Add or update color for this box (reset fade if it was fading)
+                const newColor = getRandomColor()
+                coloredBoxesRef.current.set(key, {
+                    color: newColor,
+                    fadeStartTime: null, // Reset fade - box is being hovered
+                })
+                forceUpdate({}) // Trigger re-render
+            }
+        })
+    }, [cols, rows, getRandomColor])
+    
+    // Clean up boxes that have finished fading
+    useEffect(() => {
+        const checkFades = () => {
+            const now = Date.now()
+            let needsUpdate = false
+            
+            coloredBoxesRef.current.forEach((boxData, key) => {
+                // Remove boxes that have finished fading
+                if (boxData.fadeStartTime !== null) {
+                    const elapsed = now - boxData.fadeStartTime
+                    if (elapsed >= outDuration * 1000) {
+                        coloredBoxesRef.current.delete(key)
+                        needsUpdate = true
+                    }
+                }
+            })
+            
+            if (needsUpdate) {
+                forceUpdate({})
+            }
+        }
+        
+        const interval = setInterval(checkFades, 16) // Check every frame
+        return () => clearInterval(interval)
+    }, [outDuration])
+
+    // Box component with animation
+    const Box = memo(({ row, col }: { row: number; col: number }) => {
+        const key = `${row}-${col}`
+        const boxData = coloredBoxesRef.current.get(key)
+        const color = boxData?.color
+        const isFading = boxData?.fadeStartTime !== null
+        
+        // Calculate target color - if fading, go to background/transparent
+        const targetColor = isFading 
+            ? (backgroundColor || "transparent")
+            : (color || "transparent")
+        
+        return (
+            <motion.div
+                data-box="true"
+                data-row={row}
+                data-col={col}
+                style={{
+                    width: `${boxSize}px`,
+                    height: `${boxSize}px`,
+                    flexShrink: 0,
+                    borderRight: borderWidth
+                        ? `${borderWidth}px solid ${borderColor}`
+                        : undefined,
+                    borderTop: borderWidth
+                        ? `${borderWidth}px solid ${borderColor}`
+                        : undefined,
+                    position: "relative",
+                    backgroundColor: color || "transparent",
+                }}
+                animate={{
+                    backgroundColor: targetColor,
+                }}
+                transition={{
+                    duration: isFading ? outDuration : 0,
+                    ease: "easeOut",
+                }}
+            />
+        )
+    })
+    Box.displayName = "Box"
+
+    // Boxes grid component
     const BoxesCore = () => {
-        const rowsArray = new Array(rows).fill(1)
-        const colsArray = new Array(cols).fill(1)
+        const rowsArray = useMemo(() => new Array(rows).fill(1), [])
+        const colsArray = useMemo(() => new Array(cols).fill(1), [])
 
         return (
             <div
+                ref={gridRef}
+                onMouseMove={handleMouseMove}
                 style={{
                     transform: `translate(-50%, -50%) rotateX(${rotateX}deg) rotateY(${rotateY}deg) rotateZ(${rotateZ}deg)`,
                     transformStyle: "preserve-3d",
@@ -216,7 +313,7 @@ export default function BackgroundBoxes({
                 }}
             >
                 {rowsArray.map((_, i) => (
-                    <motion.div
+                    <div
                         key={`row-${i}`}
                         style={{
                             display: "flex",
@@ -224,41 +321,16 @@ export default function BackgroundBoxes({
                                 ? `${borderWidth}px solid ${borderColor}`
                                 : undefined,
                             position: "relative",
-                            transformStyle: "preserve-3d",
                         }}
                     >
                         {colsArray.map((_, j) => (
-                            <motion.div
-                                key={`col-${j}`}
-                                whileHover={{
-                                    backgroundColor: getRandomColor(),
-                                    transition: { duration: 0 },
-                                }}
-                                transition={{
-                                    duration: outDuration,
-                                }}
-                                style={{
-                                    width: `${boxSize}px`,
-                                    height: `${boxSize}px`,
-                                    flexShrink: 0,
-                                    borderRight: borderWidth
-                                        ? `${borderWidth}px solid ${borderColor}`
-                                        : undefined,
-                                    borderTop: borderWidth
-                                        ? `${borderWidth}px solid ${borderColor}`
-                                        : undefined,
-                                    position: "relative",
-                                    transformStyle: "preserve-3d",
-                                }}
-                            />
+                            <Box key={`col-${j}`} row={i} col={j} />
                         ))}
-                    </motion.div>
+                    </div>
                 ))}
             </div>
         )
     }
-
-    const MemoizedBoxes = memo(BoxesCore)
 
     return (
         <div
@@ -275,24 +347,12 @@ export default function BackgroundBoxes({
                 transformStyle: "preserve-3d",
             }}
         >
-            {/* Hidden zoom probe for canvas mode */}
-            <div
-                ref={zoomProbeRef}
-                style={{
-                    position: "absolute",
-                    width: 20,
-                    height: 20,
-                    opacity: 0,
-                    pointerEvents: "none",
-                }}
-            />
-            {/* Background boxes */}
-            <MemoizedBoxes />
+            <BoxesCore />
         </div>
     )
 }
 
-addPropertyControls(BackgroundBoxes, {
+addPropertyControls(BackgroundBoxesWEBGL, {
     backgroundColor: {
         type: ControlType.Color,
         title: "Background",
@@ -351,7 +411,7 @@ addPropertyControls(BackgroundBoxes, {
         max: 10,
         step: 0.1,
         defaultValue: 0.5,
-        unit:"s"
+        unit: "s",
     },
     borderColor: {
         type: ControlType.Color,
@@ -381,4 +441,4 @@ addPropertyControls(BackgroundBoxes, {
     },
 })
 
-BackgroundBoxes.displayName = "Background Boxes"
+BackgroundBoxesWEBGL.displayName = "Background Boxes WEBGL"

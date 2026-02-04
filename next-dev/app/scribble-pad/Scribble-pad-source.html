@@ -1,0 +1,1353 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Drawing Widget with Turbulence</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+        background-color: #111111;
+        color: #fff;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
+      }
+
+      .widget-container {
+        width: 320px;
+      }
+
+      .canvas-container {
+        position: relative;
+        width: 292px;
+        height: 320px;
+        background-color: #333333;
+        overflow: hidden;
+        margin: 0 auto;
+      }
+
+      canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        cursor: crosshair;
+        touch-action: none;
+      }
+
+      .controls-wrapper {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        right: 12px;
+        height: 38px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        pointer-events: none;
+        transition: transform 0.3s ease, filter 0.3s ease, opacity 0.3s ease;
+      }
+
+      .controls-wrapper.depressed {
+        transform: scale(0.95);
+        filter: blur(4px);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        pointer-events: auto;
+      }
+
+      .clear-button {
+        height: 38px;
+        display: flex;
+        align-items: center;
+        padding: 0.5px 11px 1.5px 10px;
+        color: rgba(255, 255, 255, 0.5);
+        font-family: "Inter", sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        background-color: transparent;
+        border: none;
+        cursor: pointer;
+        border-radius: 19px;
+        z-index: 1;
+        transition: color 0.2s ease, transform 0.2s ease;
+        pointer-events: auto;
+        position: relative;
+        user-select: none;
+      }
+
+      .clear-button::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(255, 255, 255, 0);
+        border-radius: 19px;
+        z-index: -1;
+        transform: scale(0.85);
+        transition: background-color 0.2s ease, transform 0.2s ease;
+      }
+
+      .clear-button:hover::before {
+        background-color: rgba(255, 255, 255, 0.1);
+        transform: scale(1);
+      }
+
+      .clear-button:hover {
+        color: rgba(255, 255, 255, 0.9);
+      }
+
+      .clear-button:active {
+        transform: scale(0.9);
+      }
+
+      .stroke-selector {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background-color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s ease;
+      }
+
+      .stroke-selector:active {
+        transform: scale(0.9);
+      }
+
+      .stroke-indicator {
+        background-color: #666;
+        border-radius: 50%;
+      }
+
+      .color-selector {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background-color: white;
+        padding: 0;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease, background-color 0.15s ease;
+      }
+
+      .color-selector:hover {
+        background-color: #d9d9d9;
+      }
+
+      .color-selector:active {
+        transform: scale(0.9);
+      }
+
+      .color-indicator {
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+      }
+
+      .color-panel {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        right: 12px;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: transparent;
+        opacity: 0;
+        pointer-events: none;
+        overflow: visible;
+        transition: opacity 0.3s ease;
+      }
+
+      .color-panel.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .color-option-anim-wrapper {
+        transform: translateY(50px);
+        opacity: 0;
+      }
+
+      .color-panel.visible .color-option-anim-wrapper {
+        transform: translateY(0);
+        opacity: 1;
+      }
+
+      .color-option-scale-wrapper {
+        transform: scale(1);
+        transition: transform 0.2s ease;
+      }
+
+      .color-option-scale-wrapper.pressed {
+        transform: scale(0.9);
+      }
+
+      .color-option {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background-color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .color-option:hover .hover-dim {
+        opacity: 0.15;
+      }
+
+      .color-option-inner {
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+        position: relative;
+        z-index: 2;
+      }
+
+      .hover-dim {
+        position: absolute;
+        inset: 0;
+        background-color: black;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      .cancel-button {
+        background-color: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        transition: background-color 0.2s ease;
+      }
+
+      .cancel-button svg {
+        opacity: 0.5;
+        transition: opacity 0.2s ease;
+      }
+
+      .cancel-button:hover {
+        background-color: rgba(0, 0, 0, 0.65);
+      }
+
+      .cancel-button:hover svg {
+        opacity: 0.9;
+      }
+
+      .cancel-button .hover-dim {
+        display: none;
+      }
+
+      .stroke-panel {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        right: 12px;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: transparent;
+        opacity: 0;
+        pointer-events: none;
+        overflow: visible;
+        transition: opacity 0.3s ease;
+      }
+
+      .stroke-panel.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .stroke-option-anim-wrapper {
+        transform: translateY(50px);
+        opacity: 0;
+      }
+
+      .stroke-panel.visible .stroke-option-anim-wrapper {
+        transform: translateY(0);
+        opacity: 1;
+      }
+
+      .stroke-option-scale-wrapper {
+        transform: scale(1);
+        transition: transform 0.2s ease;
+      }
+
+      .stroke-option-scale-wrapper.pressed {
+        transform: scale(0.9);
+      }
+
+      .stroke-option {
+        width: 38px;
+        height: 38px;
+        border-radius: 19px;
+        background-color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .stroke-option.cancel-button {
+        border-radius: 10px;
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+
+      .stroke-option:hover .hover-dim {
+        opacity: 0.15;
+      }
+
+      .stroke-option-inner {
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        z-index: 2;
+      }
+
+      .stroke-circle {
+        background-color: #666;
+        border-radius: 50%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="widget-container">
+      <div class="canvas-container" data-widget-root>
+        <canvas id="drawingCanvas" width="292" height="320"></canvas>
+        <div class="controls-wrapper" id="controlsWrapper">
+          <button class="clear-button" id="clearButton">Clear</button>
+          <div class="controls">
+            <div class="stroke-selector" id="strokeSelector">
+              <div
+                class="stroke-indicator"
+                id="strokeIndicator"
+                style="width: 12px; height: 12px"
+              ></div>
+            </div>
+            <div class="color-selector" id="colorSelector">
+              <div
+                class="color-indicator"
+                id="colorIndicator"
+                style="background-color: #cc5de8"
+              ></div>
+            </div>
+          </div>
+        </div>
+        <div class="color-panel" id="colorPanel">
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option" data-color="#FF6B6B">
+                <div
+                  class="color-option-inner"
+                  style="background-color: #ff6b6b"
+                ></div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option" data-color="#FFA94D">
+                <div
+                  class="color-option-inner"
+                  style="background-color: #ffa94d"
+                ></div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option" data-color="#69DB7C">
+                <div
+                  class="color-option-inner"
+                  style="background-color: #69db7c"
+                ></div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option" data-color="#4DABF7">
+                <div
+                  class="color-option-inner"
+                  style="background-color: #4dabf7"
+                ></div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option" data-color="#CC5DE8">
+                <div
+                  class="color-option-inner"
+                  style="background-color: #cc5de8"
+                ></div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="color-option-anim-wrapper">
+            <div class="color-option-scale-wrapper">
+              <div class="color-option cancel-button">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M8 8L12.5 3.5M8 8L3.5 3.5M8 8L3.5 12.5M8 8L12.5 12.5"
+                    stroke="white"
+                    style="stroke: white; stroke-opacity: 1"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stroke-panel" id="strokePanel">
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option" data-width="8">
+                <div class="stroke-option-inner">
+                  <div class="stroke-circle" style="width: 8px; height: 8px"></div>
+                </div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option" data-width="10">
+                <div class="stroke-option-inner">
+                  <div
+                    class="stroke-circle"
+                    style="width: 10px; height: 10px"
+                  ></div>
+                </div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option" data-width="12">
+                <div class="stroke-option-inner">
+                  <div
+                    class="stroke-circle"
+                    style="width: 12px; height: 12px"
+                  ></div>
+                </div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option" data-width="14">
+                <div class="stroke-option-inner">
+                  <div
+                    class="stroke-circle"
+                    style="width: 14px; height: 14px"
+                  ></div>
+                </div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option" data-width="16">
+                <div class="stroke-option-inner">
+                  <div
+                    class="stroke-circle"
+                    style="width: 16px; height: 16px"
+                  ></div>
+                </div>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stroke-option-anim-wrapper">
+            <div class="stroke-option-scale-wrapper">
+              <div class="stroke-option cancel-button">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M8 8L12.5 3.5M8 8L3.5 3.5M8 8L3.5 12.5M8 8L12.5 12.5"
+                    stroke="white"
+                    style="stroke: white; stroke-opacity: 1"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <div class="hover-dim"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("drawingCanvas");
+      const context = canvas.getContext("2d");
+      const clearButton = document.getElementById("clearButton");
+      const strokeSelector = document.getElementById("strokeSelector");
+      const strokeIndicator = document.getElementById("strokeIndicator");
+      const colorSelector = document.getElementById("colorSelector");
+      const colorIndicator = document.getElementById("colorIndicator");
+
+      let debugEnabled = false;
+      try {
+        debugEnabled =
+          window.localStorage.getItem("vg-debug-widgets") === "1";
+      } catch {
+        debugEnabled = false;
+      }
+      const debugLog = (event, details) => {
+        if (!debugEnabled) {
+          return;
+        }
+        if (details) {
+          console.debug("[scribble-pad]", event, details);
+          return;
+        }
+        console.debug("[scribble-pad]", event);
+      };
+
+      let isDrawing = false;
+      let points = [];
+      let allStrokes = [
+        {
+          points: [
+            { x: 102.5, y: 83, t: 0 },
+            { x: 102.5, y: 83, t: 204 },
+            { x: 102.5, y: 83, t: 220 },
+            { x: 102.5, y: 84, t: 237 },
+            { x: 102.5, y: 85, t: 254 },
+            { x: 102.5, y: 86, t: 270 },
+            { x: 102.5, y: 87, t: 288 },
+            { x: 101.5, y: 89, t: 304 },
+            { x: 101.5, y: 90, t: 320 },
+            { x: 101.5, y: 91, t: 338 },
+            { x: 100.5, y: 92, t: 354 },
+            { x: 100.5, y: 92, t: 370 },
+            { x: 100.5, y: 93, t: 386 },
+            { x: 100.5, y: 94, t: 404 },
+            { x: 100.5, y: 95, t: 424 },
+            { x: 100.5, y: 95, t: 436 },
+            { x: 100.5, y: 96, t: 454 },
+            { x: 100.5, y: 97, t: 469 },
+            { x: 100.5, y: 97, t: 487 },
+            { x: 100.5, y: 98, t: 504 },
+            { x: 100.5, y: 99, t: 520 },
+            { x: 100.5, y: 99, t: 537 },
+            { x: 100.5, y: 100, t: 553 },
+            { x: 100.5, y: 101, t: 571 },
+            { x: 100.5, y: 102, t: 588 },
+            { x: 100.5, y: 103, t: 604 },
+            { x: 100.5, y: 104, t: 619 },
+            { x: 100.5, y: 105, t: 637 },
+            { x: 100.5, y: 106, t: 655 },
+            { x: 100.5, y: 107, t: 671 },
+            { x: 100.5, y: 108, t: 688 },
+            { x: 100.5, y: 109, t: 704 },
+            { x: 100.5, y: 110, t: 721 },
+            { x: 100.5, y: 111, t: 736 },
+            { x: 100.5, y: 112, t: 754 },
+            { x: 100.5, y: 113, t: 769 },
+            { x: 100.5, y: 114, t: 789 },
+            { x: 100.5, y: 115, t: 805 },
+            { x: 100.5, y: 115, t: 822 },
+            { x: 100.5, y: 116, t: 839 },
+            { x: 100.5, y: 117, t: 854 },
+            { x: 100.5, y: 118, t: 871 },
+            { x: 100.5, y: 119, t: 887 },
+            { x: 100.5, y: 119, t: 904 },
+            { x: 100.5, y: 120, t: 920 },
+            { x: 100.5, y: 121, t: 937 },
+            { x: 101.5, y: 122, t: 956 },
+            { x: 101.5, y: 123, t: 970 },
+            { x: 101.5, y: 124, t: 986 },
+            { x: 101.5, y: 124, t: 1004 },
+            { x: 101.5, y: 125, t: 1019 },
+            { x: 101.5, y: 126, t: 1038 },
+            { x: 102.5, y: 127, t: 1054 },
+            { x: 102.5, y: 128, t: 1071 },
+            { x: 102.5, y: 128, t: 1087 },
+            { x: 102.5, y: 129, t: 1104 },
+            { x: 102.5, y: 130, t: 1121 },
+            { x: 102.5, y: 130, t: 1136 },
+            { x: 102.5, y: 131, t: 1154 },
+            { x: 102.5, y: 131, t: 1171 },
+            { x: 102.5, y: 131, t: 1187 },
+            { x: 103.5, y: 132, t: 1205 },
+            { x: 103.5, y: 132, t: 1221 },
+          ],
+          color: "#69DB7C",
+          strokeWidth: 14,
+        },
+        {
+          points: [
+            { x: 165.5, y: 82, t: 0 },
+            { x: 165.5, y: 82, t: 153 },
+            { x: 165.5, y: 83, t: 169 },
+            { x: 165.5, y: 83, t: 185 },
+            { x: 165.5, y: 84, t: 202 },
+            { x: 165.5, y: 85, t: 220 },
+            { x: 165.5, y: 86, t: 236 },
+            { x: 165.5, y: 87, t: 252 },
+            { x: 165.5, y: 88, t: 268 },
+            { x: 164.5, y: 89, t: 286 },
+            { x: 164.5, y: 91, t: 303 },
+            { x: 164.5, y: 92, t: 320 },
+            { x: 164.5, y: 93, t: 335 },
+            { x: 164.5, y: 94, t: 352 },
+            { x: 164.5, y: 95, t: 368 },
+            { x: 164.5, y: 96, t: 386 },
+            { x: 164.5, y: 97, t: 402 },
+            { x: 164.5, y: 98, t: 420 },
+            { x: 164.5, y: 99, t: 437 },
+            { x: 164.5, y: 100, t: 454 },
+            { x: 164.5, y: 101, t: 469 },
+            { x: 164.5, y: 101, t: 485 },
+            { x: 164.5, y: 102, t: 502 },
+            { x: 163.5, y: 103, t: 519 },
+            { x: 163.5, y: 104, t: 536 },
+            { x: 163.5, y: 105, t: 554 },
+            { x: 163.5, y: 106, t: 570 },
+            { x: 163.5, y: 107, t: 586 },
+            { x: 163.5, y: 108, t: 603 },
+            { x: 163.5, y: 109, t: 620 },
+            { x: 163.5, y: 110, t: 638 },
+            { x: 163.5, y: 111, t: 653 },
+            { x: 163.5, y: 112, t: 670 },
+            { x: 163.5, y: 113, t: 686 },
+            { x: 163.5, y: 114, t: 702 },
+            { x: 163.5, y: 115, t: 718 },
+            { x: 163.5, y: 116, t: 735 },
+            { x: 163.5, y: 117, t: 752 },
+            { x: 164.5, y: 117, t: 769 },
+            { x: 164.5, y: 118, t: 787 },
+            { x: 164.5, y: 118, t: 803 },
+            { x: 164.5, y: 119, t: 818 },
+            { x: 164.5, y: 119, t: 835 },
+            { x: 164.5, y: 120, t: 852 },
+            { x: 164.5, y: 120, t: 869 },
+            { x: 164.5, y: 120, t: 886 },
+            { x: 165.5, y: 121, t: 904 },
+            { x: 165.5, y: 121, t: 920 },
+            { x: 165.5, y: 122, t: 936 },
+            { x: 165.5, y: 122, t: 953 },
+            { x: 165.5, y: 123, t: 970 },
+            { x: 165.5, y: 123, t: 985 },
+            { x: 165.5, y: 124, t: 1003 },
+            { x: 165.5, y: 124, t: 1020 },
+            { x: 165.5, y: 125, t: 1036 },
+            { x: 165.5, y: 125, t: 1053 },
+            { x: 165.5, y: 125, t: 1070 },
+          ],
+          color: "#4DABF7",
+          strokeWidth: 14,
+        },
+        {
+          points: [
+            { x: 55.5, y: 142, t: 0 },
+            { x: 55.5, y: 142, t: 187 },
+            { x: 55.5, y: 142, t: 204 },
+            { x: 55.5, y: 143, t: 221 },
+            { x: 55.5, y: 144, t: 237 },
+            { x: 55.5, y: 146, t: 254 },
+            { x: 55.5, y: 147, t: 270 },
+            { x: 55.5, y: 148, t: 287 },
+            { x: 55.5, y: 150, t: 304 },
+            { x: 55.5, y: 152, t: 321 },
+            { x: 55.5, y: 154, t: 337 },
+            { x: 55.5, y: 156, t: 354 },
+            { x: 56.5, y: 158, t: 371 },
+            { x: 56.5, y: 160, t: 387 },
+            { x: 57.5, y: 161, t: 403 },
+            { x: 57.5, y: 163, t: 421 },
+            { x: 58.5, y: 165, t: 438 },
+            { x: 58.5, y: 166, t: 453 },
+            { x: 58.5, y: 168, t: 471 },
+            { x: 59.5, y: 169, t: 487 },
+            { x: 59.5, y: 171, t: 504 },
+            { x: 60.5, y: 172, t: 521 },
+            { x: 60.5, y: 173, t: 538 },
+            { x: 60.5, y: 174, t: 554 },
+            { x: 61.5, y: 176, t: 571 },
+            { x: 61.5, y: 177, t: 589 },
+            { x: 62.5, y: 178, t: 607 },
+            { x: 63.5, y: 180, t: 621 },
+            { x: 64.5, y: 182, t: 637 },
+            { x: 65.5, y: 183, t: 654 },
+            { x: 66.5, y: 184, t: 671 },
+            { x: 67.5, y: 185, t: 690 },
+            { x: 68.5, y: 187, t: 706 },
+            { x: 69.5, y: 188, t: 722 },
+            { x: 71.5, y: 189, t: 738 },
+            { x: 72.5, y: 190, t: 755 },
+            { x: 72.5, y: 191, t: 771 },
+            { x: 73.5, y: 192, t: 788 },
+            { x: 74.5, y: 192, t: 804 },
+            { x: 75.5, y: 193, t: 823 },
+            { x: 77.5, y: 194, t: 838 },
+            { x: 78.5, y: 195, t: 854 },
+            { x: 79.5, y: 196, t: 871 },
+            { x: 81.5, y: 197, t: 888 },
+            { x: 83.5, y: 198, t: 904 },
+            { x: 85.5, y: 199, t: 922 },
+            { x: 87.5, y: 201, t: 938 },
+            { x: 88.5, y: 202, t: 955 },
+            { x: 90.5, y: 203, t: 972 },
+            { x: 92.5, y: 204, t: 987 },
+            { x: 94.5, y: 205, t: 1005 },
+            { x: 96.5, y: 205, t: 1021 },
+            { x: 98.5, y: 206, t: 1038 },
+            { x: 100.5, y: 207, t: 1057 },
+            { x: 101.5, y: 207, t: 1071 },
+            { x: 102.5, y: 207, t: 1087 },
+            { x: 104.5, y: 208, t: 1105 },
+            { x: 105.5, y: 208, t: 1121 },
+            { x: 108.5, y: 209, t: 1154 },
+            { x: 109.5, y: 209, t: 1171 },
+            { x: 110.5, y: 210, t: 1187 },
+            { x: 111.5, y: 210, t: 1204 },
+            { x: 113.5, y: 210, t: 1220 },
+            { x: 115.5, y: 211, t: 1236 },
+            { x: 116.5, y: 211, t: 1254 },
+            { x: 118.5, y: 211, t: 1271 },
+            { x: 120.5, y: 212, t: 1288 },
+            { x: 121.5, y: 212, t: 1305 },
+            { x: 123.5, y: 212, t: 1321 },
+            { x: 125.5, y: 212, t: 1337 },
+            { x: 127.5, y: 212, t: 1354 },
+            { x: 129.5, y: 212, t: 1371 },
+            { x: 131.5, y: 212, t: 1388 },
+            { x: 133.5, y: 212, t: 1404 },
+            { x: 135.5, y: 212, t: 1422 },
+            { x: 137.5, y: 212, t: 1437 },
+            { x: 139.5, y: 212, t: 1453 },
+            { x: 141.5, y: 212, t: 1471 },
+            { x: 142.5, y: 212, t: 1486 },
+            { x: 144.5, y: 212, t: 1504 },
+            { x: 146.5, y: 212, t: 1521 },
+            { x: 150.5, y: 212, t: 1554 },
+            { x: 152.5, y: 212, t: 1571 },
+            { x: 154.5, y: 212, t: 1586 },
+            { x: 156.5, y: 212, t: 1604 },
+            { x: 158.5, y: 212, t: 1620 },
+            { x: 160.5, y: 212, t: 1638 },
+            { x: 161.5, y: 211, t: 1654 },
+            { x: 163.5, y: 211, t: 1671 },
+            { x: 164.5, y: 211, t: 1687 },
+            { x: 166.5, y: 210, t: 1705 },
+            { x: 168.5, y: 210, t: 1721 },
+            { x: 169.5, y: 209, t: 1738 },
+            { x: 171.5, y: 209, t: 1754 },
+            { x: 173.5, y: 208, t: 1770 },
+            { x: 174.5, y: 208, t: 1787 },
+            { x: 176.5, y: 207, t: 1805 },
+            { x: 177.5, y: 207, t: 1820 },
+            { x: 178.5, y: 206, t: 1837 },
+            { x: 180.5, y: 205, t: 1853 },
+            { x: 181.5, y: 205, t: 1871 },
+            { x: 182.5, y: 204, t: 1888 },
+            { x: 183.5, y: 203, t: 1904 },
+            { x: 184.5, y: 202, t: 1921 },
+            { x: 185.5, y: 202, t: 1937 },
+            { x: 186.5, y: 201, t: 1954 },
+            { x: 187.5, y: 200, t: 1971 },
+            { x: 188.5, y: 199, t: 1987 },
+            { x: 189.5, y: 199, t: 2004 },
+            { x: 189.5, y: 198, t: 2021 },
+            { x: 190.5, y: 197, t: 2039 },
+            { x: 191.5, y: 197, t: 2053 },
+            { x: 192.5, y: 196, t: 2071 },
+            { x: 193.5, y: 195, t: 2088 },
+            { x: 194.5, y: 194, t: 2104 },
+            { x: 195.5, y: 193, t: 2121 },
+            { x: 195.5, y: 192, t: 2138 },
+            { x: 196.5, y: 192, t: 2153 },
+            { x: 197.5, y: 191, t: 2171 },
+            { x: 198.5, y: 190, t: 2188 },
+            { x: 199.5, y: 189, t: 2204 },
+            { x: 199.5, y: 188, t: 2221 },
+            { x: 200.5, y: 187, t: 2238 },
+            { x: 201.5, y: 186, t: 2255 },
+            { x: 202.5, y: 185, t: 2271 },
+            { x: 203.5, y: 184, t: 2288 },
+            { x: 203.5, y: 183, t: 2307 },
+            { x: 204.5, y: 182, t: 2321 },
+            { x: 205.5, y: 181, t: 2338 },
+            { x: 206.5, y: 180, t: 2355 },
+            { x: 206.5, y: 179, t: 2371 },
+            { x: 207.5, y: 178, t: 2388 },
+            { x: 207.5, y: 177, t: 2405 },
+            { x: 208.5, y: 175, t: 2420 },
+            { x: 208.5, y: 174, t: 2437 },
+            { x: 209.5, y: 173, t: 2456 },
+            { x: 209.5, y: 172, t: 2471 },
+            { x: 210.5, y: 171, t: 2487 },
+            { x: 210.5, y: 170, t: 2504 },
+            { x: 211.5, y: 169, t: 2520 },
+            { x: 211.5, y: 168, t: 2538 },
+            { x: 212.5, y: 166, t: 2554 },
+            { x: 212.5, y: 165, t: 2579 },
+            { x: 213.5, y: 164, t: 2587 },
+            { x: 213.5, y: 162, t: 2604 },
+            { x: 213.5, y: 161, t: 2621 },
+            { x: 214.5, y: 159, t: 2637 },
+            { x: 214.5, y: 158, t: 2654 },
+            { x: 214.5, y: 157, t: 2671 },
+            { x: 215.5, y: 156, t: 2690 },
+            { x: 215.5, y: 155, t: 2705 },
+            { x: 215.5, y: 154, t: 2722 },
+            { x: 215.5, y: 153, t: 2738 },
+            { x: 216.5, y: 152, t: 2754 },
+            { x: 216.5, y: 151, t: 2771 },
+            { x: 216.5, y: 149, t: 2788 },
+            { x: 216.5, y: 148, t: 2805 },
+            { x: 216.5, y: 146, t: 2821 },
+            { x: 216.5, y: 145, t: 2837 },
+            { x: 216.5, y: 144, t: 2871 },
+            { x: 216.5, y: 143, t: 2887 },
+            { x: 216.5, y: 142, t: 2904 },
+            { x: 216.5, y: 142, t: 2921 },
+            { x: 216.5, y: 142, t: 2938 },
+            { x: 216.5, y: 141, t: 2954 },
+            { x: 216.5, y: 141, t: 2971 },
+            { x: 216.5, y: 141, t: 2987 },
+            { x: 216.5, y: 141, t: 3005 },
+            { x: 216.5, y: 140, t: 3020 },
+            { x: 216.5, y: 140, t: 3054 },
+            { x: 216.5, y: 140, t: 3070 },
+          ],
+          color: "#CC5DE8",
+          strokeWidth: 14,
+        },
+      ];
+
+      let color = "#CC5DE8";
+      let strokeWidth = 12;
+      let turbulenceAmount = 0.65;
+      let baseAmount = 0.65;
+      let turbulenceFrequency = 0.5;
+      let baseFrequency = 0.5;
+      let animationSpeed = 2;
+      let frequencyVariation = 1;
+      let amountVariation = 1;
+      let startTime = 0;
+      let animationId = null;
+      let turbulenceTime = 0;
+      let strokeWidths = [8, 10, 12, 14, 16];
+
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.strokeStyle = color;
+      context.lineWidth = strokeWidth;
+
+      const dpr = window.devicePixelRatio || 1;
+      const initialRect = canvas.getBoundingClientRect();
+
+      canvas.style.width = `${initialRect.width}px`;
+      canvas.style.height = `${initialRect.height}px`;
+
+      canvas.width = initialRect.width * dpr;
+      canvas.height = initialRect.height * dpr;
+
+      context.scale(dpr, dpr);
+      redrawAllStrokes();
+
+      canvas.addEventListener("mousedown", startDrawing);
+      canvas.addEventListener("mousemove", draw);
+      canvas.addEventListener("mouseup", finishDrawing);
+      canvas.addEventListener("mouseleave", finishDrawing);
+      canvas.addEventListener("touchstart", handleTouch(startDrawing));
+      canvas.addEventListener("touchmove", handleTouch(draw));
+      canvas.addEventListener("touchend", finishDrawing);
+
+      clearButton.addEventListener("click", clearCanvas);
+      strokeSelector.addEventListener("click", toggleStrokePanel);
+      colorSelector.addEventListener("click", () => {
+        if (!colorPanel.classList.contains("visible")) {
+          updateAnimationTiming();
+        }
+
+        colorPanel.classList.toggle("visible");
+
+        if (colorPanel.classList.contains("visible")) {
+          controlsWrapper.classList.add("depressed");
+        } else {
+          controlsWrapper.classList.remove("depressed");
+        }
+      });
+
+      const controlsWrapper = document.getElementById("controlsWrapper");
+      const colorPanel = document.getElementById("colorPanel");
+      const strokePanel = document.getElementById("strokePanel");
+
+      document
+        .querySelectorAll(".color-option:not(.cancel-button)")
+        .forEach((option) => {
+          option.addEventListener("click", () => {
+            const newColor = option.getAttribute("data-color");
+            color = newColor;
+            colorIndicator.style.backgroundColor = newColor;
+
+            showControls();
+
+            if (points.length > 1) {
+              redrawCurrentStroke();
+            }
+          });
+        });
+
+      document
+        .querySelectorAll(".stroke-option:not(.cancel-button)")
+        .forEach((option) => {
+          option.addEventListener("click", () => {
+            const newWidth = parseInt(option.getAttribute("data-width"));
+            strokeWidth = newWidth;
+
+            strokeIndicator.style.width = `${newWidth}px`;
+            strokeIndicator.style.height = `${newWidth}px`;
+
+            showStrokeControls();
+
+            if (points.length > 1) {
+              redrawCurrentStroke();
+            }
+          });
+        });
+
+      document.querySelectorAll(".color-option").forEach((option) => {
+        const scaleWrapper = option.closest(".color-option-scale-wrapper");
+        if (!scaleWrapper) return;
+
+        const addPressed = () => scaleWrapper.classList.add("pressed");
+        const removePressed = () => scaleWrapper.classList.remove("pressed");
+
+        option.addEventListener("mousedown", addPressed);
+        option.addEventListener("touchstart", addPressed, { passive: true });
+
+        option.addEventListener("mouseup", removePressed);
+        option.addEventListener("mouseleave", removePressed);
+        option.addEventListener("touchend", removePressed);
+      });
+
+      document.querySelectorAll(".stroke-option").forEach((option) => {
+        const scaleWrapper = option.closest(".stroke-option-scale-wrapper");
+        if (!scaleWrapper) return;
+
+        const addPressed = () => scaleWrapper.classList.add("pressed");
+        const removePressed = () => scaleWrapper.classList.remove("pressed");
+
+        option.addEventListener("mousedown", addPressed);
+        option.addEventListener("touchstart", addPressed, { passive: true });
+
+        option.addEventListener("mouseup", removePressed);
+        option.addEventListener("mouseleave", removePressed);
+        option.addEventListener("touchend", removePressed);
+      });
+
+      document
+        .querySelector(".color-panel .cancel-button")
+        .addEventListener("click", (event) => {
+          event.stopPropagation();
+          showControls();
+        });
+
+      document
+        .querySelector(".stroke-panel .cancel-button")
+        .addEventListener("click", (event) => {
+          event.stopPropagation();
+          showStrokeControls();
+        });
+
+      startTurbulenceAnimation();
+
+      function getCoordinates(event) {
+        const rect = canvas.getBoundingClientRect();
+        const rectW = Math.max(1, rect.width);
+        const rectH = Math.max(1, rect.height);
+
+        // When the widget is "zoomed" via CSS transforms (e.g. parent scale),
+        // client coords are in the transformed space. Normalize back into the
+        // canvas drawing coordinate space (CSS px) using the rect vs backing store.
+        const toCanvasCssX = (clientX) =>
+          ((clientX - rect.left) * canvas.width) / rectW / dpr;
+        const toCanvasCssY = (clientY) =>
+          ((clientY - rect.top) * canvas.height) / rectH / dpr;
+
+        if (event.type.includes("touch")) {
+          return {
+            x: toCanvasCssX(event.touches[0].clientX),
+            y: toCanvasCssY(event.touches[0].clientY),
+          };
+        }
+
+        return {
+          x: toCanvasCssX(event.clientX),
+          y: toCanvasCssY(event.clientY),
+        };
+      }
+
+      function handleTouch(eventHandler) {
+        return function (event) {
+          event.preventDefault();
+          eventHandler(event);
+        };
+      }
+
+      function applyTurbulence(x, y, t) {
+        if (turbulenceAmount <= 0) return { x, y };
+
+        const offsetX =
+          Math.sin(x * turbulenceFrequency + t * 0.01) *
+          Math.sin(y * turbulenceFrequency * 0.5 + t * 0.02) *
+          turbulenceAmount;
+
+        const offsetY =
+          Math.sin(y * turbulenceFrequency + t * 0.015) *
+          Math.sin(x * turbulenceFrequency * 0.5 + t * 0.025) *
+          turbulenceAmount;
+
+        return {
+          x: x + offsetX,
+          y: y + offsetY,
+        };
+      }
+
+      function startDrawing(event) {
+        points = [];
+        startTime = Date.now();
+
+        const coords = getCoordinates(event);
+        points.push({ ...coords, t: 0 });
+
+        context.beginPath();
+        context.moveTo(coords.x, coords.y);
+
+        isDrawing = true;
+      }
+
+      function draw(event) {
+        if (!isDrawing) return;
+
+        const coords = getCoordinates(event);
+        const t = Date.now() - startTime;
+
+        points.push({ ...coords, t });
+
+        redrawCurrentStroke();
+      }
+
+      function finishDrawing() {
+        if (!isDrawing) return;
+
+        isDrawing = false;
+
+        allStrokes.push({
+          points: [...points],
+          color: color,
+          strokeWidth: strokeWidth,
+        });
+
+        redrawAllStrokes();
+      }
+
+      function redrawCurrentStroke() {
+        redrawAllStrokes();
+
+        if (points.length === 0) return;
+
+        if (points.length === 1) {
+          context.save();
+          context.fillStyle = color;
+          context.beginPath();
+          const point = points[0];
+          const turbulent = applyTurbulence(point.x, point.y, turbulenceTime);
+          context.arc(
+            turbulent.x,
+            turbulent.y,
+            strokeWidth / 2,
+            0,
+            Math.PI * 2,
+          );
+          context.fill();
+          context.restore();
+          return;
+        }
+
+        context.save();
+        context.strokeStyle = color;
+        context.lineWidth = strokeWidth;
+        context.lineCap = "round";
+        context.lineJoin = "round";
+
+        context.beginPath();
+
+        const firstPoint = points[0];
+        const firstTurbulent = applyTurbulence(
+          firstPoint.x,
+          firstPoint.y,
+          turbulenceTime,
+        );
+        context.moveTo(firstTurbulent.x, firstTurbulent.y);
+
+        for (let i = 1; i < points.length; i++) {
+          const point = points[i];
+          const turbulent = applyTurbulence(point.x, point.y, turbulenceTime);
+          context.lineTo(turbulent.x, turbulent.y);
+        }
+
+        context.stroke();
+        context.restore();
+      }
+
+      function redrawAllStrokes() {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (const stroke of allStrokes) {
+          context.save();
+          context.strokeStyle = stroke.color;
+          context.lineWidth = stroke.strokeWidth;
+          context.lineCap = "round";
+          context.lineJoin = "round";
+
+          if (stroke.points.length === 1) {
+            context.fillStyle = stroke.color;
+            context.beginPath();
+            const point = stroke.points[0];
+            const turbulent = applyTurbulence(point.x, point.y, turbulenceTime);
+            context.arc(
+              turbulent.x,
+              turbulent.y,
+              stroke.strokeWidth / 2,
+              0,
+              Math.PI * 2,
+            );
+            context.fill();
+          } else if (stroke.points.length > 1) {
+            context.beginPath();
+            const firstPoint = stroke.points[0];
+            const firstTurbulent = applyTurbulence(
+              firstPoint.x,
+              firstPoint.y,
+              turbulenceTime,
+            );
+            context.moveTo(firstTurbulent.x, firstTurbulent.y);
+
+            for (let i = 1; i < stroke.points.length; i++) {
+              const point = stroke.points[i];
+              const turbulent = applyTurbulence(point.x, point.y, turbulenceTime);
+              context.lineTo(turbulent.x, turbulent.y);
+            }
+
+            if (stroke.isFill) {
+              context.fillStyle = stroke.color;
+              context.fill();
+            } else {
+              context.stroke();
+            }
+          }
+
+          context.restore();
+        }
+      }
+
+      function clearCanvas() {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        points = [];
+        allStrokes = [];
+      }
+
+      function toggleStrokePanel() {
+        if (!strokePanel.classList.contains("visible")) {
+          updateAnimationTiming();
+        }
+
+        strokePanel.classList.toggle("visible");
+
+        if (strokePanel.classList.contains("visible")) {
+          controlsWrapper.classList.add("depressed");
+        } else {
+          controlsWrapper.classList.remove("depressed");
+        }
+      }
+
+      function showControls() {
+        controlsWrapper.classList.remove("depressed");
+
+        const elements = document.querySelectorAll(".color-option-anim-wrapper");
+        elements.forEach((element) => {
+          element.style.transitionDelay = "0s";
+        });
+
+        colorPanel.classList.remove("visible");
+      }
+
+      function showStrokeControls() {
+        controlsWrapper.classList.remove("depressed");
+
+        const elements = document.querySelectorAll(".stroke-option-anim-wrapper");
+        elements.forEach((element) => {
+          element.style.transitionDelay = "0s";
+        });
+
+        strokePanel.classList.remove("visible");
+      }
+
+      function updateAnimationTiming() {
+        const duration = 0.2;
+        const curve = "ease-out";
+
+        const colorElements = document.querySelectorAll(".color-option-anim-wrapper");
+        applyStaggerDelays(colorElements, curve, duration);
+
+        const strokeElements = document.querySelectorAll(".stroke-option-anim-wrapper");
+        applyStaggerDelays(strokeElements, curve, duration);
+      }
+
+      function applyStaggerDelays(elements, curve, duration) {
+        const totalElements = elements.length;
+
+        elements.forEach((element, index) => {
+          const position = (totalElements - 1 - index) / (totalElements - 1);
+          let delay;
+
+          delay = (1 - Math.pow(1 - position, 2)) * duration;
+
+          element.style.transitionDelay = `${delay}s`;
+          element.style.transitionDuration = `0.25s`;
+          element.style.transitionTimingFunction =
+            "cubic-bezier(0.175, 0.885, 0.32, 1.275)";
+        });
+      }
+
+      function startTurbulenceAnimation() {
+        if (animationId) {
+          clearInterval(animationId);
+        }
+
+        animationId = setInterval(() => {
+          const tickStart = performance.now();
+          turbulenceTime += animationSpeed;
+
+          turbulenceFrequency =
+            baseFrequency +
+            Math.sin(turbulenceTime * 0.8) * (baseFrequency * frequencyVariation);
+
+          if (amountVariation > 0) {
+            turbulenceAmount =
+              baseAmount +
+              Math.sin(turbulenceTime * 0.6) * (baseAmount * amountVariation);
+          } else {
+            turbulenceAmount = baseAmount;
+          }
+
+          if (allStrokes.length > 0 || isDrawing) {
+            if (isDrawing) {
+              redrawCurrentStroke();
+            } else {
+              redrawAllStrokes();
+            }
+          }
+          const tickMs = performance.now() - tickStart;
+          if (debugEnabled && tickMs > 24) {
+            debugLog("turbulence", {
+              ms: Math.round(tickMs),
+              strokes: allStrokes.length,
+              drawing: isDrawing,
+            });
+          }
+        }, 20); // ~60fps
+      }
+
+      function stopTurbulenceAnimation() {
+        if (animationId) {
+          clearInterval(animationId);
+          animationId = null;
+        }
+      }
+
+      // Listen for visibility state from parent to pause/resume animation
+      let isWidgetVisible = true;
+      window.addEventListener('message', (e) => {
+        const d = e && e.data;
+        if (d && d.type === 'widget-state') {
+          const wasVisible = isWidgetVisible;
+          isWidgetVisible = Boolean(d.visible);
+
+          // Pause/resume animation based on visibility
+          if (isWidgetVisible && !wasVisible) {
+            if (debugEnabled) {
+              debugLog("visibility", { visible: true });
+            }
+            startTurbulenceAnimation();
+          } else if (!isWidgetVisible && wasVisible) {
+            if (debugEnabled) {
+              debugLog("visibility", { visible: false });
+            }
+            stopTurbulenceAnimation();
+          }
+        }
+      });
+    </script>
+  </body>
+</html>
