@@ -1,9 +1,8 @@
 import { addPropertyControls, ControlType } from "framer"
 import { motion } from "framer-motion"
-import React, { useCallback, useMemo, useRef, useState } from "react"
+import React, { useCallback, useMemo, useRef } from "react"
 
 const DEFAULT_VIEWBOX = 14
-const CENTER = DEFAULT_VIEWBOX / 2
 const SAMPLE_POINTS = 8 // for flattening curves
 
 /** A single line segment: start (x1,y1) to end (x2,y2) */
@@ -14,44 +13,9 @@ export interface LineSegment {
     y2: number
 }
 
-/** Parsed icon with N line segments, optionally in a rotation group */
+/** Parsed icon with N line segments */
 export interface ParsedIcon {
     lines: LineSegment[]
-    rotationGroup?: string
-    rotationDegrees?: number // 0, 45, 90, 180, 270 - same group = rotate instead of morph
-}
-
-/** Rotate a point around (cx, cy) by degrees */
-function rotatePoint(
-    cx: number,
-    cy: number,
-    x: number,
-    y: number,
-    degrees: number
-): { x: number; y: number } {
-    const rad = (degrees * Math.PI) / 180
-    const cos = Math.cos(rad)
-    const sin = Math.sin(rad)
-    const dx = x - cx
-    const dy = y - cy
-    return {
-        x: cx + dx * cos - dy * sin,
-        y: cy + dx * sin + dy * cos,
-    }
-}
-
-/** Rotate all line segments around center */
-function rotateLines(
-    lines: LineSegment[],
-    cx: number,
-    cy: number,
-    degrees: number
-): LineSegment[] {
-    return lines.map((l) => {
-        const p1 = rotatePoint(cx, cy, l.x1, l.y1, degrees)
-        const p2 = rotatePoint(cx, cy, l.x2, l.y2, degrees)
-        return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y }
-    })
 }
 
 /**
@@ -522,12 +486,11 @@ function parseSvgToLines(
     return result
 }
 
-/** Default SVG icons: hamburger, cross (X), plus. Plus & cross share rotation group - same arm length */
-const DEFAULT_ICONS: Array<{ svg: string; rotationGroup?: string; rotationDegrees?: number }> = [
-    { svg: `<svg viewBox="0 0 14 14"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="12" y2="10"/></svg>`, rotationGroup: "", rotationDegrees: 0 },
-    // Cross = plus rotated 45°. Diagonals: center ± (5/√2, 5/√2) ≈ (3.5, 3.5) to (10.5, 10.5)
-    { svg: `<svg viewBox="0 0 14 14"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5"/><line x1="10.5" y1="3.5" x2="3.5" y2="10.5"/></svg>`, rotationGroup: "cross", rotationDegrees: 45 },
-    { svg: `<svg viewBox="0 0 14 14"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>`, rotationGroup: "cross", rotationDegrees: 0 },
+/** Default SVG icons: hamburger, cross (X), plus */
+const DEFAULT_ICONS: Array<{ svg: string }> = [
+    { svg: `<svg viewBox="0 0 14 14"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="12" y2="10"/></svg>` },
+    { svg: `<svg viewBox="0 0 14 14"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5"/><line x1="10.5" y1="3.5" x2="3.5" y2="10.5"/></svg>` },
+    { svg: `<svg viewBox="0 0 14 14"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>` },
 ]
 
 type TransitionValue = {
@@ -546,7 +509,8 @@ type TransitionValue = {
 type StrokeLinecap = "butt" | "round" | "square"
 
 interface MorphIconsProps {
-    icons?: Array<{ svg: string; rotationGroup?: string; rotationDegrees?: number }>
+    currentIcon?: number
+    icons?: Array<{ svg: string }>
     lineCount?: number
     strokeWidth?: number
     strokeColor?: string
@@ -568,6 +532,7 @@ interface MorphIconsProps {
  */
 export default function MorphIcons(props: MorphIconsProps) {
     const {
+        currentIcon: currentIconProp = 1,
         icons = [],
         lineCount = 3,
         strokeWidth = 2,
@@ -614,41 +579,29 @@ export default function MorphIcons(props: MorphIconsProps) {
                     typeof item === "string" ? item : item.svg,
                     clampedLineCount
                 ),
-                rotationGroup: item.rotationGroup || undefined,
-                rotationDegrees: item.rotationDegrees ?? 0,
             })
         )
     }, [iconList, clampedLineCount])
 
-    const [internalIndex, setInternalIndex] = useState(0)
     const len = Math.max(1, parsedIcons.length)
-    const currentIndex = internalIndex % len
-
-    const handleClick = useCallback(() => {
-        setInternalIndex((i) => (i + 1) % len)
-    }, [len])
+    // currentIcon prop is 1-based: 1 = first icon, 3 = third icon (Icons[2])
+    const currentIndex = Math.max(
+        0,
+        Math.min(Math.floor(currentIconProp) - 1, len - 1)
+    )
 
     const prevIndexRef = useRef(currentIndex)
-    const currentIcon = parsedIcons[currentIndex]
-    const prevIcon = parsedIcons[prevIndexRef.current]
     const isTransitioning = prevIndexRef.current !== currentIndex
+    const currentIcon = parsedIcons[currentIndex]
+    const prevIcon = parsedIcons[prevIndexRef.current] ?? currentIcon
 
-    const sameRotationGroup =
-        prevIcon &&
-        currentIcon &&
-        prevIcon.rotationGroup &&
-        currentIcon.rotationGroup &&
-        prevIcon.rotationGroup === currentIcon.rotationGroup
-
-    const useRotation = sameRotationGroup && isTransitioning
-
-    if (isTransitioning && !useRotation) {
-        prevIndexRef.current = currentIndex
-    }
-
-    const onRotationComplete = useCallback(() => {
+    const onMorphComplete = useCallback(() => {
         prevIndexRef.current = currentIndex
     }, [currentIndex])
+
+    if (!isTransitioning) {
+        prevIndexRef.current = currentIndex
+    }
 
     if (!currentIcon || currentIcon.lines.length === 0) {
         return (
@@ -669,57 +622,6 @@ export default function MorphIcons(props: MorphIconsProps) {
         )
     }
 
-    if (useRotation && prevIcon) {
-        const fromDeg = prevIcon.rotationDegrees ?? 0
-        const toDeg = currentIcon.rotationDegrees ?? 0
-        const baseLines = rotateLines(
-            prevIcon.lines,
-            CENTER,
-            CENTER,
-            -fromDeg
-        )
-
-        return (
-            <motion.svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox={`0 0 ${DEFAULT_VIEWBOX} ${DEFAULT_VIEWBOX}`}
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth={strokeWidth}
-                strokeLinecap={strokeLinecap}
-                strokeLinejoin="round"
-                style={{
-                    ...style,
-                    width: "100%",
-                    height: "100%",
-                    cursor: "pointer",
-                    overflow: "visible",
-                }}
-                onClick={handleClick}
-            >
-                <motion.g
-                    style={{
-                        transformOrigin: `${CENTER}px ${CENTER}px`,
-                    }}
-                    initial={{ rotate: fromDeg }}
-                    animate={{ rotate: toDeg }}
-                    transition={transitionConfig}
-                    onAnimationComplete={onRotationComplete}
-                >
-                    {baseLines.map((line, i) => (
-                        <line
-                            key={i}
-                            x1={line.x1}
-                            y1={line.y1}
-                            x2={line.x2}
-                            y2={line.y2}
-                        />
-                    ))}
-                </motion.g>
-            </motion.svg>
-        )
-    }
-
     const fromLines = isTransitioning && prevIcon ? prevIcon.lines : currentIcon.lines
 
     return (
@@ -729,16 +631,14 @@ export default function MorphIcons(props: MorphIconsProps) {
             fill="none"
             stroke={strokeColor}
             strokeWidth={strokeWidth}
-            strokeLinecap="round"
+            strokeLinecap={strokeLinecap}
             strokeLinejoin="round"
             style={{
                 ...style,
                 width: "100%",
                 height: "100%",
-                cursor: "pointer",
                 overflow: "visible",
             }}
-            onClick={handleClick}
         >
             {currentIcon.lines.map((line, i) => {
                 const from = fromLines[i] ?? fromLines[0] ?? line
@@ -757,6 +657,7 @@ export default function MorphIcons(props: MorphIconsProps) {
                             y2: line.y2,
                         }}
                         transition={transitionConfig}
+                        onAnimationComplete={i === currentIcon.lines.length - 1 ? onMorphComplete : undefined}
                     />
                 )
             })}
@@ -765,6 +666,7 @@ export default function MorphIcons(props: MorphIconsProps) {
 }
 
 MorphIcons.defaultProps = {
+    currentIcon: 1,
     icons: [],
     lineCount: 3,
     strokeWidth: 2,
@@ -773,33 +675,28 @@ MorphIcons.defaultProps = {
 }
 
 addPropertyControls(MorphIcons, {
+    currentIcon: {
+        type: ControlType.Number,
+        title: "Current icon",
+        min: 1,
+        max: 10,
+        step: 1,
+        defaultValue: 1,
+        description: "1 = first icon, 2 = second, 3 = third… Change via variants to morph.",
+    },
     icons: {
         type: ControlType.Array,
         title: "Icons",
         control: {
             type: ControlType.Object,
+            //@ts-ignore - Framer supports maxCount
+            maxCount: 10,
             controls: {
                 svg: {
                     type: ControlType.String,
                     title: "SVG",
                     displayTextArea: true,
                     placeholder: '<svg viewBox="0 0 14 14"><line x1="2" y1="4" x2="12" y2="4"/>...</svg>',
-                },
-                rotationGroup: {
-                    type: ControlType.String,
-                    title: "Group",
-                    placeholder: "cross",
-                    description: "Same group = rotate instead of morph",
-                },
-                rotationDegrees: {
-                    type: ControlType.Number,
-                    title: "Rotation",
-                    min: 0,
-                    max: 315,
-                    step: 45,
-                    defaultValue: 0,
-                    unit: "°",
-                    description: "Use with Rotation Group: plus=0, cross=45",
                 },
             },
         },

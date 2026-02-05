@@ -25,6 +25,11 @@ interface TrailPoint {
  * @framerDisableUnlink
  */
 export default function KineticGrid(props: {
+    clickInteraction?: boolean
+    clickProps?: {
+        clickForce?: number
+        motionSpeed?: number
+    }
     cursorTrail?: boolean
     cursorTrailProps?: {
         trailMode?: "click" | "hover"
@@ -44,6 +49,8 @@ export default function KineticGrid(props: {
     style?: React.CSSProperties
 }) {
     const {
+        clickInteraction = false,
+        clickProps = {},
         cursorTrail = false,
         cursorTrailProps = {},
         backgroundColor = "#121212",
@@ -57,6 +64,11 @@ export default function KineticGrid(props: {
         gridThickness = 0.5,
         baseOpacity = 0.09,
     } = props
+
+    const {
+        clickForce = 0,
+        motionSpeed = 1,
+    } = clickProps
 
     const {
         trailMode = "hover",
@@ -84,6 +96,9 @@ export default function KineticGrid(props: {
         dotSize,
         gridThickness,
         baseOpacity,
+        clickInteraction,
+        clickForce,
+        motionSpeed,
         cursorTrail,
         trailMode,
         trailLength,
@@ -109,6 +124,9 @@ export default function KineticGrid(props: {
             dotSize,
             gridThickness,
             baseOpacity,
+            clickInteraction,
+            clickForce,
+            motionSpeed,
             cursorTrail,
             trailMode,
             trailLength,
@@ -158,6 +176,9 @@ export default function KineticGrid(props: {
         dotSize,
         gridThickness,
         baseOpacity,
+        clickInteraction,
+        clickForce,
+        motionSpeed,
         cursorTrail,
         trailMode,
         trailLength,
@@ -254,8 +275,15 @@ export default function KineticGrid(props: {
         if (!ctx) return
 
         const maxDist = 400
-        const springStiffness = 0.08
-        const damping = 0.75
+        // Motion speed 0–1: maps to stiffness and damping (low = slow/floaty, 1 = snappy)
+        const getSpringParams = () => {
+            const speed = colorsRef.current.motionSpeed
+            const t = Math.max(0, Math.min(1, speed))
+            return {
+                springStiffness: 0.02 + t * 0.06,
+                damping: 0.70 + t * 0.05,
+            }
+        }
 
         // Get canvas container dimensions
         const getCanvasSize = () => {
@@ -353,6 +381,27 @@ export default function KineticGrid(props: {
             return {
                 x: dist > 0 ? (dx / dist) * pushAmount : 0,
                 y: dist > 0 ? (dy / dist) * pushAmount : 0,
+            }
+        }
+
+        // Extra repulsion from cursor while click is held (only when click interaction is on)
+        const getClickPush = (baseX: number, baseY: number) => {
+            if (!colorsRef.current.clickInteraction) return { x: 0, y: 0 }
+            if (!isMouseDownRef.current) return { x: 0, y: 0 }
+            const mouse = mousePosRef.current
+            const force = colorsRef.current.clickForce
+            if (!mouse || force <= 0) return { x: 0, y: 0 }
+
+            const dx = baseX - mouse.x
+            const dy = baseY - mouse.y
+            const dist = Math.sqrt(dx * dx + dy * dy)
+            if (dist === 0) return { x: 0, y: 0 }
+
+            const normalizedDist = Math.min(dist / maxDist, 1)
+            const pushAmount = Math.pow(1 - normalizedDist, 2) * force * 100
+            return {
+                x: (dx / dist) * pushAmount,
+                y: (dy / dist) * pushAmount,
             }
         }
 
@@ -454,6 +503,9 @@ export default function KineticGrid(props: {
                 }
             })
 
+            // Spring params from motionSpeed (once per frame)
+            const { springStiffness, damping } = getSpringParams()
+
             // Draw dots
             dotsRef.current.forEach((dot, key) => {
                 const [gxStr, gyStr] = key.split(",")
@@ -466,10 +518,12 @@ export default function KineticGrid(props: {
 
                 // Calculate push from cursor (repulsion/attraction)
                 const cursorPush = getCursorPush(baseX, baseY)
+                // Extra push away from cursor while click is held
+                const clickPush = getClickPush(baseX, baseY)
 
-                // Target position with repulsion/attraction
-                const targetX = baseX + cursorPush.x
-                const targetY = baseY + cursorPush.y
+                // Target position with repulsion/attraction + click force
+                const targetX = baseX + cursorPush.x + clickPush.x
+                const targetY = baseY + cursorPush.y + clickPush.y
 
                 // Spring physics
                 const forceX = (targetX - dot.x) * springStiffness
@@ -651,6 +705,37 @@ export default function KineticGrid(props: {
 }
 
 addPropertyControls(KineticGrid, {
+    clickInteraction:{
+        type: ControlType.Boolean,
+        title: "Click",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
+    clickProps:{
+        type: ControlType.Object,
+        title:"Click Props",
+        hidden: (props: any) => !props.clickInteraction,
+        controls: {
+            clickForce: {
+                type: ControlType.Number,
+                title: "Click Force",
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.1,
+                description:"Push away from cursor while click is held",
+            },
+            motionSpeed: {  
+                type: ControlType.Number,
+                title: "Snappyness",
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.1,
+            },
+        },
+    },  
     cursorTrail:{
         type: ControlType.Boolean,
         title: "Cursor Trail",
@@ -687,29 +772,14 @@ addPropertyControls(KineticGrid, {
             },
         }
     },
-    backgroundColor: {
-        type: ControlType.Color,
-        title: "Background",
-        defaultValue: "#121212",
-    },
     
-    gridColor: {
-        type: ControlType.Color,
-        title: "Grid",
-        defaultValue: "#FFFFFF",
-    },
-	gridThickness: {
+    gridThickness: {
         type: ControlType.Number,
-        title: "Thickness",
+        title: "Grid Stroke",
         defaultValue: 0.5,
         min: 0.1,
         max: 3,
         step: 0.1,
-    },
-    dotColor: {
-        type: ControlType.Color,
-        title: "Dots",
-        defaultValue: "#FFFFFF",
     },
 	dotSize: {
         type: ControlType.Number,
@@ -727,11 +797,7 @@ addPropertyControls(KineticGrid, {
         max: 1,
         step: 0.01,
     },
-    hoverColor: {
-        type: ControlType.Color,
-        title: "Hover",
-        defaultValue: "#0073FF",
-    },
+
     gridSize: {
         type: ControlType.Number,
         title: "Grid Size",
@@ -755,7 +821,30 @@ addPropertyControls(KineticGrid, {
         min: 50,
         max: 1000,
         step: 10,
-		description:"More components at [Framer University](https://frameruni.link/cc).",
+		
+    },
+    hoverColor: {
+        type: ControlType.Color,
+        title: "Hover",
+        defaultValue: "#0073FF",
+    },
+    backgroundColor: {
+        type: ControlType.Color,
+        title: "Background",
+        defaultValue: "#121212",
+    },
+    
+    gridColor: {
+        type: ControlType.Color,
+        title: "Grid",
+        defaultValue: "#FFFFFF",
+    },
+	
+    dotColor: {
+        type: ControlType.Color,
+        title: "Dots",
+        defaultValue: "#FFFFFF",
+        description:"More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 
