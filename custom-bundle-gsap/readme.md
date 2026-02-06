@@ -198,7 +198,11 @@ import { libraryFunction } from "https://raw.githubusercontent.com/your-username
 
 ## Example: GSAP Bundle
 
-See the `gsap-test/` folder for a complete example of bundling GSAP:
+See the `gsap-test/` folder for a complete example of bundling GSAP.
+
+## Example: GSAP + MorphSVGPlugin
+
+See the `gsap-morph-svg/` folder for a bundle that includes GSAP and MorphSVGPlugin (Club plugin). Replace `src/MorphSVGPlugin.js` with the official plugin from [GreenSock Club](https://greensock.com/club/), then run `npm run build`. Used by `next-dev/app/morph-icons/MorphIconsGsap.tsx`.
 
 - **package.json**: Contains GSAP and React dependencies
 - **rollup.config.js**: Rollup configuration for bundling

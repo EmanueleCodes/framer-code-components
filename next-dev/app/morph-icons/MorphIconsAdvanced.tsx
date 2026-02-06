@@ -1,9 +1,10 @@
-import { addPropertyControls, ControlType, RenderTarget } from "framer"
+import { addPropertyControls, ControlType } from "framer"
 import { motion } from "framer-motion"
 import React, { useCallback, useMemo, useRef } from "react"
 
 const DEFAULT_VIEWBOX = 14
 const SAMPLE_POINTS = 8 // for flattening curves
+const CIRCLE_SEGMENTS = 32 // number of points to sample circles/ellipses into
 
 /** A single line segment: start (x1,y1) to end (x2,y2) */
 export interface LineSegment {
@@ -325,6 +326,100 @@ function parseSvgWithDOM(
                 const b = normalize(pts[i + 1].x, pts[i + 1].y)
                 segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
             }
+        } else if (el.tagName === "circle") {
+            const circle = el as SVGCircleElement
+            const cx = parseFloat(circle.getAttribute("cx") ?? "0")
+            const cy = parseFloat(circle.getAttribute("cy") ?? "0")
+            const r = parseFloat(circle.getAttribute("r") ?? "0")
+            
+            // Sample circle into line segments
+            const circlePoints: { x: number; y: number }[] = []
+            for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
+                const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
+                const x = cx + r * Math.cos(angle)
+                const y = cy + r * Math.sin(angle)
+                const pt = m ? matrixTransform(m, x, y) : { x, y }
+                circlePoints.push(pt)
+            }
+            
+            for (let i = 0; i < circlePoints.length - 1; i++) {
+                const a = normalize(circlePoints[i].x, circlePoints[i].y)
+                const b = normalize(circlePoints[i + 1].x, circlePoints[i + 1].y)
+                segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+            }
+        } else if (el.tagName === "ellipse") {
+            const ellipse = el as SVGEllipseElement
+            const cx = parseFloat(ellipse.getAttribute("cx") ?? "0")
+            const cy = parseFloat(ellipse.getAttribute("cy") ?? "0")
+            const rx = parseFloat(ellipse.getAttribute("rx") ?? "0")
+            const ry = parseFloat(ellipse.getAttribute("ry") ?? "0")
+            
+            // Sample ellipse into line segments
+            const ellipsePoints: { x: number; y: number }[] = []
+            for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
+                const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
+                const x = cx + rx * Math.cos(angle)
+                const y = cy + ry * Math.sin(angle)
+                const pt = m ? matrixTransform(m, x, y) : { x, y }
+                ellipsePoints.push(pt)
+            }
+            
+            for (let i = 0; i < ellipsePoints.length - 1; i++) {
+                const a = normalize(ellipsePoints[i].x, ellipsePoints[i].y)
+                const b = normalize(ellipsePoints[i + 1].x, ellipsePoints[i + 1].y)
+                segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+            }
+        } else if (el.tagName === "rect") {
+            const rect = el as SVGRectElement
+            const x = parseFloat(rect.getAttribute("x") ?? "0")
+            const y = parseFloat(rect.getAttribute("y") ?? "0")
+            const width = parseFloat(rect.getAttribute("width") ?? "0")
+            const height = parseFloat(rect.getAttribute("height") ?? "0")
+            const rx = parseFloat(rect.getAttribute("rx") ?? "0")
+            const ry = parseFloat(rect.getAttribute("ry") ?? rx.toString())
+            
+            const rectPoints: { x: number; y: number }[] = []
+            
+            if (rx > 0 || ry > 0) {
+                // Rounded rectangle - sample corners
+                const corners = [
+                    { cx: x + rx, cy: y + ry, start: Math.PI, end: Math.PI * 1.5 }, // top-left
+                    { cx: x + width - rx, cy: y + ry, start: Math.PI * 1.5, end: Math.PI * 2 }, // top-right
+                    { cx: x + width - rx, cy: y + height - ry, start: 0, end: Math.PI * 0.5 }, // bottom-right
+                    { cx: x + rx, cy: y + height - ry, start: Math.PI * 0.5, end: Math.PI }, // bottom-left
+                ]
+                
+                const samplesPerCorner = Math.ceil(CIRCLE_SEGMENTS / 8)
+                corners.forEach(corner => {
+                    for (let i = 0; i <= samplesPerCorner; i++) {
+                        const angle = corner.start + (corner.end - corner.start) * (i / samplesPerCorner)
+                        const px = corner.cx + rx * Math.cos(angle)
+                        const py = corner.cy + ry * Math.sin(angle)
+                        const pt = m ? matrixTransform(m, px, py) : { x: px, y: py }
+                        rectPoints.push(pt)
+                    }
+                })
+            } else {
+                // Sharp corners
+                const corners = [
+                    { x, y },
+                    { x: x + width, y },
+                    { x: x + width, y: y + height },
+                    { x, y: y + height },
+                    { x, y }, // close the path
+                ]
+                
+                corners.forEach(corner => {
+                    const pt = m ? matrixTransform(m, corner.x, corner.y) : corner
+                    rectPoints.push(pt)
+                })
+            }
+            
+            for (let i = 0; i < rectPoints.length - 1; i++) {
+                const a = normalize(rectPoints[i].x, rectPoints[i].y)
+                const b = normalize(rectPoints[i + 1].x, rectPoints[i + 1].y)
+                segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+            }
         }
 
         for (const child of Array.from(el.children)) {
@@ -357,9 +452,10 @@ function pointsToLines(
     return lines
 }
 
-/** Parse SVG string to get all line segments (without normalizing count) */
-function parseSvgToSegments(
+/** Parse SVG string to array of line segments */
+function parseSvgToLines(
     svgString: string,
+    numLines: number,
     viewBoxSize: number = DEFAULT_VIEWBOX
 ): LineSegment[] {
     if (!svgString || typeof svgString !== "string") return []
@@ -382,84 +478,186 @@ function parseSvgToSegments(
         allSegments = []
 
         // <line x1="" y1="" x2="" y2="" transform="..."> - attributes can be in any order
-        const lineRegex = /<line\s([^>]+)>/gi
-        let m: RegExpExecArray | null
-        while ((m = lineRegex.exec(svg)) !== null) {
-            const attrs = m[1]
-            const x1 = parseFloat(attrs.match(/\bx1\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
-            const y1 = parseFloat(attrs.match(/\by1\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
-            const x2 = parseFloat(attrs.match(/\bx2\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
-            const y2 = parseFloat(attrs.match(/\by2\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
-            const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
-            const transform = parseTransform(transformMatch?.[1])
-            const p1 = transform(x1, y1)
-            const p2 = transform(x2, y2)
+    const lineRegex = /<line\s([^>]+)>/gi
+    let m: RegExpExecArray | null
+    while ((m = lineRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const x1 = parseFloat(attrs.match(/\bx1\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const y1 = parseFloat(attrs.match(/\by1\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const x2 = parseFloat(attrs.match(/\bx2\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const y2 = parseFloat(attrs.match(/\by2\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        const p1 = transform(x1, y1)
+        const p2 = transform(x2, y2)
+        const a = normalize(p1.x, p1.y)
+        const b = normalize(p2.x, p2.y)
+        allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+    }
+
+    // <path d="..." transform="...">
+    const pathRegex = /<path\s([^>]+)>/gi
+    while ((m = pathRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const dMatch = attrs.match(/\bd\s*=\s*["']([^"']+)["']/i)
+        if (!dMatch) continue
+        const pts = parsePathToSegments(dMatch[1], vb)
+        const pathLines = pointsToLines(pts, vb)
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        pathLines.forEach((l) => {
+            const p1 = transform(l.x1, l.y1)
+            const p2 = transform(l.x2, l.y2)
+            const a = normalize(p1.x, p1.y)
+            const b = normalize(p2.x, p2.y)
+            allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+        })
+    }
+
+    // <polyline points="x1,y1 x2,y2 ..." transform="...">
+    const polyRegex = /<polyline\s([^>]+)>/gi
+    while ((m = polyRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const pointsMatch = attrs.match(/\bpoints\s*=\s*["']([^"']+)["']/i)
+        if (!pointsMatch) continue
+        const pts = pointsMatch[1]
+            .trim()
+            .split(/[\s,]+/)
+            .reduce<{ x: number; y: number }[]>((acc, val, idx, arr) => {
+                if (idx % 2 === 1) {
+                    acc.push({
+                        x: parseFloat(arr[idx - 1]),
+                        y: parseFloat(val),
+                    })
+                }
+                return acc
+            }, [])
+        const polyLines = pointsToLines(pts, vb)
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        polyLines.forEach((l) => {
+            const p1 = transform(l.x1, l.y1)
+            const p2 = transform(l.x2, l.y2)
+            const a = normalize(p1.x, p1.y)
+            const b = normalize(p2.x, p2.y)
+            allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+        })
+    }
+
+    // <circle cx="" cy="" r="" transform="...">
+    const circleRegex = /<circle\s([^>]+)>/gi
+    while ((m = circleRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const cx = parseFloat(attrs.match(/\bcx\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const cy = parseFloat(attrs.match(/\bcy\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const r = parseFloat(attrs.match(/\br\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        
+        const circlePoints: { x: number; y: number }[] = []
+        for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
+            const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
+            const x = cx + r * Math.cos(angle)
+            const y = cy + r * Math.sin(angle)
+            circlePoints.push({ x, y })
+        }
+        
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        
+        for (let i = 0; i < circlePoints.length - 1; i++) {
+            const p1 = transform(circlePoints[i].x, circlePoints[i].y)
+            const p2 = transform(circlePoints[i + 1].x, circlePoints[i + 1].y)
             const a = normalize(p1.x, p1.y)
             const b = normalize(p2.x, p2.y)
             allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
         }
+    }
 
-        // <path d="..." transform="...">
-        const pathRegex = /<path\s([^>]+)>/gi
-        while ((m = pathRegex.exec(svg)) !== null) {
-            const attrs = m[1]
-            const dMatch = attrs.match(/\bd\s*=\s*["']([^"']+)["']/i)
-            if (!dMatch) continue
-            const pts = parsePathToSegments(dMatch[1], vb)
-            const pathLines = pointsToLines(pts, vb)
-            const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
-            const transform = parseTransform(transformMatch?.[1])
-            pathLines.forEach((l) => {
-                const p1 = transform(l.x1, l.y1)
-                const p2 = transform(l.x2, l.y2)
-                const a = normalize(p1.x, p1.y)
-                const b = normalize(p2.x, p2.y)
-                allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
-            })
+    // <ellipse cx="" cy="" rx="" ry="" transform="...">
+    const ellipseRegex = /<ellipse\s([^>]+)>/gi
+    while ((m = ellipseRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const cx = parseFloat(attrs.match(/\bcx\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const cy = parseFloat(attrs.match(/\bcy\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const rx = parseFloat(attrs.match(/\brx\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const ry = parseFloat(attrs.match(/\bry\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        
+        const ellipsePoints: { x: number; y: number }[] = []
+        for (let i = 0; i <= CIRCLE_SEGMENTS; i++) {
+            const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2
+            const x = cx + rx * Math.cos(angle)
+            const y = cy + ry * Math.sin(angle)
+            ellipsePoints.push({ x, y })
         }
-
-        // <polyline points="x1,y1 x2,y2 ..." transform="...">
-        const polyRegex = /<polyline\s([^>]+)>/gi
-        while ((m = polyRegex.exec(svg)) !== null) {
-            const attrs = m[1]
-            const pointsMatch = attrs.match(/\bpoints\s*=\s*["']([^"']+)["']/i)
-            if (!pointsMatch) continue
-            const pts = pointsMatch[1]
-                .trim()
-                .split(/[\s,]+/)
-                .reduce<{ x: number; y: number }[]>((acc, val, idx, arr) => {
-                    if (idx % 2 === 1) {
-                        acc.push({
-                            x: parseFloat(arr[idx - 1]),
-                            y: parseFloat(val),
-                        })
-                    }
-                    return acc
-                }, [])
-            const polyLines = pointsToLines(pts, vb)
-            const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
-            const transform = parseTransform(transformMatch?.[1])
-            polyLines.forEach((l) => {
-                const p1 = transform(l.x1, l.y1)
-                const p2 = transform(l.x2, l.y2)
-                const a = normalize(p1.x, p1.y)
-                const b = normalize(p2.x, p2.y)
-                allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
-            })
+        
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        
+        for (let i = 0; i < ellipsePoints.length - 1; i++) {
+            const p1 = transform(ellipsePoints[i].x, ellipsePoints[i].y)
+            const p2 = transform(ellipsePoints[i + 1].x, ellipsePoints[i + 1].y)
+            const a = normalize(p1.x, p1.y)
+            const b = normalize(p2.x, p2.y)
+            allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
         }
     }
 
-    return allSegments
-}
+    // <rect x="" y="" width="" height="" rx="" ry="" transform="...">
+    const rectRegex = /<rect\s([^>]+)>/gi
+    while ((m = rectRegex.exec(svg)) !== null) {
+        const attrs = m[1]
+        const x = parseFloat(attrs.match(/\bx\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const y = parseFloat(attrs.match(/\by\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const width = parseFloat(attrs.match(/\bwidth\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const height = parseFloat(attrs.match(/\bheight\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const rx = parseFloat(attrs.match(/\brx\s*=\s*["']?([\d.-]+)/i)?.[1] ?? "0")
+        const ry = parseFloat(attrs.match(/\bry\s*=\s*["']?([\d.-]+)/i)?.[1] ?? rx.toString())
+        
+        const rectPoints: { x: number; y: number }[] = []
+        
+        if (rx > 0 || ry > 0) {
+            // Rounded rectangle
+            const corners = [
+                { cx: x + rx, cy: y + ry, start: Math.PI, end: Math.PI * 1.5 },
+                { cx: x + width - rx, cy: y + ry, start: Math.PI * 1.5, end: Math.PI * 2 },
+                { cx: x + width - rx, cy: y + height - ry, start: 0, end: Math.PI * 0.5 },
+                { cx: x + rx, cy: y + height - ry, start: Math.PI * 0.5, end: Math.PI },
+            ]
+            
+            const samplesPerCorner = Math.ceil(CIRCLE_SEGMENTS / 8)
+            corners.forEach(corner => {
+                for (let i = 0; i <= samplesPerCorner; i++) {
+                    const angle = corner.start + (corner.end - corner.start) * (i / samplesPerCorner)
+                    const px = corner.cx + rx * Math.cos(angle)
+                    const py = corner.cy + ry * Math.sin(angle)
+                    rectPoints.push({ x: px, y: py })
+                }
+            })
+        } else {
+            // Sharp corners
+            rectPoints.push({ x, y })
+            rectPoints.push({ x: x + width, y })
+            rectPoints.push({ x: x + width, y: y + height })
+            rectPoints.push({ x, y: y + height })
+            rectPoints.push({ x, y })
+        }
+        
+        const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)
+        const transform = parseTransform(transformMatch?.[1])
+        
+        for (let i = 0; i < rectPoints.length - 1; i++) {
+            const p1 = transform(rectPoints[i].x, rectPoints[i].y)
+            const p2 = transform(rectPoints[i + 1].x, rectPoints[i + 1].y)
+            const a = normalize(p1.x, p1.y)
+            const b = normalize(p2.x, p2.y)
+            allSegments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y })
+        }
+    }
+    }
 
-/** Normalize line segments to exactly numLines, padding with collapsed lines or sampling */
-function normalizeLineCount(
-    segments: LineSegment[],
-    numLines: number,
-    viewBoxSize: number = DEFAULT_VIEWBOX
-): LineSegment[] {
-    if (segments.length === 0) return []
+    if (allSegments.length === 0) return []
 
+
+    // Normalize to exactly numLines
     const center = viewBoxSize / 2
     const collapsed: LineSegment = {
         x1: center,
@@ -468,11 +666,11 @@ function normalizeLineCount(
         y2: center,
     }
 
-    if (segments.length === numLines) {
-        return segments
+    if (allSegments.length === numLines) {
+        return allSegments
     }
-    if (segments.length < numLines) {
-        const result = [...segments]
+    if (allSegments.length < numLines) {
+        const result = [...allSegments]
         while (result.length < numLines) {
             result.push({ ...collapsed })
         }
@@ -481,22 +679,22 @@ function normalizeLineCount(
 
     // More segments than needed: distribute/sample
     const result: LineSegment[] = []
-    const step = segments.length / numLines
+    const step = allSegments.length / numLines
     for (let i = 0; i < numLines; i++) {
         const idx = Math.min(
             Math.floor(i * step),
-            segments.length - 1
+            allSegments.length - 1
         )
-        result.push({ ...segments[idx] })
+        result.push({ ...allSegments[idx] })
     }
     return result
 }
 
-/** Default SVG icons: hamburger, cross (X), plus */
+/** Default SVG icons: 3 circles, triangle, square - demonstrating shape morphing */
 const DEFAULT_ICONS: Array<{ svg: string }> = [
-    { svg: `<svg viewBox="0 0 14 14"><line x1="2" y1="4" x2="12" y2="4"/><line x1="2" y1="7" x2="12" y2="7"/><line x1="2" y1="10" x2="12" y2="10"/></svg>` },
-    { svg: `<svg viewBox="0 0 14 14"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5"/><line x1="10.5" y1="3.5" x2="3.5" y2="10.5"/></svg>` },
-    { svg: `<svg viewBox="0 0 14 14"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>` },
+    { svg: `<svg viewBox="0 0 14 14"><circle cx="4" cy="7" r="1.5"/><circle cx="7" cy="7" r="1.5"/><circle cx="10" cy="7" r="1.5"/></svg>` },
+    { svg: `<svg viewBox="0 0 14 14"><path d="M 7 3 L 11 10 L 3 10 Z"/></svg>` },
+    { svg: `<svg viewBox="0 0 14 14"><rect x="4" y="4" width="6" height="6"/></svg>` },
 ]
 
 type TransitionValue = {
@@ -517,6 +715,7 @@ type StrokeLinecap = "butt" | "round" | "square"
 interface MorphIconsProps {
     currentIcon?: number
     icons?: Array<{ svg: string }>
+    lineCount?: number
     strokeWidth?: number
     strokeColor?: string
     strokeLinecap?: StrokeLinecap
@@ -525,8 +724,9 @@ interface MorphIconsProps {
 }
 
 /**
- * Morphing Icons - Framer Code Component
- * Connect a series of SVGs and morph between them using line interpolation.
+ * Morphing Icons Advanced - Framer Code Component
+ * Morph between ANY SVG shapes including circles, rectangles, ellipses, and paths.
+ * Supports both linear (lines) and non-linear shapes (circles, ellipses, rects).
  * Based on https://benji.org/morphing-icons-with-claude
  *
  * @framerSupportedLayoutWidth any-prefer-fixed
@@ -535,18 +735,17 @@ interface MorphIconsProps {
  * @framerIntrinsicHeight 48
  * @framerDisableUnlink
  */
-export default function MorphIcons(props: MorphIconsProps) {
+export default function MorphIconsAdvanced(props: MorphIconsProps) {
     const {
         currentIcon: currentIconProp = 1,
         icons = [],
+        lineCount = 3,
         strokeWidth = 2,
         strokeColor = "currentColor",
         strokeLinecap = "round",
         transition: transitionProp,
         style = {},
     } = props
-
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
 
     const transitionConfig = useMemo(() => {
         const t = transitionProp ?? { type: "tween" as const, duration: 0.35, ease: "easeInOut" }
@@ -569,6 +768,7 @@ export default function MorphIcons(props: MorphIconsProps) {
         return config
     }, [transitionProp])
 
+    const clampedLineCount = Math.max(2, Math.min(100, lineCount))
     const iconList = useMemo(
         () =>
             icons.length > 0
@@ -577,26 +777,16 @@ export default function MorphIcons(props: MorphIconsProps) {
         [icons]
     )
 
-    // First pass: parse all icons to get their raw segments
-    const rawSegments = useMemo(() => {
-        return iconList.map((item) =>
-            parseSvgToSegments(typeof item === "string" ? item : item.svg)
-        )
-    }, [iconList])
-
-    // Find the maximum line count across all icons
-    const maxLineCount = useMemo(() => {
-        return Math.max(1, ...rawSegments.map((segs) => segs.length))
-    }, [rawSegments])
-
-    // Second pass: normalize all icons to the max line count
     const parsedIcons = useMemo(() => {
-        return rawSegments.map(
-            (segments): ParsedIcon => ({
-                lines: normalizeLineCount(segments, maxLineCount),
+        return iconList.map(
+            (item): ParsedIcon => ({
+                lines: parseSvgToLines(
+                    typeof item === "string" ? item : item.svg,
+                    clampedLineCount
+                ),
             })
         )
-    }, [rawSegments, maxLineCount])
+    }, [iconList, clampedLineCount])
 
     const len = Math.max(1, parsedIcons.length)
     // currentIcon prop is 1-based: 1 = first icon, 3 = third icon (Icons[2])
@@ -637,42 +827,6 @@ export default function MorphIcons(props: MorphIconsProps) {
         )
     }
 
-    // Static rendering for Framer canvas - no animations
-    if (isCanvas) {
-        return (
-            <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox={`0 0 ${DEFAULT_VIEWBOX} ${DEFAULT_VIEWBOX}`}
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth={strokeWidth}
-                strokeLinecap={strokeLinecap}
-                strokeLinejoin="round"
-                style={{
-                    ...style,
-                    width: "100%",
-                    height: "100%",
-                    overflow: "visible",
-                }}
-            >
-                {currentIcon.lines.map((line, i) => {
-                    // Skip collapsed lines (both endpoints are the same)
-                    const isCollapsed = line.x1 === line.x2 && line.y1 === line.y2
-                    if (isCollapsed) return null
-                    return (
-                        <line
-                            key={i}
-                            x1={line.x1}
-                            y1={line.y1}
-                            x2={line.x2}
-                            y2={line.y2}
-                        />
-                    )
-                })}
-            </svg>
-        )
-    }
-
     const fromLines = isTransitioning && prevIcon ? prevIcon.lines : currentIcon.lines
 
     return (
@@ -693,21 +847,12 @@ export default function MorphIcons(props: MorphIconsProps) {
         >
             {currentIcon.lines.map((line, i) => {
                 const from = fromLines[i] ?? fromLines[0] ?? line
-                // Check if the line is collapsed to a point (both endpoints are the same)
-                const isCollapsed = line.x1 === line.x2 && line.y1 === line.y2
-                const wasCollapsed = from.x1 === from.x2 && from.y1 === from.y2
                 return (
                     <motion.line
                         key={i}
                         initial={
                             isTransitioning
-                                ? { 
-                                    x1: from.x1, 
-                                    y1: from.y1, 
-                                    x2: from.x2, 
-                                    y2: from.y2,
-                                    opacity: wasCollapsed ? 0 : 1,
-                                  }
+                                ? { x1: from.x1, y1: from.y1, x2: from.x2, y2: from.y2 }
                                 : false
                         }
                         animate={{
@@ -715,7 +860,6 @@ export default function MorphIcons(props: MorphIconsProps) {
                             y1: line.y1,
                             x2: line.x2,
                             y2: line.y2,
-                            opacity: isCollapsed ? 0 : 1,
                         }}
                         transition={transitionConfig}
                         onAnimationComplete={i === currentIcon.lines.length - 1 ? onMorphComplete : undefined}
@@ -726,22 +870,24 @@ export default function MorphIcons(props: MorphIconsProps) {
     )
 }
 
-MorphIcons.defaultProps = {
+MorphIconsAdvanced.defaultProps = {
     currentIcon: 1,
     icons: [],
+    lineCount: 32,
     strokeWidth: 2,
     strokeColor: "currentColor",
     strokeLinecap: "round" as StrokeLinecap,
 }
 
-addPropertyControls(MorphIcons, {
+addPropertyControls(MorphIconsAdvanced, {
     currentIcon: {
         type: ControlType.Number,
-        title: "Icon",
+        title: "Current icon",
         min: 1,
         max: 10,
         step: 1,
         defaultValue: 1,
+        description: "1 = first icon, 2 = second, 3 = third… Change via variants to morph.",
     },
     icons: {
         type: ControlType.Array,
@@ -755,11 +901,20 @@ addPropertyControls(MorphIcons, {
                     type: ControlType.String,
                     title: "SVG",
                     displayTextArea: true,
-                    placeholder: '<svg viewBox="0 0 14 14"><line x1="2" y1="4" x2="12" y2="4"/>...</svg>',
+                    placeholder: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="3"/>...</svg>',
                 },
             },
         },
         defaultValue: DEFAULT_ICONS,
+    },
+    lineCount: {
+        type: ControlType.Number,
+        title: "Segments",
+        min: 2,
+        max: 100,
+        step: 1,
+        defaultValue: 32,
+        description: "Number of line segments to use for morphing. More = smoother for circles/curves",
     },
     strokeWidth: {
         type: ControlType.Number,
@@ -792,5 +947,3 @@ addPropertyControls(MorphIcons, {
         },
     },
 })
-
-MorphIcons.displayName = "Morph Icons"

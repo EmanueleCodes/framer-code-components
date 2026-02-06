@@ -57,6 +57,8 @@ const SHEEN_STRENGTH = 0.6
 const SHEEN_TILT_SHIFT = 0.05
 const SHEEN_TILT_DEADZONE = 0.035
 const ANIM_SPEED = 1.92
+const HOLO_MOTION_BUMP = 0.15
+const HOLO_MOTION_DECAY = 0.88
 
 // ============================================================================
 // WebGL Shaders (from original source)
@@ -125,6 +127,7 @@ uniform float uSheenTiltShift;
 uniform float uSheenTiltDeadzone;
 uniform float uMaxTiltDeg;
 uniform float uHoloMode;
+uniform float uHoloMotion;
 varying vec2 vUV;
 varying float vHi;
 varying float vSh;
@@ -161,7 +164,7 @@ void main() {
     float gradient = fract(vUV.x * 0.5 + vUV.y * 0.5 + uTilt.x * uSheenTiltShift + uTilt.y * uSheenTiltShift);
     
     if (uHoloMode > 0.5) {
-        float holoStrength = uSheenStrength;
+        float holoStrength = uSheenStrength * uHoloMotion;
         float distFromWhite = length(tex.rgb - vec3(1.0));
         float nonWhiteMask = smoothstep(0.06, 0.22, distFromWhite);
         vec3 rainbow = hsl2rgb(gradient, 0.8, 0.55);
@@ -336,6 +339,11 @@ export default function StickerDrag({
         dragTiltY: 0,
         currentTiltX: 0,
         currentTiltY: 0,
+        prevTiltX: 0,
+        prevTiltY: 0,
+
+        // Holo: only visible while cursor is moving (tilt changing)
+        holoMotion: 0,
 
         // Velocity tracking
         lastMoveX: 0,
@@ -411,6 +419,10 @@ export default function StickerDrag({
             gl.getUniformLocation(program, "uHoloMode"),
             sheenMode === "holo" ? 1.0 : 0.0
         )
+        gl.uniform1f(
+            gl.getUniformLocation(program, "uHoloMotion"),
+            state.holoMotion
+        )
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, texture)
@@ -473,24 +485,38 @@ export default function StickerDrag({
                 }
             }
 
+            // In holo mode, decay motion so effect fades when cursor stops moving
+            const holoDecayActive =
+                sheenMode === "holo" && state.holoMotion > 0.005
+            if (holoDecayActive) {
+                state.holoMotion *= HOLO_MOTION_DECAY
+                if (state.holoMotion < 0.005) state.holoMotion = 0
+                changed = true
+            }
+
             if (changed) {
                 updateShadowCSS()
             }
 
-            // Redraw while held or animating
-            if (changed || state.held) {
+            // Redraw while held, animating, or holo fading
+            if (changed || state.held || holoDecayActive) {
                 draw()
             }
 
             // Continue ticking if needed
-            if (state.held || state.peeling || state.sticking) {
+            if (
+                state.held ||
+                state.peeling ||
+                state.sticking ||
+                holoDecayActive
+            ) {
                 animationRef.current = requestAnimationFrame(tick)
             } else {
                 animationRef.current = null
                 lastTickTRef.current = null
             }
         },
-        [draw, updateShadowCSS]
+        [draw, updateShadowCSS, sheenMode]
     )
 
     // Start animation loop
@@ -851,6 +877,19 @@ export default function StickerDrag({
             state.currentTiltX = state.dragTiltX
             state.currentTiltY = state.dragTiltY
 
+            // In holo mode, show effect only while tilting (cursor moving)
+            if (sheenMode === "holo") {
+                const tiltDelta =
+                    Math.abs(state.dragTiltX - state.prevTiltX) +
+                    Math.abs(state.dragTiltY - state.prevTiltY)
+                state.holoMotion = Math.min(
+                    1,
+                    state.holoMotion + tiltDelta * HOLO_MOTION_BUMP
+                )
+                state.prevTiltX = state.dragTiltX
+                state.prevTiltY = state.dragTiltY
+            }
+
             // Apply CSS 3D transform for tilt
             inner.style.transform = `rotateX(${state.dragTiltX}deg) rotateY(${state.dragTiltY}deg)`
         }
@@ -897,6 +936,8 @@ export default function StickerDrag({
                     state.dragTiltY = 0
                     state.currentTiltX = 0
                     state.currentTiltY = 0
+                    state.prevTiltX = 0
+                    state.prevTiltY = 0
                     if (inner) {
                         inner.style.transform = ""
                     }
@@ -904,7 +945,7 @@ export default function StickerDrag({
             }
             settleTilt()
 
-            // Continue animation for paste
+            // Continue animation for paste (and holo fade in holo mode)
             ensureTickRunning()
         }
 
@@ -915,7 +956,7 @@ export default function StickerDrag({
             window.removeEventListener("mousemove", handleMouseMove)
             window.removeEventListener("mouseup", handleMouseUp)
         }
-    }, [tiltSensitivity, tiltSmoothing, ensureTickRunning])
+    }, [tiltSensitivity, tiltSmoothing, ensureTickRunning, sheenMode])
 
     // Touch handlers
     const handleTouchStart = useCallback(
@@ -1006,6 +1047,18 @@ export default function StickerDrag({
             state.currentTiltX = state.dragTiltX
             state.currentTiltY = state.dragTiltY
 
+            if (sheenMode === "holo") {
+                const tiltDelta =
+                    Math.abs(state.dragTiltX - state.prevTiltX) +
+                    Math.abs(state.dragTiltY - state.prevTiltY)
+                state.holoMotion = Math.min(
+                    1,
+                    state.holoMotion + tiltDelta * HOLO_MOTION_BUMP
+                )
+                state.prevTiltX = state.dragTiltX
+                state.prevTiltY = state.dragTiltY
+            }
+
             inner.style.transform = `rotateX(${state.dragTiltX}deg) rotateY(${state.dragTiltY}deg)`
         }
 
@@ -1049,6 +1102,8 @@ export default function StickerDrag({
                     state.dragTiltY = 0
                     state.currentTiltX = 0
                     state.currentTiltY = 0
+                    state.prevTiltX = 0
+                    state.prevTiltY = 0
                     if (inner) {
                         inner.style.transform = ""
                     }
@@ -1068,7 +1123,7 @@ export default function StickerDrag({
             window.removeEventListener("touchmove", handleTouchMove)
             window.removeEventListener("touchend", handleTouchEnd)
         }
-    }, [tiltSensitivity, tiltSmoothing, ensureTickRunning])
+    }, [tiltSensitivity, tiltSmoothing, ensureTickRunning, sheenMode])
 
     return (
         <div
@@ -1135,7 +1190,7 @@ addPropertyControls(StickerDrag, {
         type: ControlType.Number,
         title: "Tilt",
         min: 0.5,
-        max: 10,
+        max: 20,
         step: 0.5,
         defaultValue: DRAG_TILT_SENSITIVITY,
     },

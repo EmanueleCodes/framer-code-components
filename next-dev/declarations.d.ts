@@ -131,3 +131,12 @@ declare module "@tsparticles/slim" {
 
   export function loadSlim(engine: Engine): Promise<void>
 }
+
+// GSAP + MorphSVGPlugin local bundle (custom-bundle-gsap/gsap-morph-svg)
+declare module "*/custom-bundle-gsap/gsap-morph-svg/dist/bundle.js" {
+  export const gsap: {
+    to: (target: object, vars: Record<string, unknown>) => { kill: () => void }
+    registerPlugin: (...plugins: unknown[]) => void
+  }
+  export const MorphSVGPlugin: object
+}
