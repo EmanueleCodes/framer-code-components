@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useCallback } from "react"
-import { addPropertyControls, ControlType } from "framer"
+import React, { useEffect, useRef, useCallback, useState } from "react"
+import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
 // ============================================================================
@@ -25,6 +25,9 @@ interface StickerDragProps {
     tiltSmoothing?: number
     sheenStrength?: number
     sheenMode?: "sheen" | "holo"
+    elevation?: number // controls how much the sticker lifts during wave animation
+    staticShadow?: string // shadow at rest (CSS box-shadow format)
+    dynamicShadow?: string // shadow when dragging/peeling (CSS box-shadow format)
     style?: React.CSSProperties
 }
 
@@ -33,7 +36,7 @@ interface StickerDragProps {
 // ============================================================================
 
 const RENDER_SCALE = 2
-const PAD = 20
+const PAD_BASE = 20 // Base padding in pixels
 const MESH_GRID_SIZE = 32 // Must use grid for smooth wave deformation
 const DRAG_Z_INDEX_BASE = 1000 // Base z-index for dragged stickers
 
@@ -72,6 +75,7 @@ uniform float uLift;
 uniform float uPeelAngle;
 uniform float uPasting;
 uniform float uScale;
+uniform float uElevation;
 varying vec2 vUV;
 varying float vHi;
 varying float vSh;
@@ -96,8 +100,8 @@ void main() {
         float lifted = smoothstep(peelLine - rampWidth, peelLine, diag);
         lifted = 1.0 - lifted;
         
-        // Scale based on how lifted
-        float scale = 1.0 + lifted * 0.12;
+        // Scale based on how lifted (uElevation controls magnitude)
+        float scale = 1.0 + lifted * uElevation;
         p *= scale;
         
         // Curve outward at the ramp (creates the bent paper look)
@@ -245,14 +249,96 @@ function calculateContainedDimensions(
  * @framerIntrinsicHeight 400
  * @framerDisableUnlink
  */
+const ELEVATION_DEFAULT = 0.12 // how much the sticker scales/lifts during peel animation
+const STATIC_SHADOW_DEFAULT = "0px 1px 2px 0px rgba(0, 0, 0, 0.30)"
+const DYNAMIC_SHADOW_DEFAULT = "0px 13px 14px 0px rgba(0, 0, 0, 0.30)"
+
+// Property panel uses 0–1 (elevation) and 0.1–1 (tilt); map to internal ranges
+const TILT_DISPLAY_MIN = 0.1
+const TILT_DISPLAY_MAX = 1
+const TILT_INTERNAL_MIN = 0.5
+const TILT_INTERNAL_MAX = 20
+const ELEVATION_INTERNAL_MAX = 0.3
+
+function mapTiltDisplayToInternal(display: number): number {
+    const d = Math.max(TILT_DISPLAY_MIN, Math.min(TILT_DISPLAY_MAX, display))
+    const t = (d - TILT_DISPLAY_MIN) / (TILT_DISPLAY_MAX - TILT_DISPLAY_MIN)
+    return TILT_INTERNAL_MIN + t * (TILT_INTERNAL_MAX - TILT_INTERNAL_MIN)
+}
+
+function mapElevationDisplayToInternal(display: number): number {
+    const d = Math.max(0, Math.min(1, display))
+    return d * ELEVATION_INTERNAL_MAX
+}
+
+// Default display values for property controls (map from internal defaults)
+const TILT_DEFAULT_DISPLAY =
+    TILT_DISPLAY_MIN +
+    ((DRAG_TILT_SENSITIVITY - TILT_INTERNAL_MIN) / (TILT_INTERNAL_MAX - TILT_INTERNAL_MIN)) *
+        (TILT_DISPLAY_MAX - TILT_DISPLAY_MIN)
+const ELEVATION_DEFAULT_DISPLAY = ELEVATION_DEFAULT / ELEVATION_INTERNAL_MAX
+
+// Helper to parse CSS box-shadow into drop-shadow parameters
+// box-shadow: offset-x offset-y blur spread color
+// drop-shadow: offset-x offset-y blur color (no spread)
+interface ParsedShadow {
+    x: number
+    y: number
+    blur: number
+    color: string
+}
+
+function parseBoxShadow(shadow: string): ParsedShadow {
+    // Default values
+    const result: ParsedShadow = { x: 0, y: 0, blur: 0, color: "rgba(0,0,0,0.3)" }
+
+    if (!shadow) return result
+
+    // Extract color (rgba, rgb, or hex)
+    const colorMatch = shadow.match(
+        /(rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}|\b[a-z]+\b(?=\s*$))/i
+    )
+    if (colorMatch) {
+        result.color = colorMatch[0]
+    }
+
+    // Extract numeric values (px values)
+    const numbers = shadow.match(/-?\d+(\.\d+)?(px)?/g)
+    if (numbers) {
+        const vals = numbers.map((n) => parseFloat(n))
+        if (vals.length >= 1) result.x = vals[0]
+        if (vals.length >= 2) result.y = vals[1]
+        if (vals.length >= 3) result.blur = vals[2]
+        // vals[3] would be spread, which we ignore for drop-shadow
+    }
+
+    return result
+}
+
+function lerpShadow(a: ParsedShadow, b: ParsedShadow, t: number): string {
+    const x = a.x + (b.x - a.x) * t
+    const y = a.y + (b.y - a.y) * t
+    const blur = a.blur + (b.blur - a.blur) * t
+    // Use the dynamic shadow's color when t > 0.5, otherwise static
+    const color = t > 0.5 ? b.color : a.color
+    return `drop-shadow(${x.toFixed(2)}px ${y.toFixed(2)}px ${blur.toFixed(2)}px ${color})`
+}
+
 export default function StickerDrag({
     image,
-    tiltSensitivity = DRAG_TILT_SENSITIVITY,
+    tiltSensitivity: tiltSensitivityDisplay = TILT_DEFAULT_DISPLAY,
     tiltSmoothing = DRAG_TILT_SMOOTHING,
     sheenStrength = SHEEN_STRENGTH,
     sheenMode = "sheen" as const,
+    elevation: elevationDisplay = ELEVATION_DEFAULT_DISPLAY,
+    staticShadow = STATIC_SHADOW_DEFAULT,
+    dynamicShadow = DYNAMIC_SHADOW_DEFAULT,
     style,
 }: StickerDragProps) {
+    // Map property panel values (0–1, 0.1–1) to internal ranges
+    const tiltSensitivity = mapTiltDisplayToInternal(tiltSensitivityDisplay)
+    const elevation = mapElevationDisplayToInternal(elevationDisplay)
+
     // Check if image is missing
     const imageSrc = resolveImageSource(image)
     const hasImage = !!imageSrc
@@ -297,6 +383,13 @@ export default function StickerDrag({
     const stickerRef = useRef<HTMLDivElement>(null)
     const innerRef = useRef<HTMLDivElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
+    const zoomProbeRef = useRef<HTMLDivElement>(null)
+
+    // Sizing div: prevents collapse when parent has size=fit; uses zoom probe so we don't react to editor zoom
+    const [sizingDimensions, setSizingDimensions] = useState({
+        width: 400,
+        height: 400,
+    })
 
     // WebGL refs
     const glRef = useRef<WebGLRenderingContext | null>(null)
@@ -396,6 +489,7 @@ export default function StickerDrag({
             state.sticking ? 1.0 : 0.0
         )
         gl.uniform1f(gl.getUniformLocation(program, "uScale"), state.scale)
+        gl.uniform1f(gl.getUniformLocation(program, "uElevation"), elevation)
 
         gl.uniform2f(
             gl.getUniformLocation(program, "uTilt"),
@@ -434,9 +528,19 @@ export default function StickerDrag({
             gl.UNSIGNED_SHORT,
             0
         )
-    }, [sheenStrength, sheenMode])
+    }, [sheenStrength, sheenMode, elevation])
 
-    // Update shadow CSS based on peel/lift
+    // Parse shadow props once (memoized)
+    const parsedStaticShadow = React.useMemo(
+        () => parseBoxShadow(staticShadow),
+        [staticShadow]
+    )
+    const parsedDynamicShadow = React.useMemo(
+        () => parseBoxShadow(dynamicShadow),
+        [dynamicShadow]
+    )
+
+    // Update shadow CSS based on peel/lift, interpolating between static and dynamic
     const updateShadowCSS = useCallback(() => {
         const canvas = canvasRef.current
         const state = stateRef.current
@@ -445,10 +549,8 @@ export default function StickerDrag({
         const tRaw = Math.max(state.lift, state.peel)
         const t = tRaw * tRaw * (3 - 2 * tRaw) // smoothstep easing
 
-        const y = 1 + t * 12
-        const blur = 2 + t * 12
-        canvas.style.filter = `drop-shadow(0px ${y.toFixed(2)}px ${blur.toFixed(2)}px rgba(0, 0, 0, 0.30))`
-    }, [])
+        canvas.style.filter = lerpShadow(parsedStaticShadow, parsedDynamicShadow, t)
+    }, [parsedStaticShadow, parsedDynamicShadow])
 
     // Animation tick (from original source)
     const tick = useCallback(
@@ -657,8 +759,12 @@ export default function StickerDrag({
         )
 
         // Add padding to canvas for extra space to prevent clipping during animations
-        const canvasWidth = width + PAD * 2
-        const canvasHeight = height + PAD * 2
+        // Padding scales with elevation to accommodate the lift/scale effect
+        const maxDim = Math.max(width, height)
+        const elevationPad = maxDim * elevation * 0.6 // extra padding based on elevation
+        const effectivePad = PAD_BASE + elevationPad
+        const canvasWidth = width + effectivePad * 2
+        const canvasHeight = height + effectivePad * 2
 
         // Calculate scale factor to fit content within padded canvas
         // Use the smaller scale to ensure content fits in both dimensions
@@ -678,8 +784,8 @@ export default function StickerDrag({
         
         // Center canvas within sticker element (canvas is larger due to padding)
         canvas.style.position = "absolute"
-        canvas.style.left = `${-PAD}px`
-        canvas.style.top = `${-PAD}px`
+        canvas.style.left = `${-effectivePad}px`
+        canvas.style.top = `${-effectivePad}px`
 
         // Update sticker element size and position (centered, visible size without padding)
         sticker.style.width = `${width}px`
@@ -701,7 +807,7 @@ export default function StickerDrag({
         if (state.texReady) {
             draw()
         }
-    }, [draw])
+    }, [draw, elevation])
 
     // Load image
     useEffect(() => {
@@ -762,25 +868,96 @@ export default function StickerDrag({
         }
     }, [image, handleResize, updateShadowCSS])
 
+
     // Handle container resize
+    // Debounced apply: avoid feedback loop (fit = grow forever) and perf storms
+    const applyResizeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const SIZING_THRESHOLD = 5 // only update sizing when container changed by this much (stops fit feedback loop)
+    const RESIZE_DEBOUNCE_MS = 180
+
+    const scheduleResize = useCallback(
+        (measuredW: number, measuredH: number) => {
+            if (applyResizeRef.current) clearTimeout(applyResizeRef.current)
+            applyResizeRef.current = setTimeout(() => {
+                applyResizeRef.current = null
+                setSizingDimensions((prev) => {
+                    const w = Math.max(1, Math.round(measuredW)) || prev.width
+                    const h = Math.max(1, Math.round(measuredH)) || prev.height
+                    // Only update if change is significant (prevents fit feedback + jitter)
+                    const dw = Math.abs(w - prev.width)
+                    const dh = Math.abs(h - prev.height)
+                    if (dw < SIZING_THRESHOLD && dh < SIZING_THRESHOLD) return prev
+                    return { width: w, height: h }
+                })
+                handleResize()
+            }, RESIZE_DEBOUNCE_MS)
+        },
+        [handleResize]
+    )
+
+    // Resize detection: zoom-probe in canvas (ignore zoom), ResizeObserver in preview; sizing div prevents fit collapse
     useEffect(() => {
         const container = containerRef.current
         if (!container) return
 
-        // Initial resize
         handleResize()
 
-        // Use ResizeObserver to watch for size changes
-        const resizeObserver = new ResizeObserver(() => {
-            handleResize()
-        })
+        const isCanvas = RenderTarget.current() === RenderTarget.canvas
 
-        resizeObserver.observe(container)
+        if (isCanvas && zoomProbeRef.current) {
+            let rafId = 0
+            const TICK_MS = 400 // throttle probe checks
+            const EPS = 2
+            const last = { ts: 0, zoom: 0, w: 0, h: 0 }
 
-        return () => {
-            resizeObserver.disconnect()
+            const tick = (now?: number) => {
+                const probe = zoomProbeRef.current
+                if (!container || !probe) {
+                    rafId = requestAnimationFrame(tick)
+                    return
+                }
+                // Use actual CSS pixel dimensions (don't divide by zoom - that causes exponential growth when zoomed out)
+                const cw = container.clientWidth || container.offsetWidth || 0
+                const ch = container.clientHeight || container.offsetHeight || 0
+                const zoom = probe.getBoundingClientRect().width / 20
+
+                const timeOk =
+                    !last.ts || (now ?? performance.now()) - last.ts >= TICK_MS
+                // Only call handleResize when zoom OR actual size changed; use actual CSS pixels for sizing
+                const zoomChanged = Math.abs(zoom - last.zoom) > 0.001
+                const sizeChanged =
+                    Math.abs(cw - last.w) > EPS || Math.abs(ch - last.h) > EPS
+
+                if (timeOk && (sizeChanged || zoomChanged)) {
+                    last.ts = now ?? performance.now()
+                    last.zoom = zoom
+                    last.w = cw
+                    last.h = ch
+                    // Sizing div uses CSS pixels (cw, ch), not logical; handleResize for any zoom/size change
+                    if (cw >= 1 && ch >= 1) {
+                        scheduleResize(cw, ch)
+                    }
+                }
+                rafId = requestAnimationFrame(tick)
+            }
+            rafId = requestAnimationFrame(tick)
+            return () => {
+                cancelAnimationFrame(rafId)
+                if (applyResizeRef.current) clearTimeout(applyResizeRef.current)
+            }
         }
-    }, [handleResize])
+
+        const ro = new ResizeObserver(() => {
+            const w = container.clientWidth || container.offsetWidth || 400
+            const h = container.clientHeight || container.offsetHeight || 400
+            scheduleResize(w, h)
+        })
+        ro.observe(container)
+        return () => {
+            ro.disconnect()
+            if (applyResizeRef.current) clearTimeout(applyResizeRef.current)
+        }
+    }, [handleResize, scheduleResize])
 
     // Mouse down handler
     const handleMouseDown = useCallback(
@@ -1137,6 +1314,32 @@ export default function StickerDrag({
                 ...style,
             }}
         >
+            {/* Invisible sizing div: gives container a fixed size when parent is size=fit; resizes only on real layout change (zoom probe in canvas) */}
+            <div
+                style={{
+                    position: "relative",
+                    width: sizingDimensions.width,
+                    height: sizingDimensions.height,
+                    minWidth: sizingDimensions.width,
+                    minHeight: sizingDimensions.height,
+                    opacity: 0,
+                    pointerEvents: "none",
+                    userSelect: "none",
+                }}
+            />
+            {/* Zoom probe for canvas: 20px logical size so zoom = getBoundingClientRect().width / 20 */}
+            <div
+                ref={zoomProbeRef}
+                style={{
+                    position: "absolute",
+                    width: 20,
+                    height: 20,
+                    top: 0,
+                    left: 0,
+                    opacity: 0,
+                    pointerEvents: "none",
+                }}
+            />
             <div
                 ref={stickerRef}
                 style={{
@@ -1189,10 +1392,10 @@ addPropertyControls(StickerDrag, {
     tiltSensitivity: {
         type: ControlType.Number,
         title: "Tilt",
-        min: 0.5,
-        max: 20,
-        step: 0.5,
-        defaultValue: DRAG_TILT_SENSITIVITY,
+        min: TILT_DISPLAY_MIN,
+        max: TILT_DISPLAY_MAX,
+        step: 0.1,
+        defaultValue: TILT_DEFAULT_DISPLAY,
     },
     sheenStrength: {
         type: ControlType.Number,
@@ -1202,6 +1405,14 @@ addPropertyControls(StickerDrag, {
         step: 0.1,
         defaultValue: SHEEN_STRENGTH,
     },
+    elevation: {
+        type: ControlType.Number,
+        title: "Elevation",
+        min: 0,
+        max: 1,
+        step: 0.1,
+        defaultValue: ELEVATION_DEFAULT_DISPLAY,
+    },
     sheenMode: {
         type: ControlType.Enum,
         title: "Sheen",
@@ -1210,6 +1421,20 @@ addPropertyControls(StickerDrag, {
         defaultValue: "sheen",
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
+        
+    },
+    
+    staticShadow: {
+        //@ts-ignore
+        type: ControlType.BoxShadow,
+        title: "Static",
+        defaultValue: STATIC_SHADOW_DEFAULT,
+    },
+    dynamicShadow: {
+        //@ts-ignore
+        type: ControlType.BoxShadow,
+        title: "Elevated",
+        defaultValue: DYNAMIC_SHADOW_DEFAULT,
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },

@@ -2,7 +2,7 @@ import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { motion } from "framer-motion"
 import React, { useCallback, useMemo, useRef } from "react"
 
-const DEFAULT_VIEWBOX = 14
+const DEFAULT_VIEWBOX = 24
 const SAMPLE_POINTS = 8 // for flattening curves
 
 /** A single line segment: start (x1,y1) to end (x2,y2) */
@@ -531,8 +531,8 @@ interface MorphIconsProps {
  *
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
- * @framerIntrinsicWidth 48
- * @framerIntrinsicHeight 48
+ * @framerIntrinsicWidth 24
+ * @framerIntrinsicHeight 24
  * @framerDisableUnlink
  */
 export default function MorphIcons(props: MorphIconsProps) {
