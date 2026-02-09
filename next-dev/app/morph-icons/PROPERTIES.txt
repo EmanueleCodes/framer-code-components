@@ -1,0 +1,19 @@
+Morph Icons - Property Controls
+
+Icon
+Which icon in the list is currently shown. Value 1 is the first icon, 2 the second, and so on. Changing this value triggers a morph animation to the selected icon. Range: 1–10.
+
+Icons
+List of SVG icons to morph between. Each item has an "SVG" field: paste a full SVG string (e.g. with viewBox, paths or lines). Icons are normalized to the same line count for smooth morphing. Up to 10 icons. If empty, default hamburger, cross, and plus icons are used.
+
+Stroke
+Width of the icon strokes in pixels. Range: 0.5–4 px.
+
+Color
+Stroke color of the icon lines. Supports hex, rgb, rgba, and Framer color tokens (e.g. currentColor).
+
+Stroke Cap
+Style of the stroke ends. "Butt" is flat, "Round" is rounded, "Square" extends slightly past the endpoint.
+
+Transition
+Animation used when morphing from one icon to another. Configure type (e.g. tween or spring), duration, easing, and spring options (stiffness, damping, etc.) to control the morph animation.

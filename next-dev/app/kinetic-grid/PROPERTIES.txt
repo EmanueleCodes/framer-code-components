@@ -1,0 +1,48 @@
+Kinetic Grid - Property Controls
+
+Click
+Enables or disables click interaction. When "On", holding the mouse button pushes the grid dots away from the cursor. When "Off", only hover repulsion/attraction applies.
+
+Click Props
+Settings for click interaction. Visible only when Click is "On".
+- Click Force: Push strength away from the cursor while the mouse button is held. Range: 0.1–1.
+- Snappyness: How quickly the grid responds to movement. Higher values make the grid snappier; lower values make it floatier. Range: 0.1–1.
+
+Cursor Trail
+Enables or disables a drawn trail that follows the cursor. When "On", a line is drawn along the cursor path. When "Off", no trail is shown.
+
+Trail Props
+Settings for the cursor trail. Visible only when Cursor Trail is "On".
+- Trail Mode: "Hover" draws the trail while moving the cursor; "Click" draws only while the mouse button is held.
+- Trail Length: How long the trail persists (0.1–1). Higher values show a longer trail.
+- Trail Color: Color of the trail line.
+
+Grid Stroke
+Width of the grid lines in pixels. Thinner values give a finer grid; thicker values make lines more visible. Range: 0.1–3.
+
+Dot Size
+Size of the dots at each grid intersection in pixels. Range: 0.5–5.
+
+Far Opacity
+Base opacity of the grid and dots when the cursor is far away. Lower values make the grid more subtle; higher values keep it more visible at rest. Range: 0–1.
+
+Grid Size
+Spacing between grid points in pixels. Smaller values create a denser grid; larger values create a sparser grid. Range: 20–100.
+
+Repulsion
+How the grid reacts to the cursor. Negative values (e.g. -0.65) push dots away from the cursor (repulsion). Positive values pull dots toward the cursor (attraction). Range: -1 to 1.
+
+Radius
+Distance from the cursor within which the hover glow and size increase apply. Larger values create a bigger hover area. Range: 50–1000.
+
+Hover
+Color of the grid and dots when the cursor is near (within Radius). Blends with the base grid/dot colors based on distance.
+
+Background
+Background color of the canvas. Supports hex, rgb, and rgba.
+
+Grid
+Color of the grid lines when the cursor is far away.
+
+Dots
+Color of the dots at grid intersections when the cursor is far away. More components at Framer University.

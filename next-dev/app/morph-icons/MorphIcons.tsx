@@ -13,6 +13,7 @@ export interface LineSegment {
     y2: number
 }
 
+
 /** Parsed icon with N line segments */
 export interface ParsedIcon {
     lines: LineSegment[]
@@ -301,6 +302,7 @@ function parseSvgWithDOM(
             const path = el as SVGPathElement
             const d = path.getAttribute("d")
             if (!d) return
+            if (isBoundingRectanglePath(d, vb)) return
             const pts = parsePathToSegments(d, vb)
             const pathLines = pointsToLines(pts, vb)
             pathLines.forEach((l) => {
@@ -357,6 +359,42 @@ function pointsToLines(
     return lines
 }
 
+/**
+ * Returns true if the path d describes a single closed axis-aligned rectangle
+ * (e.g. M 0 0 L 24 0 L 24 24 L 0 24 Z). Such paths are used as size holders
+ * and should be excluded from morphing; they should be transparent with no stroke.
+ */
+function isBoundingRectanglePath(
+    d: string,
+    viewBox: { x: number; y: number; width: number; height: number }
+): boolean {
+    if (!d || !d.trim().toUpperCase().includes("Z")) return false
+    const points = parsePathToSegments(d, viewBox)
+    if (points.length < 4 || points.length > 5) return false
+    const pts = points.length === 5 ? points.slice(0, 4) : points
+    if (points.length === 5) {
+        const [first, last] = [points[0], points[4]]
+        if (first.x !== last.x || first.y !== last.y) return false
+    }
+    const xs = pts.map((p) => p.x)
+    const ys = pts.map((p) => p.y)
+    const xMin = Math.min(...xs)
+    const xMax = Math.max(...xs)
+    const yMin = Math.min(...ys)
+    const yMax = Math.max(...ys)
+    const corners = [
+        [xMin, yMin],
+        [xMax, yMin],
+        [xMax, yMax],
+        [xMin, yMax],
+    ]
+    const key = (x: number, y: number) => `${x},${y}`
+    const cornerSet = new Set(corners.map(([x, y]) => key(x, y)))
+    const ptSet = new Set(pts.map((p) => key(p.x, p.y)))
+    if (cornerSet.size !== 4 || ptSet.size !== 4) return false
+    return pts.every((p) => cornerSet.has(key(p.x, p.y)))
+}
+
 /** Parse SVG string to get all line segments (without normalizing count) */
 function parseSvgToSegments(
     svgString: string,
@@ -405,6 +443,7 @@ function parseSvgToSegments(
             const attrs = m[1]
             const dMatch = attrs.match(/\bd\s*=\s*["']([^"']+)["']/i)
             if (!dMatch) continue
+            if (isBoundingRectanglePath(dMatch[1], vb)) continue
             const pts = parsePathToSegments(dMatch[1], vb)
             const pathLines = pointsToLines(pts, vb)
             const transformMatch = attrs.match(/\btransform\s*=\s*["']([^"']+)["']/i)

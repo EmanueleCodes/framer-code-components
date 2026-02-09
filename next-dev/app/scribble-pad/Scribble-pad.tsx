@@ -196,8 +196,10 @@ export default function ScribblePad({
     // Initialize refs with correct values based on widgets state
     const colorRef = useRef(initialColor)
     const strokeWidthRef = useRef(initialStrokeWidth)
+    const internalMovement = wiggle?.movement ?? 0.65
+    const movement = internalMovement * 2
     const wiggleEnableRef = useRef(wiggle?.enable ?? true)
-    const wiggleMovementRef = useRef(wiggle?.movement ?? 0.65)
+    const wiggleMovementRef = useRef(movement)
     const wiggleSpeedRef = useRef(wiggle?.speed ?? 2)
     const previewRef = useRef(preview)
 
@@ -279,7 +281,7 @@ export default function ScribblePad({
     }, [wiggle?.enable])
 
     useEffect(() => {
-        wiggleMovementRef.current = wiggle?.movement ?? 0.65
+        wiggleMovementRef.current = (wiggle?.movement ?? 0.65) * 2
     }, [wiggle?.movement])
 
     useEffect(() => {
@@ -633,10 +635,12 @@ export default function ScribblePad({
                 const scaledX = point.x * scaleX + offsetX
                 const scaledY = point.y * scaleY + offsetY
                 const turbulent = applyTurbulence(scaledX, scaledY, t)
+                // Use half stroke width as radius so dot matches line thickness (same as round cap)
+                const dotRadius = (stroke.strokeWidth * scaleX) / 2
                 ctx.arc(
                     turbulent.x,
                     turbulent.y,
-                    stroke.strokeWidth * scaleX,
+                    dotRadius,
                     0,
                     Math.PI * 2
                 )
@@ -1032,10 +1036,12 @@ export default function ScribblePad({
                             bottom: 12,
                             left: 12,
                             right: 12,
-                            height: 38,
+                            minHeight: 38,
                             display: "flex",
+                            flexWrap: "wrap",
                             alignItems: "center",
                             justifyContent: "center",
+                            alignContent: "center",
                             pointerEvents: "auto",
                             gap: 16,
                         }}
@@ -1323,7 +1329,7 @@ export default function ScribblePad({
 addPropertyControls(ScribblePad, {
     widgets: {
         type: ControlType.Boolean,
-        title: "Widgets",
+        title: "Controls",
         defaultValue: true,
         enabledTitle: "Show",
         disabledTitle: "Hide",
@@ -1437,6 +1443,7 @@ addPropertyControls(ScribblePad, {
         // @ts-ignore - ControlType.ComponentInstance exists but may not be in types
         type: ControlType.ComponentInstance,
         title: "Button",
+        description:"Connect to the component",
         hidden: (props: ScribblePadProps) => props.buttonType !== "custom" || !props.widgets,
     },
     wiggle: {
@@ -1454,17 +1461,17 @@ addPropertyControls(ScribblePad, {
                 type: ControlType.Number,
                 title: "Movement",
                 min: 0,
-                max: 2,
-                step: 0.05,
-                defaultValue: 0.65,
+                max: 1,
+                step: 0.1,
+                defaultValue: 0.7,
                 hidden: (props) => !props.enable,
             },
             speed: {
                 type: ControlType.Number,
                 title: "Speed",
                 min: 0,
-                max: 5,
-                step: 0.1,
+                max: 10,
+                step: 1,
                 defaultValue: 2,
                 hidden: (props) => !props.enable,
                 
