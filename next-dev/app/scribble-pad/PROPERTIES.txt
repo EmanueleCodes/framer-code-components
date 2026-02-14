@@ -1,0 +1,37 @@
+Scribble Pad - Property Controls
+
+Controls
+When enabled, shows the color and stroke width pickers so users can change them on the canvas. When disabled, the pad uses the single Color and Width values below. Toggle: Show / Hide.
+
+Colors
+The list of colors available in the color picker when Controls are shown. You can add up to 10 colors. Only visible when Controls is set to Show.
+
+Widths
+The list of stroke widths (in pixels) available in the width picker when Controls are shown. You can add up to 10 values (1–25 px). Only visible when Controls is set to Show.
+
+Color
+The stroke color used for drawing when Controls are hidden. Only visible when Controls is set to Hide.
+
+Width
+The stroke width in pixels when Controls are hidden. Range: 1 to 25 px. Only visible when Controls is set to Hide.
+
+Background
+The background color of the scribble pad canvas.
+
+Radius
+The border radius of the scribble pad. Uses Framer’s radius control (e.g. 0px, 10px, or linked corners).
+
+Button Type
+Choose "Default" to style the clear button with the Button controls below, or "Custom" to connect your own component as the button. Only visible when Controls is set to Show.
+
+Button (Default)
+When Button Type is Default, configures the clear button: text label, background color, text color, padding, border radius, and hover background/text colors. Only visible when Button Type is Default and Controls is Show.
+
+Button (Custom)
+When Button Type is Custom, connect a Framer component to act as the clear button. Only visible when Button Type is Custom and Controls is Show.
+
+Wiggle
+Options for the drawing wiggle effect. Enable or disable the effect; Movement (0–1) controls how much the line wobbles; Speed (0–10) controls animation speed. Nested controls: Enable, Movement, Speed.
+
+Transition
+The transition used for UI animations (e.g. panel open/close). Uses Framer’s transition control (duration, ease). More components at Framer University.

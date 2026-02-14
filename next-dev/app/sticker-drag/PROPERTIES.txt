@@ -1,0 +1,22 @@
+Sticker Drag - Property Controls
+
+Image
+The image used for the sticker. Supports responsive images. Users can drag and peel the sticker with tilt and sheen effects.
+
+Tilt
+Controls how sensitive the sticker is to tilt when dragging. Lower values reduce tilt response, higher values make the sticker react more to movement. Range: 0.1 to 1.
+
+Lighting
+Controls the strength of the sheen or holographic lighting effect on the sticker surface. 0 disables the effect, 1 is maximum intensity. Range: 0 to 1.
+
+Sheen
+Choose the surface effect. "Sheen" gives a subtle light sweep; "Holographic" gives a rainbow/iridescent look that responds to tilt.
+
+Elevation
+Controls how much the sticker visually lifts and scales during the peel animation. Higher values create a more pronounced 3D lift effect. Range: 0 to 1.
+
+Static
+The box shadow applied to the sticker when it is at rest (not being dragged or peeled). Uses standard CSS box-shadow format.
+
+Elevated
+The box shadow applied when the sticker is being dragged or peeled, for a lifted look. Uses standard CSS box-shadow format. More components at Framer University.

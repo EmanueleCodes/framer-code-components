@@ -729,6 +729,6 @@ addPropertyControls(PixelMaskReveal, {
     pixelColor: {
         type: ControlType.Color,
         title: "Pixel Tint",
-        description: "Supports hex, rgb/a, and Framer color tokens (e.g. var(--token)).",
+        description: "More components at [Framer University](https://frameruni.link/cc).",
     },
 })

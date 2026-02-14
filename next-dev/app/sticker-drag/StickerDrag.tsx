@@ -238,17 +238,6 @@ function calculateContainedDimensions(
     }
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-
-/**
- * @framerSupportedLayoutWidth fixed
- * @framerSupportedLayoutHeight fixed
- * @framerIntrinsicWidth 400
- * @framerIntrinsicHeight 400
- * @framerDisableUnlink
- */
 const ELEVATION_DEFAULT = 0.12 // how much the sticker scales/lifts during peel animation
 const STATIC_SHADOW_DEFAULT = "0px 1px 2px 0px rgba(0, 0, 0, 0.30)"
 const DYNAMIC_SHADOW_DEFAULT = "0px 13px 14px 0px rgba(0, 0, 0, 0.30)"
@@ -274,7 +263,8 @@ function mapElevationDisplayToInternal(display: number): number {
 // Default display values for property controls (map from internal defaults)
 const TILT_DEFAULT_DISPLAY =
     TILT_DISPLAY_MIN +
-    ((DRAG_TILT_SENSITIVITY - TILT_INTERNAL_MIN) / (TILT_INTERNAL_MAX - TILT_INTERNAL_MIN)) *
+    ((DRAG_TILT_SENSITIVITY - TILT_INTERNAL_MIN) /
+        (TILT_INTERNAL_MAX - TILT_INTERNAL_MIN)) *
         (TILT_DISPLAY_MAX - TILT_DISPLAY_MIN)
 const ELEVATION_DEFAULT_DISPLAY = ELEVATION_DEFAULT / ELEVATION_INTERNAL_MAX
 
@@ -290,7 +280,12 @@ interface ParsedShadow {
 
 function parseBoxShadow(shadow: string): ParsedShadow {
     // Default values
-    const result: ParsedShadow = { x: 0, y: 0, blur: 0, color: "rgba(0,0,0,0.3)" }
+    const result: ParsedShadow = {
+        x: 0,
+        y: 0,
+        blur: 0,
+        color: "rgba(0,0,0,0.3)",
+    }
 
     if (!shadow) return result
 
@@ -323,6 +318,18 @@ function lerpShadow(a: ParsedShadow, b: ParsedShadow, t: number): string {
     const color = t > 0.5 ? b.color : a.color
     return `drop-shadow(${x.toFixed(2)}px ${y.toFixed(2)}px ${blur.toFixed(2)}px ${color})`
 }
+
+// ============================================================================
+// COMPONENT
+// ============================================================================
+
+/**
+ * @framerSupportedLayoutWidth fixed
+ * @framerSupportedLayoutHeight fixed
+ * @framerIntrinsicWidth 400
+ * @framerIntrinsicHeight 400
+ * @framerDisableUnlink
+ */
 
 export default function StickerDrag({
     image,
@@ -368,8 +375,6 @@ export default function StickerDrag({
                         style={{
                             position: "absolute",
                             inset: 0,
-                            
-                            
                         }}
                         title="Sticker Drag"
                         subtitle="Add an image to create an interactive draggable sticker with 3D effects"
@@ -508,7 +513,10 @@ export default function StickerDrag({
             gl.getUniformLocation(program, "uSheenTiltDeadzone"),
             SHEEN_TILT_DEADZONE
         )
-        gl.uniform1f(gl.getUniformLocation(program, "uMaxTiltDeg"), DRAG_MAX_TILT_DEG)
+        gl.uniform1f(
+            gl.getUniformLocation(program, "uMaxTiltDeg"),
+            DRAG_MAX_TILT_DEG
+        )
         gl.uniform1f(
             gl.getUniformLocation(program, "uHoloMode"),
             sheenMode === "holo" ? 1.0 : 0.0
@@ -549,7 +557,11 @@ export default function StickerDrag({
         const tRaw = Math.max(state.lift, state.peel)
         const t = tRaw * tRaw * (3 - 2 * tRaw) // smoothstep easing
 
-        canvas.style.filter = lerpShadow(parsedStaticShadow, parsedDynamicShadow, t)
+        canvas.style.filter = lerpShadow(
+            parsedStaticShadow,
+            parsedDynamicShadow,
+            t
+        )
     }, [parsedStaticShadow, parsedDynamicShadow])
 
     // Animation tick (from original source)
@@ -781,7 +793,7 @@ export default function StickerDrag({
         canvas.height = Math.round(canvasHeight * RENDER_SCALE)
         canvas.style.width = `${canvasWidth}px`
         canvas.style.height = `${canvasHeight}px`
-        
+
         // Center canvas within sticker element (canvas is larger due to padding)
         canvas.style.position = "absolute"
         canvas.style.left = `${-effectivePad}px`
@@ -868,7 +880,6 @@ export default function StickerDrag({
         }
     }, [image, handleResize, updateShadowCSS])
 
-
     // Handle container resize
     // Debounced apply: avoid feedback loop (fit = grow forever) and perf storms
     const applyResizeRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -886,7 +897,8 @@ export default function StickerDrag({
                     // Only update if change is significant (prevents fit feedback + jitter)
                     const dw = Math.abs(w - prev.width)
                     const dh = Math.abs(h - prev.height)
-                    if (dw < SIZING_THRESHOLD && dh < SIZING_THRESHOLD) return prev
+                    if (dw < SIZING_THRESHOLD && dh < SIZING_THRESHOLD)
+                        return prev
                     return { width: w, height: h }
                 })
                 handleResize()
@@ -1395,7 +1407,7 @@ addPropertyControls(StickerDrag, {
         min: TILT_DISPLAY_MIN,
         max: TILT_DISPLAY_MAX,
         step: 0.1,
-        defaultValue: TILT_DEFAULT_DISPLAY,
+        defaultValue: 0.5,
     },
     sheenStrength: {
         type: ControlType.Number,
@@ -1405,14 +1417,6 @@ addPropertyControls(StickerDrag, {
         step: 0.1,
         defaultValue: SHEEN_STRENGTH,
     },
-    elevation: {
-        type: ControlType.Number,
-        title: "Elevation",
-        min: 0,
-        max: 1,
-        step: 0.1,
-        defaultValue: ELEVATION_DEFAULT_DISPLAY,
-    },
     sheenMode: {
         type: ControlType.Enum,
         title: "Sheen",
@@ -1421,9 +1425,15 @@ addPropertyControls(StickerDrag, {
         defaultValue: "sheen",
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
-        
     },
-    
+    elevation: {
+        type: ControlType.Number,
+        title: "Elevation",
+        min: 0,
+        max: 1,
+        step: 0.1,
+        defaultValue: ELEVATION_DEFAULT_DISPLAY,
+    },
     staticShadow: {
         //@ts-ignore
         type: ControlType.BoxShadow,
