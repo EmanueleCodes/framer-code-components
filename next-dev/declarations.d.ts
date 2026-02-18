@@ -140,3 +140,13 @@ declare module "*/custom-bundle-gsap/gsap-morph-svg/dist/bundle.js" {
   }
   export const MorphSVGPlugin: object
 }
+
+// 3D Depth Globe bundle (next-dev/app/3D-depth-globe/globe-bundle)
+declare module "./globe-bundle/dist/bundle.js" {
+  export function GlobeScene(props: Record<string, unknown>): JSX.Element
+  export const useSceneStore: unknown
+}
+declare module "*/3D-depth-globe/globe-bundle/dist/bundle.js" {
+  export function GlobeScene(props: Record<string, unknown>): JSX.Element
+  export const useSceneStore: unknown
+}

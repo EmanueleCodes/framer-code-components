@@ -28,6 +28,7 @@ interface StickerDragProps {
     elevation?: number // controls how much the sticker lifts during wave animation
     staticShadow?: string // shadow at rest (CSS box-shadow format)
     dynamicShadow?: string // shadow when dragging/peeling (CSS box-shadow format)
+    refresh?: boolean // toggle to re-initialize after WebGL context lost in canvas
     style?: React.CSSProperties
 }
 
@@ -340,6 +341,7 @@ export default function StickerDrag({
     elevation: elevationDisplay = ELEVATION_DEFAULT_DISPLAY,
     staticShadow = STATIC_SHADOW_DEFAULT,
     dynamicShadow = DYNAMIC_SHADOW_DEFAULT,
+    refresh = false,
     style,
 }: StickerDragProps) {
     // Map property panel values (0–1, 0.1–1) to internal ranges
@@ -395,6 +397,25 @@ export default function StickerDrag({
         width: 400,
         height: 400,
     })
+
+    // WebGL context lost (too many stickers in canvas); refresh toggle re-initializes
+    const [contextLost, setContextLost] = useState(false)
+    const [webglInitKey, setWebglInitKey] = useState(0)
+    const previousRefreshRef = useRef<boolean | undefined>(undefined)
+
+    // When user toggles Refresh: clear context-lost message and trigger WebGL re-init.
+    // We must set contextLost(false) first so the canvas is rendered again; then bump
+    // webglInitKey so the WebGL effect runs after the canvas is in the DOM.
+    useEffect(() => {
+        if (previousRefreshRef.current === undefined) {
+            previousRefreshRef.current = refresh
+            return
+        }
+        if (previousRefreshRef.current === refresh) return
+        previousRefreshRef.current = refresh
+        setContextLost(false)
+        setWebglInitKey((k) => k + 1)
+    }, [refresh])
 
     // WebGL refs
     const glRef = useRef<WebGLRenderingContext | null>(null)
@@ -640,10 +661,12 @@ export default function StickerDrag({
         animationRef.current = requestAnimationFrame(tick)
     }, [tick])
 
-    // Initialize WebGL
+    // Initialize WebGL (re-runs when refresh toggles or context restored)
     useEffect(() => {
         const canvas = canvasRef.current
         if (!canvas) return
+
+        setContextLost(false)
 
         const gl = canvas.getContext("webgl", {
             alpha: true,
@@ -653,6 +676,20 @@ export default function StickerDrag({
         if (!gl) return
 
         glRef.current = gl
+
+        const handleContextLost = (event: Event) => {
+            event.preventDefault()
+            console.warn(
+                "WebGL context lost. Too many Sticker Drag components in Canvas. Use Refresh to see the sticker again."
+            )
+            setContextLost(true)
+        }
+        const handleContextRestored = () => {
+            setContextLost(false)
+            setWebglInitKey((k) => k + 1)
+        }
+        canvas.addEventListener("webglcontextlost", handleContextLost, false)
+        canvas.addEventListener("webglcontextrestored", handleContextRestored, false)
 
         // Compile shaders
         const compileShader = (
@@ -738,6 +775,8 @@ export default function StickerDrag({
         gl.clear(gl.COLOR_BUFFER_BIT)
 
         return () => {
+            canvas.removeEventListener("webglcontextlost", handleContextLost)
+            canvas.removeEventListener("webglcontextrestored", handleContextRestored)
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current)
             }
@@ -747,8 +786,14 @@ export default function StickerDrag({
             if (vboRef.current) gl.deleteBuffer(vboRef.current)
             if (iboRef.current) gl.deleteBuffer(iboRef.current)
             if (textureRef.current) gl.deleteTexture(textureRef.current)
+            textureRef.current = null
+            glRef.current = null
+            programRef.current = null
+            vboRef.current = null
+            iboRef.current = null
+            stateRef.current.texReady = false
         }
-    }, [])
+    }, [refresh, webglInitKey])
 
     // Resize handler
     const handleResize = useCallback(() => {
@@ -878,7 +923,7 @@ export default function StickerDrag({
         return () => {
             stateRef.current.texReady = false
         }
-    }, [image, handleResize, updateShadowCSS])
+    }, [image, handleResize, updateShadowCSS, webglInitKey])
 
     // Handle container resize
     // Debounced apply: avoid feedback loop (fit = grow forever) and perf storms
@@ -1314,6 +1359,16 @@ export default function StickerDrag({
         }
     }, [tiltSensitivity, tiltSmoothing, ensureTickRunning, sheenMode])
 
+    // Show warning when WebGL context is lost (too many stickers in canvas)
+    if (contextLost) {
+        return (
+            <ComponentMessage
+                title="⚠️ Don't worry, this is normal."
+                subtitle="There are currently more stickers in Canvas than Browsers can handle. Tweak Refresh to see the sticker re-appear. If you don't add too many stickers, you won't have issues in preview or deployed website."
+            />
+        )
+    }
+
     return (
         <div
             ref={containerRef}
@@ -1397,6 +1452,15 @@ export default function StickerDrag({
 // ============================================================================
 
 addPropertyControls(StickerDrag, {
+    refresh: {
+        type: ControlType.Boolean,
+        title: "Refresh",
+        defaultValue: false,
+        enabledTitle: "•",
+        disabledTitle: "•",
+        description:
+            "Toggle if the sticker is showing an error to see it again",
+    },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",

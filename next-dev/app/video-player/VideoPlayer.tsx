@@ -1,72 +1,50 @@
 import React, { useRef, useEffect, useState } from "react"
-import { createPortal } from "react-dom"
 import { addPropertyControls, ControlType } from "framer"
 
 const PROGRESS_BAR_DURATION_MS = 5000
-const MODAL_Z_INDEX = 999999
-const MODAL_CLOSE_DURATION_MS = 280
 
-const TEST_VIDEO_URL =
+function useIsLightTheme(): boolean {
+    const [isLight, setIsLight] = useState(false)
+    useEffect(() => {
+        if (typeof window === "undefined" || !window.matchMedia) return
+        const mq = window.matchMedia("(prefers-color-scheme: light)")
+        const set = () => setIsLight(mq.matches)
+        set()
+        mq.addEventListener("change", set)
+        return () => mq.removeEventListener("change", set)
+    }, [])
+    return isLight
+}
+
+// Hard-coded media (not exposed in property controls)
+const VIDEO_URL =
     "https://xgjzloifyvgpbmyonaya.supabase.co/storage/v1/object/public/files/mB4_kl_PTt/original"
-
-type DisplayMode = "inline" | "popup"
+const POSTER_URL = ""
 
 interface VideoPlayerProps {
     playback?: "play" | "stop"
     progress?: number
     volume?: number
-    displayMode?: DisplayMode
-    videoUrl?: string
     style?: React.CSSProperties
 }
 
+// Hard-coded copy (no longer in property controls)
+const PLAY_TITLE = "Learn How to Use Framer Systems"
+const TITLE_TEXT = "Select this and set 'Play' on the right panel."
+const PARAGRAPH_TEXT =
+    "You can save 2 hours with each of your projects if you utilize this system the right way. Watch this video and learn how."
+const WATCH_BUTTON_LABEL = "Watch Video"
+const CONTROLS_LABEL = "Controls on Right Panel"
+
 export default function VideoPlayer(props: VideoPlayerProps) {
-    const { playback = "stop", progress = 0, volume = 100, displayMode = "inline", videoUrl = TEST_VIDEO_URL, style } = props
+    const { playback = "stop", progress = 0, volume = 100, style } = props
+    const isLight = useIsLightTheme()
     const videoRef = useRef<HTMLVideoElement>(null)
     const hideProgressBarRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const prevProgressRef = useRef(progress)
     const [showProgressBar, setShowProgressBar] = useState(false)
-    const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null)
-    const [modalScale, setModalScale] = useState(0.9)
-    const [closing, setClosing] = useState(false)
-    const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    const wasPlayingRef = useRef(false)
+    const [isHovering, setIsHovering] = useState(false)
     const isPlaying = playback === "play"
-    const isPopup = displayMode === "popup"
-    const showModal = isPopup && (isPlaying || closing)
-
-    // Portal to body so popup is on top of page content. In the Framer editor, canvas wireframes are drawn in a separate layer and will still appear on top; in Preview and on the published site the popup displays correctly.
-    useEffect(() => {
-        if (typeof document === "undefined") return
-        setPortalContainer(document.body)
-    }, [])
-
-    // Popup: scale in when opening
-    useEffect(() => {
-        if (!isPopup || !isPlaying) return
-        setModalScale(0.9)
-        const id = requestAnimationFrame(() => setModalScale(1))
-        return () => cancelAnimationFrame(id)
-    }, [isPopup, isPlaying])
-
-    // Popup: when playback goes from Play to Stop, animate scale out then unmount
-    useEffect(() => {
-        if (!isPopup) return
-        const wasPlaying = wasPlayingRef.current
-        wasPlayingRef.current = isPlaying
-        if (isPlaying) return
-        if (!wasPlaying) return // already stopped, avoid briefly showing modal
-        setClosing(true)
-        setModalScale(0.9)
-        if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current)
-        closeTimeoutRef.current = setTimeout(() => {
-            setClosing(false)
-            closeTimeoutRef.current = null
-        }, MODAL_CLOSE_DURATION_MS)
-        return () => {
-            if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current)
-        }
-    }, [isPopup, isPlaying])
 
     // Show progress bar for a short time when user seeks (progress prop changes)
     useEffect(() => {
@@ -123,26 +101,17 @@ export default function VideoPlayer(props: VideoPlayerProps) {
         video.addEventListener("loadedmetadata", onLoadedMetadata)
         if (video.duration && Number.isFinite(video.duration)) onLoadedMetadata()
         return () => video.removeEventListener("loadedmetadata", onLoadedMetadata)
-    }, [videoUrl, progress])
+    }, [progress])
 
     const progressPct = Math.max(0, Math.min(100, progress))
+    const progressBarVisible = showProgressBar || (isPlaying && isHovering)
 
-    const videoAndBar = (
-        <>
-            <video
-                ref={videoRef}
-                src={videoUrl}
-                playsInline
-                muted={false}
-                style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                }}
-            />
+    const videoWithProgressBar = (
+        <div
+            style={{ position: "absolute", inset: 0 }}
+            onMouseEnter={() => setIsHovering(true)}
+            onMouseLeave={() => setIsHovering(false)}
+        >
             <div
                 style={{
                     position: "absolute",
@@ -150,11 +119,11 @@ export default function VideoPlayer(props: VideoPlayerProps) {
                     left: 12,
                     right: 12,
                     height: 6,
-                    background: "rgba(0,0,0,0.2)",
+                    background: isLight ? "rgba(0,0,0,0.15)" : "rgba(0,0,0,0.2)",
                     borderRadius: 3,
                     overflow: "hidden",
-                    opacity: showProgressBar ? 1 : 0,
-                    pointerEvents: showProgressBar ? "auto" : "none",
+                    opacity: progressBarVisible ? 1 : 0,
+                    pointerEvents: progressBarVisible ? "auto" : "none",
                     transition: "opacity 0.25s ease-out",
                 }}
             >
@@ -162,116 +131,16 @@ export default function VideoPlayer(props: VideoPlayerProps) {
                     style={{
                         width: `${progressPct}%`,
                         height: "100%",
-                        background: "rgba(255,255,255,0.8)",
+                        background: isLight ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.8)",
                         borderRadius: 3,
                         transition: "width 0.15s ease-out",
                     }}
                 />
             </div>
-        </>
+        </div>
     )
 
-    const handleModalTransitionEnd = (e: React.TransitionEvent) => {
-        if (e.target !== e.currentTarget) return
-        if (closing && closeTimeoutRef.current) {
-            clearTimeout(closeTimeoutRef.current)
-            closeTimeoutRef.current = null
-            setClosing(false)
-        }
-    }
-
-    if (isPopup && !showModal) {
-        return (
-            <div
-                style={{
-                    width: "100%",
-                    height: "100%",
-                    position: "relative",
-                    overflow: "hidden",
-                    background: "#111",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "rgba(255,255,255,0.5)",
-                    fontSize: 14,
-                    ...style,
-                }}
-            >
-                Set Playback to Play to open video
-            </div>
-        )
-    }
-
-    if (isPopup && showModal && portalContainer) {
-        const modalContent = (
-            <>
-                <div
-                    role="presentation"
-                    style={{
-                        position: "fixed",
-                        inset: 0,
-                        zIndex: "infinite",
-                        backgroundColor: "rgba(0,0,0,0.6)",
-                    }}
-                />
-                <div
-                    role="dialog"
-                    aria-modal
-                    style={{
-                        position: "fixed",
-                        inset: 0,
-                        zIndex: MODAL_Z_INDEX + 1,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 24,
-                        pointerEvents: "none",
-                    }}
-                >
-                    <div
-                        onTransitionEnd={handleModalTransitionEnd}
-                        style={{
-                            position: "relative",
-                            width: "100%",
-                            maxWidth: 900,
-                            maxHeight: "90vh",
-                            aspectRatio: "16/9",
-                            backgroundColor: "#111",
-                            borderRadius: 12,
-                            overflow: "hidden",
-                            boxShadow: "0 24px 48px rgba(0,0,0,0.4)",
-                            transform: `scale(${modalScale})`,
-                            transition: "transform 0.25s ease-out",
-                            pointerEvents: "auto",
-                        }}
-                    >
-                        {videoAndBar}
-                    </div>
-                </div>
-            </>
-        )
-        return (
-            <>
-                <div
-                    style={{
-                        width: "100%",
-                        height: "100%",
-                        background: "#111",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "rgba(255,255,255,0.4)",
-                        fontSize: 14,
-                        ...style,
-                    }}
-                >
-                    Video playing in popup
-                </div>
-                {createPortal(modalContent, portalContainer)}
-            </>
-        )
-    }
-
+    // Inline: static card (poster + play overlay + title/paragraph + button) or playing (video + optional progress bar + controls label)
     return (
         <div
             style={{
@@ -279,11 +148,173 @@ export default function VideoPlayer(props: VideoPlayerProps) {
                 height: "100%",
                 position: "relative",
                 overflow: "hidden",
-                background: "#111",
+                background: isLight ? "#ffffff" : "#111111",
+                borderRadius: 12,
+                display: "flex",
+                flexDirection: "column",
+                padding: 12,
                 ...style,
+                gap: 12,
+                boxShadow:"0px 20px 20px 0px rgba(0,0,0,0.1)",
             }}
         >
-            {videoAndBar}
+            {/* Video area: takes remaining height; video stays 16:9 letterboxed inside */}
+            <div
+                style={{
+                    position: "relative",
+                    width: "100%",
+                    flex: 1,
+                    minHeight: 0,
+                    overflow: "hidden",
+                    borderRadius: 6,
+                    background: "#000000",
+                }}
+            >
+                <video
+                    ref={videoRef}
+                    src={VIDEO_URL}
+                    poster={POSTER_URL || undefined}
+                    playsInline
+                    muted={!isPlaying}
+                    preload={isPlaying ? "auto" : "metadata"}
+                    style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                    }}
+                />
+                {!isPlaying ? (
+                    <>
+                        {/* Play overlay: pill with solid icon container + title */}
+                        <div
+                            style={{
+                                position: "absolute",
+                                inset: 0,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 10,
+                                    fontFamily: "Inter, sans-serif",
+                                    fontWeight:600,
+                                    padding: "4px 16px 4px 4px",
+                                    background: isLight ? "#fff" : "#111",
+                                    borderRadius: 9999,
+                                    color: isLight ? "#111" : "#fff",
+                                    fontSize: 12,
+                                    whiteSpace: "nowrap",
+                                    maxWidth: "90%",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        width: 28,
+                                        height: 28,
+                                        borderRadius: "50%",
+                                        background: isLight ? "#111" : "#fff",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    <svg width={14} height={14} viewBox="0 0 24 24" fill={isLight ? "#fff" : "#111"}>
+                                        <path d="M8 5v14l11-7z" />
+                                    </svg>
+                                </div>
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{PLAY_TITLE}</span>
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    videoWithProgressBar
+                )}
+            </div>
+
+
+            {/* Bottom: fixed height (description + button) — never shrinks */}
+            <div
+                style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                    flexShrink: 0,
+                }}
+            >
+                {!isPlaying ? (
+                    <>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <p
+                                style={{
+                                    margin: 0,
+                                    color: isLight ? "#111" : "#fff",
+                                    fontSize: 14,
+                                    lineHeight: 1.5,
+                                    fontFamily: "Inter, sans-serif",
+                                    fontWeight: 600,
+                                }}
+                            >
+                                {TITLE_TEXT}
+                            </p>
+                            <p
+                                style={{
+                                    margin: 0,
+                                    color: isLight ? "#666" : "#999",
+                                    fontSize: 14,
+                                    lineHeight: 1.5,
+                                    fontFamily: "Inter, sans-serif",
+                                    fontWeight: 500,
+                                }}
+                            >
+                                {PARAGRAPH_TEXT}
+                            </p>
+                        </div>
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                height: 30,
+                                background: isLight ? "#F2F2F2" : "rgba(40,40,40,0.9)",
+                                borderRadius: 8,
+                                color: isLight ? "#111" : "#fff",
+                                fontSize: 12,
+                                fontFamily: "Inter, sans-serif",
+                                fontWeight: 500,
+                                textAlign: "center",
+                            }}
+                        >
+                            {WATCH_BUTTON_LABEL}
+                        </div>
+                    </>
+                ) : (
+                    <div
+                        style={{
+                            display: "inline-block",
+                            padding: "10px 20px",
+                            background: isLight ? "#F2F2F2" : "rgba(40,40,40,0.9)",
+                            borderRadius: 8,
+                            color: isLight ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,0.8)",
+                            fontSize: 14,
+                            fontFamily: "Inter, sans-serif",
+                            fontWeight: 500,
+                            textAlign: "center",
+                        }}
+                    >
+                        {CONTROLS_LABEL}
+                    </div>
+                )}
+            </div>
         </div>
     )
 }
@@ -316,20 +347,5 @@ addPropertyControls(VideoPlayer, {
         step: 1,
         unit: "%",
         defaultValue: 100,
-    },
-    displayMode: {
-        type: ControlType.Enum,
-        title: "Display as",
-        options: ["inline", "popup"],
-        optionTitles: ["Inline", "Popup"],
-        defaultValue: "inline",
-        displaySegmentedControl: true,
-        description:
-            "Popup: modal opens on Play, closes on Stop. In the editor, selection wireframes may appear on top; in Preview and on the published site the popup shows on top.",
-    },
-    videoUrl: {
-        type: ControlType.String,
-        title: "Video URL",
-        defaultValue: TEST_VIDEO_URL,
     },
 })

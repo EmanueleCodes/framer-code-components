@@ -1,0 +1,35 @@
+.logo-wrapper {
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    position: fixed;
+    width: 100%;
+    z-index: 1;
+}
+
+.logo {
+    display: grid;
+    color: #ffffff;
+    filter: drop-shadow(0px 0px 3px rgba(0, 0, 0, 0.3));
+    font-size: 0.84rem;
+    font-weight: 800;
+    gap: 0.36rem;
+    margin-top: 1rem;
+    padding: 0.5rem;
+    place-items: center;
+    place-self: start center;
+    pointer-events: auto;
+    text-decoration: none;
+    transition: scale 0.3s ease;
+    width: fit-content;
+
+    &:hover {
+        scale: 1.03;
+    }
+
+    svg {
+        pointer-events: none;
+        user-select: none;
+        width: 1.1rem;
+    }
+}

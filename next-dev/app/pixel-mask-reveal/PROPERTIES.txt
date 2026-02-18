@@ -1,0 +1,34 @@
+Pixel Mask Reveal - Property Controls
+
+Preview
+Toggles the pixel reveal animation in the Framer canvas. On: animation plays; Off: static image. Default: On.
+
+Image
+Source image for the pixel mask effect. Use the responsive image picker to set the image. Required for the effect.
+
+Mode
+When the reveal runs. "Appear": plays once on load. "Layer in View": plays when the layer enters the viewport (scroll-triggered). Default: Layer in View.
+
+Start At
+Where the scroll trigger starts, when Mode is "Layer in View". Top: top of layer; Center: center; Bottom: bottom. Default: Top.
+
+Replay
+When Mode is "Layer in View", whether the animation replays when the layer leaves and re-enters the viewport. Default: On. Hidden when Mode is "Appear".
+
+Grid Size
+Number of pixel cells along each axis. Higher = finer grid, more pixels. Range: 4–80, step 2. Default: 20.
+
+Duration
+Length of the reveal animation in seconds. Range: 0.2–4 s. Default: 1.6 s.
+
+Delay
+Delay before the reveal starts, in seconds. Range: 0–2 s. Default: 0 s.
+
+Direction
+Reveal direction: Up, Down, Left, or Right. Default: Up.
+
+Radius
+Border radius of the component. Uses Framer’s border radius control.
+
+Pixel Tint
+Color tint applied to the revealed pixels. Supports hex, rgb, rgba, and Framer color tokens.

@@ -1,0 +1,7 @@
+Super White (HDR) - Property Controls
+
+Preview
+Toggles the super-white effect in the Framer canvas. Turn On to see the HDR layer; turn Off to edit without it. The effect always runs in the published preview/site.
+
+Usage
+Put Super White inside the component you want to turn superwhite (e.g. the white square). That component will display as HDR super white; no blend mode or extra setup on siblings. The blue div stays blue; only the component that contains Super White becomes super white. Requires HDR display (e.g. recent iPhone, iPad Pro, MacBook Pro) and low-power mode off.

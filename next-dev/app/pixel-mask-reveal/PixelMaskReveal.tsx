@@ -44,6 +44,7 @@ interface PixelMaskRevealProps {
     revealDelay: number
     pixelColor: string
     direction: RevealDirection
+    borderRadius?: string
     style?: React.CSSProperties
 }
 
@@ -294,6 +295,7 @@ export default function PixelMaskReveal({
     revealDelay = 0,
     pixelColor = "#242424",
     direction = "up",
+    borderRadius,
     style,
 }: PixelMaskRevealProps) {
     const isCanvas = RenderTarget.current() === RenderTarget.canvas
@@ -616,6 +618,7 @@ export default function PixelMaskReveal({
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
+                    ...(borderRadius ? { borderRadius } : {}),
                 }}
             >
                 <ComponentMessage
@@ -636,6 +639,7 @@ export default function PixelMaskReveal({
                 width: "100%",
                 height: "100%",
                 overflow: "hidden",
+                ...(borderRadius ? { borderRadius } : {}),
             }}
         >
             <canvas
@@ -726,9 +730,16 @@ addPropertyControls(PixelMaskReveal, {
         displaySegmentedControl: true,
         segmentedControlDirection: "horizontal",
     },
+    borderRadius: {
+        //@ts-ignore
+        type: ControlType.BorderRadius,
+        title: "Radius",
+        defaultValue: "0px",
+    },
     pixelColor: {
         type: ControlType.Color,
         title: "Pixel Tint",
         description: "More components at [Framer University](https://frameruni.link/cc).",
     },
+
 })

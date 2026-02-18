@@ -1,0 +1,35 @@
+import { create } from "zustand";
+
+export const useSceneStore = create((set) => ({
+  animate: true,
+  autoRotate: true,
+  backgroundColor: "#0d0d0d",
+  landColor: "#fff0d1",
+  waterColor: "#0d111a",
+  blendFactor: 0.96,
+  scaleFactor: 0.09,
+  opacity: 0.81,
+  bloomRadius: 0.48,
+  bloomStrength: 0.6,
+  bloomThreshold: 0,
+  lightColor: "#ffd0b8",
+  lightIntensity: 0.9,
+  toneMappingExposure: 1,
+
+  setAnimate: (animate) => set({ animate }),
+  setAutoRotate: (autoRotate) => set({ autoRotate }),
+  setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
+  setLandColor: (landColor) => set({ landColor }),
+  setWaterColor: (waterColor) => set({ waterColor }),
+  setBlendFactor: (blendFactor) => set({ blendFactor }),
+  setScaleFactor: (scaleFactor) => set({ scaleFactor }),
+  setOpacity: (opacity) => set({ opacity }),
+  setBloomRadius: (bloomRadius) => set({ bloomRadius }),
+  setBloomStrength: (bloomStrength) => set({ bloomStrength }),
+  setBloomThreshold: (bloomThreshold) => set({ bloomThreshold }),
+  setLightColor: (lightColor) => set({ lightColor }),
+  setLightIntensity: (lightIntensity) => set({ lightIntensity }),
+  setToneMappingExposure: (toneMappingExposure) => set({ toneMappingExposure }),
+
+  setState: (partial) => set(partial),
+}));

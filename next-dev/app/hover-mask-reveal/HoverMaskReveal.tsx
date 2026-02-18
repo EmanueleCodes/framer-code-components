@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState, useCallback } from "react"
-import { useMotionValue, useSpring, animate } from "framer-motion"
 import {
     Scene,
     PerspectiveCamera,
@@ -9,7 +8,6 @@ import {
     ShaderMaterial,
     Vector2,
     LinearFilter,
-    SRGBColorSpace,
     Clock,
     TextureLoader,
 } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/liquid-mask.js"
@@ -44,11 +42,9 @@ interface Props {
     shrinkTimeSeconds?: number
     curl?: number
     pressureIterations?: number
-    hover?: {
-        enabled?: boolean
-        scale?: number
-        transition?: any
-    }
+    parallax?: boolean
+    parallaxAmount?: number
+    parallaxSmoothing?: number
     preview?: boolean
     style?: React.CSSProperties
 }
@@ -64,19 +60,21 @@ export default function LiquidMask(props: Props) {
     const {
         imageBase,
         imageHover,
-        borderRadius = 10,
+        borderRadius = 0,
         radius = 100,
         blur = 0.5,
-        circleBoost = 0.5,
-        texture = 0.5,
+        circleBoost = 0.6,
+        texture = 0.7,
         timeSpeed = 5,
         splatRadius = 0.08,
         velocityDissipation = 0.99,
-        shrinkTimeSeconds = 2.3,
+        shrinkTimeSeconds = 2.4,
         curl = 30,
         pressureIterations = 25,
-        hover,
-        preview = false,
+        parallax = true,
+        parallaxAmount = 100,
+        parallaxSmoothing = 0,
+        preview = true,
     } = props
 
     // Check if base image is missing
@@ -123,6 +121,16 @@ export default function LiquidMask(props: Props) {
     const imgRef = useRef<HTMLImageElement | null>(null)
     const containerRef = useRef<HTMLDivElement | null>(null)
     const uniformsRef = useRef<any>(null)
+    const zoomProbeRef = useRef<HTMLDivElement | null>(null)
+
+    // Track last known size/zoom for Canvas resize detection
+    const lastSizeRef = useRef({ width: 0, height: 0, zoom: 0 })
+
+    // Hide blob while Canvas resize is in progress; show again after debounced remount
+    const hideBlobForResizeRef = useRef(false)
+
+    // When this changes in Canvas, the WebGL effect fully remounts (clean init at new size = centered blob, correct aspect)
+    const [canvasRemountKey, setCanvasRemountKey] = useState(0)
 
     // Detect mobile: disable effect and show base image only
     const [isMobile, setIsMobile] = useState(false)
@@ -143,110 +151,6 @@ export default function LiquidMask(props: Props) {
         return () => window.removeEventListener("resize", checkMobile)
     }, [])
 
-    // Motion/value state for hover scaling
-    const scaleMV = useMotionValue(1)
-    const [springOptions, setSpringOptions] = useState<any>(() => ({
-        stiffness: 170,
-        damping: 26,
-        mass: 1,
-    }))
-    const springScaleMV = useSpring(1, springOptions)
-    const tweenAnimRef = useRef<any>(null)
-    const hoverScaleRef = useRef<number>(hover?.scale ?? 1.2)
-    useEffect(() => {
-        hoverScaleRef.current = Math.max(1, Math.min(3, hover?.scale ?? 1.2))
-    }, [hover?.scale])
-
-    useEffect(() => {
-        const tr = hover?.transition || {}
-        if (tr && tr.type === "spring") {
-            if (
-                typeof tr.stiffness === "number" ||
-                typeof tr.damping === "number" ||
-                typeof tr.mass === "number"
-            ) {
-                setSpringOptions({
-                    stiffness:
-                        typeof tr.stiffness === "number" ? tr.stiffness : 170,
-                    damping: typeof tr.damping === "number" ? tr.damping : 26,
-                    mass: typeof tr.mass === "number" ? tr.mass : 1,
-                    restDelta:
-                        typeof tr.restDelta === "number"
-                            ? tr.restDelta
-                            : undefined,
-                    restSpeed:
-                        typeof tr.restSpeed === "number"
-                            ? tr.restSpeed
-                            : undefined,
-                })
-            } else {
-                const bounce = Math.max(0, Math.min(1, tr.bounce ?? 0))
-                const duration = Math.max(0.05, tr.duration ?? 0.5)
-                const mass = 1
-                const dampingRatio = 1 - 0.85 * bounce
-                const stiffness = Math.max(50, Math.min(700, 200 / duration))
-                const damping = 2 * Math.sqrt(stiffness * mass) * dampingRatio
-                setSpringOptions({ stiffness, damping, mass })
-            }
-        }
-    }, [hover?.transition])
-
-    // Apply base image and hover image scale whenever motion values change
-    useEffect(() => {
-        const applyScale = (v: number) => {
-            const clamped = Math.max(1, Math.min(3, v))
-            const img = imgRef.current
-            if (img) {
-                img.style.transform = `scale(${clamped})`
-                img.style.transformOrigin = "50% 50%"
-                img.style.willChange = "transform"
-            }
-            if (uniformsRef.current && uniformsRef.current.u_hoverScale) {
-                uniformsRef.current.u_hoverScale.value = clamped
-            }
-        }
-        const unsubA = scaleMV.on("change", applyScale)
-        const unsubB = springScaleMV.on("change", applyScale)
-        applyScale(1)
-        return () => {
-            unsubA?.()
-            unsubB?.()
-        }
-    }, [scaleMV, springScaleMV])
-
-    const animateToScale = useCallback(
-        (target: number) => {
-            const clamped = Math.max(1, Math.min(3, target))
-            const tr: any = hover?.transition || {}
-            if (
-                tweenAnimRef.current &&
-                typeof tweenAnimRef.current.stop === "function"
-            ) {
-                tweenAnimRef.current.stop()
-                tweenAnimRef.current = null
-            }
-            if (tr && tr.type === "spring") {
-                springScaleMV.set(clamped)
-            } else if (tr && tr.type === "tween") {
-                tweenAnimRef.current = animate(scaleMV, clamped, {
-                    duration:
-                        typeof tr.duration === "number" ? tr.duration : 0.5,
-                    delay: typeof tr.delay === "number" ? tr.delay : 0,
-                    ease: tr.ease,
-                })
-            } else {
-                tweenAnimRef.current = animate(scaleMV, clamped, {
-                    duration: 0.25,
-                    ease: [0.44, 0, 0.56, 1],
-                })
-            }
-        },
-        [hover?.transition, scaleMV, springScaleMV]
-    )
-
-    // State for hover effect
-    // (no local hover state needed; Motion values drive scale)
-
     // Debounced prop values to prevent excessive re-renders
     const [debouncedProps, setDebouncedProps] = useState({
         radius,
@@ -260,6 +164,9 @@ export default function LiquidMask(props: Props) {
         curl,
         pressureIterations,
         preview,
+        parallax,
+        parallaxAmount,
+        parallaxSmoothing,
     })
 
     // Debounce prop changes to improve performance
@@ -277,11 +184,29 @@ export default function LiquidMask(props: Props) {
                 curl,
                 pressureIterations,
                 preview,
+                parallax,
+                parallaxAmount,
+                parallaxSmoothing,
             })
         }, 100) // 100ms debounce
 
         return () => clearTimeout(timeoutId)
-    }, [radius, blur, circleBoost, texture, timeSpeed, splatRadius, velocityDissipation, shrinkTimeSeconds, curl, pressureIterations, preview])
+    }, [
+        radius,
+        blur,
+        circleBoost,
+        texture,
+        timeSpeed,
+        splatRadius,
+        velocityDissipation,
+        shrinkTimeSeconds,
+        curl,
+        pressureIterations,
+        preview,
+        parallax,
+        parallaxAmount,
+        parallaxSmoothing,
+    ])
 
     // Value mapping functions to convert normalized property values to internal shader values
     const mapRadius = useCallback((normalizedRadius: number) => {
@@ -323,6 +248,11 @@ export default function LiquidMask(props: Props) {
         const container = containerRef.current
         if (!canvas || !imgEl || !container) return
 
+        // Show blob when effect runs (initial mount or after debounced remount)
+        if (RenderTarget.current() === RenderTarget.canvas) {
+            hideBlobForResizeRef.current = false
+        }
+
         // Animation state variable
         let isAnimating = false
 
@@ -335,6 +265,8 @@ export default function LiquidMask(props: Props) {
             antialias: true,
         })
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+        // Transparent clear so the back image (DOM) shows through; avoids darkening
+        renderer.setClearColor(0x000000, 0)
 
         // Use clientWidth/clientHeight for more reliable initial sizing
         const initialWidth = Math.max(container.clientWidth, 300) // Fallback minimum
@@ -358,16 +290,18 @@ export default function LiquidMask(props: Props) {
         )
         camera.position.set(0, 0, perspective)
 
-        // Load hover image texture for direct rendering
+        // Load front image texture for the canvas (revealed by liquid mask, no parallax)
         const loader = new TextureLoader()
-        const hoverSrc =
-            imageHover?.src || "/random-assets/blue-profile-image.png"
-        const hoverTexture = loader.load(hoverSrc, () => {
+        const frontSrc =
+            imageHover?.src ||
+            imageBase?.src ||
+            "/random-assets/blue-profile-image.png"
+        const frontTexture = loader.load(frontSrc, () => {
             // Update aspect ratio when texture loads
-            if (hoverTexture.image) {
+            if (frontTexture.image) {
                 const imageAspect =
-                    hoverTexture.image.width / hoverTexture.image.height
-                uniforms.u_hoverImageAspect.value = imageAspect
+                    frontTexture.image.width / frontTexture.image.height
+                uniforms.u_frontImageAspect.value = imageAspect
 
                 // Force a re-render to update the effect with new aspect ratio
                 if (isAnimating) {
@@ -375,17 +309,14 @@ export default function LiquidMask(props: Props) {
                 }
             }
         })
-        // Color space for modern three versions
-        // @ts-ignore - guard older versions
-        if (SRGBColorSpace) {
-            // @ts-ignore
-            hoverTexture.colorSpace = SRGBColorSpace
-        }
-        hoverTexture.minFilter = LinearFilter
+        // Don't set colorSpace so we sample the texture as-is (sRGB passthrough)
+        // This avoids gamma issues when outputColorSpace is not set on the renderer
+        frontTexture.minFilter = LinearFilter
 
         const textureParams = mapTexture(debouncedProps.texture)
 
-        // --- Fluid simulation: half-resolution for performance ---
+        // --- Fluid simulation at full aspect ratio (not forced square) ---
+        // Blob circularity is achieved by using elliptical splats that compensate for aspect ratio
         const simScale = 0.5
         let simWidth = Math.max(1, Math.floor(initialWidth * simScale))
         let simHeight = Math.max(1, Math.floor(initialHeight * simScale))
@@ -422,11 +353,11 @@ export default function LiquidMask(props: Props) {
         }
 
         const resizeFluidFBOs = (w: number, h: number) => {
-            const newSimW = Math.max(1, Math.floor(w * simScale))
-            const newSimH = Math.max(1, Math.floor(h * simScale))
-            if (newSimW === simWidth && newSimH === simHeight) return
-            simWidth = newSimW
-            simHeight = newSimH
+            const newSimWidth = Math.max(1, Math.floor(w * simScale))
+            const newSimHeight = Math.max(1, Math.floor(h * simScale))
+            if (newSimWidth === simWidth && newSimHeight === simHeight) return
+            simWidth = newSimWidth
+            simHeight = newSimHeight
             disposeFluidFBOs()
             velFBO0 = createFluidFBO(simWidth, simHeight)
             velFBO1 = createFluidFBO(simWidth, simHeight)
@@ -459,10 +390,18 @@ export default function LiquidMask(props: Props) {
             u_noiseStrength: { value: textureParams.strength },
             u_noiseSize: { value: textureParams.size },
             u_timeSpeed: { value: mapTimeSpeed(debouncedProps.timeSpeed) },
-            u_hoverScale: { value: 1.0 },
-            u_hoverImage: { value: hoverTexture },
-            u_hoverImageAspect: { value: 1.0 },
+            u_frontImage: { value: frontTexture },
+            u_frontImageAspect: { value: 1.0 },
             u_containerAspect: { value: 1.0 },
+            u_parallaxOffset: { value: new Vector2(0, 0) },
+            u_parallaxMax: {
+                value: debouncedProps.parallax
+                    ? Math.max(
+                          0,
+                          Math.min(200, debouncedProps.parallaxAmount ?? 0)
+                      )
+                    : 0,
+            },
             u_windowSize: {
                 value: new Vector2(window.innerWidth, window.innerHeight),
             },
@@ -488,15 +427,26 @@ export default function LiquidMask(props: Props) {
     `
 
         // --- Fluid pass: Splat (add velocity and density at cursor)
+        // Splats are elliptical to compensate for container aspect ratio, making blobs appear circular
+        // The FBO has the same aspect ratio as the container. A circular splat in UV space
+        // appears as an ellipse in pixel space (stretched along the longer axis).
+        // To make a circular blob in PIXEL space, we compress the splat along the longer UV axis.
         const splatFrag = `
       precision highp float;
       varying vec2 vUv;
       uniform vec2 u_point;
       uniform vec2 u_splatColor;
       uniform float u_radius;
+      uniform float u_aspectRatio;
       uniform sampler2D u_target;
       void main() {
         vec2 p = vUv - u_point;
+        // Correct for aspect ratio so blob appears circular in pixel space
+        // aspectRatio = width/height
+        // Wide (aspect > 1): UV-X maps to more pixels, so compress X to compensate
+        // Tall (aspect < 1): UV-Y maps to more pixels, so compress Y to compensate  
+        p.x *= max(u_aspectRatio, 1.0);
+        p.y *= max(1.0 / u_aspectRatio, 1.0);
         float splat = exp(-dot(p, p) / (u_radius * u_radius));
         vec4 base = texture2D(u_target, vUv);
         base.xy += splat * u_splatColor;
@@ -508,10 +458,14 @@ export default function LiquidMask(props: Props) {
       varying vec2 vUv;
       uniform vec2 u_point;
       uniform float u_radius;
+      uniform float u_aspectRatio;
       uniform float u_densityAmount;
       uniform sampler2D u_target;
       void main() {
         vec2 p = vUv - u_point;
+        // Correct for aspect ratio so blob appears circular in pixel space
+        p.x *= max(u_aspectRatio, 1.0);
+        p.y *= max(1.0 / u_aspectRatio, 1.0);
         float splat = exp(-dot(p, p) / (u_radius * u_radius));
         float base = texture2D(u_target, vUv).r;
         gl_FragColor = vec4(base + splat * u_densityAmount, 0.0, 0.0, 1.0);
@@ -607,7 +561,7 @@ export default function LiquidMask(props: Props) {
       }
     `
 
-        // Shader that renders the hover image masked by the fluid density
+        // Shader that renders the front (revealed) image masked by the fluid density, with parallax on the revealed image
         const fragmentShader = `
       precision highp float;
       varying vec2 vUv;
@@ -622,12 +576,13 @@ export default function LiquidMask(props: Props) {
       uniform float u_noiseStrength;
       uniform float u_noiseSize;
       uniform float u_timeSpeed;
-      uniform sampler2D u_hoverImage;
-      uniform float u_hoverScale;
-      uniform float u_hoverImageAspect;
+      uniform sampler2D u_frontImage;
+      uniform float u_frontImageAspect;
       uniform float u_containerAspect;
       uniform vec2 u_windowSize;
       uniform vec2 u_containerOffset;
+      uniform vec2 u_parallaxOffset;
+      uniform float u_parallaxMax;
 
               // Simplex noise 3D from https://github.com/ashima/webgl-noise
       vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -705,13 +660,12 @@ export default function LiquidMask(props: Props) {
       void main() {
         vec2 uv = vUv;
 
-        // Fluid density from simulation (persistent, spreads and fades)
+        // Sample density directly - blob circularity is achieved via elliptical splats
         float density = texture2D(u_densityTex, uv).r * u_circleBoost * u_progress;
 
-        // Window-relative noise for organic mask edges
-        vec2 windowCoord = (uv * u_planeRes + u_containerOffset) / u_windowSize;
-        float offx = windowCoord.x + (u_time * u_timeSpeed * 0.1) + sin(windowCoord.y + u_time * u_timeSpeed * 0.1);
-        float offy = windowCoord.y - cos(u_time * u_timeSpeed * 0.001) * 0.01;
+        // Noise for liquid texture edges
+        float offx = uv.x + (u_time * u_timeSpeed * 0.1) + sin(uv.y + u_time * u_timeSpeed * 0.1);
+        float offy = uv.y - cos(u_time * u_timeSpeed * 0.001) * 0.01;
         float effectiveNoiseFreq = u_noiseFreq / u_noiseSize;
         float n1 = snoise(vec3(offx * effectiveNoiseFreq, offy * effectiveNoiseFreq, u_time * u_timeSpeed)) - 1.0;
         float n2 = snoise(vec3(offx * effectiveNoiseFreq * 0.5, offy * effectiveNoiseFreq * 0.5, u_time * u_timeSpeed * 0.7)) - 1.0;
@@ -719,31 +673,37 @@ export default function LiquidMask(props: Props) {
 
         float finalMask = smoothstep(0.35, 0.55, (n * u_noiseStrength) + pow(density, 1.5));
 
-        // Responsive UV mapping for hover image (maintains aspect ratio like object-fit: cover)
+        // Responsive UV mapping for front image (maintains aspect ratio like object-fit: cover)
+        // For "cover": scale up so the image fills the container, cropping excess
         vec2 responsiveUV = uv;
         
-        // Ensure we're not getting NaN or invalid values
-        if (u_hoverImageAspect > 0.0 && u_containerAspect > 0.0) {
-            if (u_hoverImageAspect > u_containerAspect) {
-              // Image is wider than container - scale to fit height
-              float scale = u_containerAspect / u_hoverImageAspect;
-              responsiveUV.x = (uv.x - 0.5) * scale + 0.5;
+        if (u_frontImageAspect > 0.0 && u_containerAspect > 0.0) {
+            if (u_frontImageAspect > u_containerAspect) {
+              // Image is wider than container - fit height, crop width
+              float scale = u_frontImageAspect / u_containerAspect;
+              responsiveUV.x = (uv.x - 0.5) / scale + 0.5;
             } else {
-              // Image is taller than container - scale to fit width
-              float scale = u_hoverImageAspect / u_containerAspect;
-              responsiveUV.y = (uv.y - 0.5) * scale + 0.5;
+              // Image is taller than container - fit width, crop height
+              float scale = u_containerAspect / u_frontImageAspect;
+              responsiveUV.y = (uv.y - 0.5) / scale + 0.5;
             }
-        } else {
-            // Fallback to original UV if aspect ratios are invalid
-            responsiveUV = uv;
         }
 
-        // Sample the hover image with responsive UV mapping and apply the mask
-        responsiveUV = (responsiveUV - vec2(0.5)) / max(u_hoverScale, 1.0) + vec2(0.5);
-        vec4 hoverColor = texture2D(u_hoverImage, responsiveUV);
-        
-        // Output the hover image with mask applied as alpha
-        gl_FragColor = vec4(hoverColor.rgb, hoverColor.a * finalMask);
+        // Parallax the REVEALED (front) image: move opposite to cursor (add offset so image shifts away from cursor)
+        vec2 inset = u_parallaxMax / u_planeRes;
+        vec2 baseUV = inset + responsiveUV * (1.0 - 2.0 * inset);
+        vec2 parallaxUV = u_parallaxOffset / u_planeRes;
+        vec2 sampleUV = baseUV + parallaxUV;
+
+        // Sample the front image with parallax and apply the mask
+        vec4 frontColor = texture2D(u_frontImage, sampleUV);
+        float outAlpha = frontColor.a * finalMask;
+        // Hard cutoff: fully transparent where mask is negligible
+        if (outAlpha < 0.01) outAlpha = 0.0;
+
+        // Output straight alpha - THREE's default blend (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) 
+        // produces correct premultiplied result for canvas compositing
+        gl_FragColor = vec4(frontColor.rgb, outAlpha);
       }
     `
 
@@ -768,6 +728,7 @@ export default function LiquidMask(props: Props) {
                 u_point: { value: new Vector2(0.5, 0.5) },
                 u_splatColor: { value: new Vector2(0, 0) },
                 u_radius: { value: 0.02 },
+                u_aspectRatio: { value: 1.0 },
                 u_target: { value: velFBO0.texture },
             },
             depthWrite: false,
@@ -780,6 +741,7 @@ export default function LiquidMask(props: Props) {
             uniforms: {
                 u_point: { value: new Vector2(0.5, 0.5) },
                 u_radius: { value: 0.02 },
+                u_aspectRatio: { value: 1.0 },
                 u_densityAmount: { value: 1.0 },
                 u_target: { value: densityFBO0.texture },
             },
@@ -889,15 +851,15 @@ export default function LiquidMask(props: Props) {
                 containerRect.top
             )
 
-            // Update aspect ratio uniforms for responsive hover image
+            // Update aspect ratio uniforms for responsive front image
             const containerAspect = actualWidth / actualHeight
             uniforms.u_containerAspect.value = containerAspect
 
-            // Calculate hover image aspect ratio when texture is loaded
-            if (hoverTexture.image) {
+            // Calculate front image aspect ratio when texture is loaded
+            if (frontTexture.image) {
                 const imageAspect =
-                    hoverTexture.image.width / hoverTexture.image.height
-                uniforms.u_hoverImageAspect.value = imageAspect
+                    frontTexture.image.width / frontTexture.image.height
+                uniforms.u_frontImageAspect.value = imageAspect
             }
 
             // Resize fluid simulation buffers when container size changes
@@ -917,6 +879,7 @@ export default function LiquidMask(props: Props) {
         let targetProgress = 0
         let rafId = 0
         const clock = new Clock()
+        const targetParallaxOffset = new Vector2(0, 0)
 
         // Function to determine if we should animate
         const shouldAnimate = () => {
@@ -946,6 +909,29 @@ export default function LiquidMask(props: Props) {
             const dt = clock.getDelta()
             uniforms.u_time.value += dt
 
+            // Parallax: when disabled keep offset at 0; when enabled apply smoothing
+            if (!debouncedProps.parallax) {
+                uniforms.u_parallaxOffset.value.set(0, 0)
+                targetParallaxOffset.set(0, 0)
+            } else {
+                const s = Math.max(
+                    0,
+                    Math.min(1, debouncedProps.parallaxSmoothing ?? 0)
+                )
+                if (s === 0) {
+                    uniforms.u_parallaxOffset.value.copy(targetParallaxOffset)
+                } else {
+                    const tauMin = 0.04
+                    const tauMax = 0.25
+                    const tau = tauMin + (tauMax - tauMin) * s
+                    const alpha = 1 - Math.exp(-dt / Math.max(1e-6, tau))
+                    uniforms.u_parallaxOffset.value.lerp(
+                        targetParallaxOffset,
+                        alpha
+                    )
+                }
+            }
+
             const mouseTarget = uniforms.u_mouse.value
             mouseVelocity.x = mouseTarget.x - lastMouseUV.x
             mouseVelocity.y = mouseTarget.y - lastMouseUV.y
@@ -953,14 +939,53 @@ export default function LiquidMask(props: Props) {
             lastMouseUV.y = mouseTarget.y
 
             const isCanvasMode = RenderTarget.current() === RenderTarget.canvas
-            const simMouseX = isCanvasMode && debouncedProps.preview ? 0.5 : mouseTarget.x
-            const simMouseY = isCanvasMode && debouncedProps.preview ? 0.5 : mouseTarget.y
+
+            // Always recompute container aspect to handle live resizing (especially in Canvas mode)
+            const actualW = Math.max(container.clientWidth, 2)
+            const actualH = Math.max(container.clientHeight, 2)
+            const containerAspect = actualW / actualH
+            uniforms.u_containerAspect.value = containerAspect
+            uniforms.u_planeRes.value.set(actualW, actualH)
+
+            // Update renderer/camera if size changed
+            if (
+                renderer.getSize(new Vector2()).x !== actualW ||
+                renderer.getSize(new Vector2()).y !== actualH
+            ) {
+                renderer.setSize(actualW, actualH, false)
+                camera.aspect = containerAspect
+                camera.updateProjectionMatrix()
+                mesh.scale.set(actualW, actualH, 1)
+            }
+
+            // Also update sim resolution if needed (handles Canvas resizing)
+            resizeFluidFBOs(actualW, actualH)
+
+            // Mouse position for splatting (direct UV, no aspect correction needed)
+            // Blob circularity is achieved via elliptical splats in the shader
+            let simMouseX: number, simMouseY: number
+            if (isCanvasMode && debouncedProps.preview) {
+                simMouseX = 0.5
+                simMouseY = 0.5
+            } else {
+                simMouseX = mouseTarget.x
+                simMouseY = mouseTarget.y
+            }
             const splatRad = Math.max(0.005, debouncedProps.splatRadius)
-            const velDiss = Math.max(0.9, Math.min(1, debouncedProps.velocityDissipation))
+            const velDiss = Math.max(
+                0.9,
+                Math.min(1, debouncedProps.velocityDissipation)
+            )
             // Return time in seconds → per-frame dissipation so density ~1% after that time at 60fps
-            const T = Math.max(0.5, Math.min(10, debouncedProps.shrinkTimeSeconds))
+            const T = Math.max(
+                0.5,
+                Math.min(10, debouncedProps.shrinkTimeSeconds)
+            )
             const denDiss = Math.pow(0.01, 1 / (60 * T))
-            const pressureIters = Math.max(10, Math.min(50, Math.round(debouncedProps.pressureIterations)))
+            const pressureIters = Math.max(
+                10,
+                Math.min(50, Math.round(debouncedProps.pressureIterations))
+            )
 
             texelSize.set(1 / simWidth, 1 / simHeight)
             advectMaterial.uniforms.u_texelSize.value.copy(texelSize)
@@ -972,19 +997,28 @@ export default function LiquidMask(props: Props) {
             const gl = renderer.getContext()
             gl.disable(gl.BLEND)
 
-            // 1) Splat velocity
+            // 1) Splat velocity - use elliptical splats for circular appearance
             splatVelMaterial.uniforms.u_point.value.set(simMouseX, simMouseY)
-            splatVelMaterial.uniforms.u_splatColor.value.set(mouseVelocity.x * 30, mouseVelocity.y * 30)
+            splatVelMaterial.uniforms.u_aspectRatio.value = containerAspect
+            splatVelMaterial.uniforms.u_splatColor.value.set(
+                mouseVelocity.x * 30,
+                mouseVelocity.y * 30
+            )
             splatVelMaterial.uniforms.u_radius.value = splatRad
             splatVelMaterial.uniforms.u_target.value = velFBO0.texture
             quadMesh.material = splatVelMaterial
             renderer.setRenderTarget(velFBO1)
             renderer.render(fluidScene, orthoCamera)
 
-            // 2) Splat density
-            splatDensityMaterial.uniforms.u_point.value.set(simMouseX, simMouseY)
+            // 2) Splat density - use elliptical splats for circular appearance
+            splatDensityMaterial.uniforms.u_point.value.set(
+                simMouseX,
+                simMouseY
+            )
+            splatDensityMaterial.uniforms.u_aspectRatio.value = containerAspect
             splatDensityMaterial.uniforms.u_radius.value = splatRad
-            splatDensityMaterial.uniforms.u_densityAmount.value = (isCanvasMode && debouncedProps.preview) ? 0.15 : 1
+            const densityAmt = isCanvasMode && debouncedProps.preview ? 0.15 : 1
+            splatDensityMaterial.uniforms.u_densityAmount.value = densityAmt
             splatDensityMaterial.uniforms.u_target.value = densityFBO0.texture
             quadMesh.material = splatDensityMaterial
             renderer.setRenderTarget(densityFBO1)
@@ -1009,7 +1043,8 @@ export default function LiquidMask(props: Props) {
             }
 
             // 4) Divergence (use velFBO1 if curl ran, else velFBO0)
-            const velForDiv = debouncedProps.curl > 0 ? velFBO1.texture : velFBO0.texture
+            const velForDiv =
+                debouncedProps.curl > 0 ? velFBO1.texture : velFBO0.texture
             divergenceMaterial.uniforms.u_velocity.value = velForDiv
             quadMesh.material = divergenceMaterial
             renderer.setRenderTarget(divFBO)
@@ -1020,7 +1055,8 @@ export default function LiquidMask(props: Props) {
             let pressureRead = pressureFBO0
             let pressureWrite = pressureFBO1
             for (let i = 0; i < pressureIters; i++) {
-                pressureMaterial.uniforms.u_pressure.value = pressureRead.texture
+                pressureMaterial.uniforms.u_pressure.value =
+                    pressureRead.texture
                 quadMesh.material = pressureMaterial
                 renderer.setRenderTarget(pressureWrite)
                 renderer.render(fluidScene, orthoCamera)
@@ -1030,16 +1066,20 @@ export default function LiquidMask(props: Props) {
             }
 
             // 6) Subtract pressure gradient from velocity
-            const velForGradientRead = debouncedProps.curl > 0 ? velFBO1 : velFBO0
-            const velForGradientWrite = debouncedProps.curl > 0 ? velFBO0 : velFBO1
-            gradientMaterial.uniforms.u_velocity.value = velForGradientRead.texture
+            const velForGradientRead =
+                debouncedProps.curl > 0 ? velFBO1 : velFBO0
+            const velForGradientWrite =
+                debouncedProps.curl > 0 ? velFBO0 : velFBO1
+            gradientMaterial.uniforms.u_velocity.value =
+                velForGradientRead.texture
             gradientMaterial.uniforms.u_pressure.value = pressureRead.texture
             quadMesh.material = gradientMaterial
             renderer.setRenderTarget(velForGradientWrite)
             renderer.render(fluidScene, orthoCamera)
 
             // 7) Advect density (use velocity after gradient)
-            advectDensityMaterial.uniforms.u_velocity.value = velForGradientWrite.texture
+            advectDensityMaterial.uniforms.u_velocity.value =
+                velForGradientWrite.texture
             advectDensityMaterial.uniforms.u_source.value = densityFBO1.texture
             advectDensityMaterial.uniforms.u_dt.value = 1
             advectDensityMaterial.uniforms.u_dissipationMultiply.value = denDiss
@@ -1055,11 +1095,18 @@ export default function LiquidMask(props: Props) {
             }
 
             renderer.setRenderTarget(null)
+            // Explicitly clear to transparent before drawing the main scene
+            renderer.clear()
             gl.enable(gl.BLEND)
 
             uniforms.u_densityTex.value = densityFBO0.texture
+            uniforms.u_parallaxMax.value = debouncedProps.parallax
+                ? Math.max(0, Math.min(200, debouncedProps.parallaxAmount ?? 0))
+                : 0
             uniforms.u_blur.value = mapBlur(debouncedProps.blur)
-            uniforms.u_circleBoost.value = mapCircleBoost(debouncedProps.circleBoost)
+            uniforms.u_circleBoost.value = mapCircleBoost(
+                debouncedProps.circleBoost
+            )
             const currentTextureParams = mapTexture(debouncedProps.texture)
             uniforms.u_noiseFreq.value = currentTextureParams.freq
             uniforms.u_noiseStrength.value = currentTextureParams.strength
@@ -1074,7 +1121,12 @@ export default function LiquidMask(props: Props) {
                 uniforms.u_noiseStrength.value = currentTextureParams.strength
             }
 
-            uniforms.u_progress.value += (targetProgress - uniforms.u_progress.value) * 0.08
+            if (hideBlobForResizeRef.current) {
+                uniforms.u_progress.value = 0
+            } else {
+                uniforms.u_progress.value +=
+                    (targetProgress - uniforms.u_progress.value) * 0.08
+            }
             renderer.render(scene, camera)
         }
 
@@ -1120,6 +1172,50 @@ export default function LiquidMask(props: Props) {
         // Also listen to window resize for global changes
         window.addEventListener("resize", throttledResize)
 
+        // Canvas mode: use zoom probe polling to detect resize/zoom changes (debounced remount)
+        let canvasResizeRafId = 0
+        let remountDebounceId: ReturnType<typeof setTimeout> | null = null
+        const REMOUNT_DEBOUNCE_MS = 350
+        const isCanvasMode = RenderTarget.current() === RenderTarget.canvas
+        if (isCanvasMode) {
+            const POLL_INTERVAL_MS = 150
+            let lastPollTime = 0
+
+            const pollCanvasResize = (now: number) => {
+                canvasResizeRafId = requestAnimationFrame(pollCanvasResize)
+
+                if (now - lastPollTime < POLL_INTERVAL_MS) return
+                lastPollTime = now
+
+                const probe = zoomProbeRef.current
+                if (!probe) return
+
+                const probeRect = probe.getBoundingClientRect()
+                const currentZoom = probeRect.width
+                const currentWidth = container.clientWidth
+                const currentHeight = container.clientHeight
+
+                const last = lastSizeRef.current
+                const zoomChanged = Math.abs(currentZoom - last.zoom) > 0.5
+                const sizeChanged =
+                    currentWidth !== last.width || currentHeight !== last.height
+
+                if (zoomChanged || sizeChanged) {
+                    last.zoom = currentZoom
+                    last.width = currentWidth
+                    last.height = currentHeight
+                    hideBlobForResizeRef.current = true
+                    if (remountDebounceId) clearTimeout(remountDebounceId)
+                    remountDebounceId = setTimeout(() => {
+                        remountDebounceId = null
+                        setCanvasRemountKey((k) => k + 1)
+                    }, REMOUNT_DEBOUNCE_MS)
+                }
+            }
+
+            canvasResizeRafId = requestAnimationFrame(pollCanvasResize)
+        }
+
         // Intersection Observer to pause rendering when out of view
         const intersectionObserver = new IntersectionObserver(
             (entries) => {
@@ -1142,6 +1238,10 @@ export default function LiquidMask(props: Props) {
         )
         intersectionObserver.observe(container)
 
+        const parallaxPx = debouncedProps.parallax
+            ? Math.max(0, Math.min(200, debouncedProps.parallaxAmount ?? 0))
+            : 0
+
         const onMove = (e: MouseEvent) => {
             // Only handle mouse events if not in Canvas preview mode
             const isCanvasMode = RenderTarget.current() === RenderTarget.canvas
@@ -1155,20 +1255,42 @@ export default function LiquidMask(props: Props) {
             const containerRect = container.getBoundingClientRect()
             const x = (e.clientX - containerRect.left) / containerRect.width
             const y = 1 - (e.clientY - containerRect.top) / containerRect.height
-            uniforms.u_mouse.value.set(
-                Math.max(0.0, Math.min(1.0, x)),
-                Math.max(0.0, Math.min(1.0, y))
-            )
+            const nx = Math.max(0.0, Math.min(1.0, x))
+            const ny = Math.max(0.0, Math.min(1.0, y))
+            uniforms.u_mouse.value.set(nx, ny)
+
+            // Parallax the revealed (front) image when enabled
+            if (debouncedProps.parallax && parallaxPx > 0) {
+                const offsetX = Math.max(
+                    -parallaxPx,
+                    Math.min(parallaxPx, (nx - 0.5) * 2 * parallaxPx)
+                )
+                const offsetY = Math.max(
+                    -parallaxPx,
+                    Math.min(parallaxPx, (ny - 0.5) * 2 * parallaxPx)
+                )
+                targetParallaxOffset.set(offsetX, offsetY)
+            }
         }
         const onEnter = () => {
             // Only handle hover events if not in Canvas preview mode
             const isCanvasMode = RenderTarget.current() === RenderTarget.canvas
             if (isCanvasMode && debouncedProps.preview) return
 
+            // Clear old density/velocity so previous blobs don't persist
+            const gl = renderer.getContext()
+            gl.clearColor(0, 0, 0, 0)
+            renderer.setRenderTarget(densityFBO0)
+            gl.clear(gl.COLOR_BUFFER_BIT)
+            renderer.setRenderTarget(densityFBO1)
+            gl.clear(gl.COLOR_BUFFER_BIT)
+            renderer.setRenderTarget(velFBO0)
+            gl.clear(gl.COLOR_BUFFER_BIT)
+            renderer.setRenderTarget(velFBO1)
+            gl.clear(gl.COLOR_BUFFER_BIT)
+            renderer.setRenderTarget(null)
+
             targetProgress = 1
-            if (hover && hover.enabled) {
-                animateToScale(hoverScaleRef.current)
-            }
 
             // Start animation if not already running
             if (!isAnimating && shouldAnimate()) {
@@ -1181,8 +1303,15 @@ export default function LiquidMask(props: Props) {
             if (isCanvasMode && debouncedProps.preview) return
 
             targetProgress = 0
-            if (hover && hover.enabled) {
-                animateToScale(1)
+            targetParallaxOffset.set(0, 0)
+            if (
+                !debouncedProps.parallax ||
+                Math.max(
+                    0,
+                    Math.min(1, debouncedProps.parallaxSmoothing ?? 0)
+                ) === 0
+            ) {
+                uniforms.u_parallaxOffset.value.set(0, 0)
             }
         }
 
@@ -1193,6 +1322,12 @@ export default function LiquidMask(props: Props) {
         return () => {
             if (rafId) {
                 cancelAnimationFrame(rafId)
+            }
+            if (canvasResizeRafId) {
+                cancelAnimationFrame(canvasResizeRafId)
+            }
+            if (remountDebounceId) {
+                clearTimeout(remountDebounceId)
             }
             resizeObserver.disconnect()
             intersectionObserver.disconnect()
@@ -1218,6 +1353,7 @@ export default function LiquidMask(props: Props) {
             renderer.dispose()
         }
     }, [
+        canvasRemountKey,
         debouncedProps.radius,
         debouncedProps.blur,
         debouncedProps.circleBoost,
@@ -1233,6 +1369,10 @@ export default function LiquidMask(props: Props) {
         imageBase?.positionY,
         imageHover?.positionX,
         imageHover?.positionY,
+        imageHover?.src,
+        debouncedProps.parallax,
+        debouncedProps.parallaxAmount,
+        debouncedProps.parallaxSmoothing,
         mapRadius,
         mapBlur,
         mapCircleBoost,
@@ -1256,16 +1396,13 @@ export default function LiquidMask(props: Props) {
                 ...props.style,
             }}
         >
-            {/* Base image - always visible */}
+            {/* Back image - static, no parallax */}
             <figure
                 style={{
-                    width: "100%",
-                    height: "100%",
-                    maxWidth: "100%",
-                    flex: "0 0 auto",
+                    position: "absolute",
+                    inset: 0,
                     margin: 0,
                     padding: 0,
-                    position: "absolute",
                     zIndex: 1,
                 }}
             >
@@ -1273,7 +1410,7 @@ export default function LiquidMask(props: Props) {
                     ref={imgRef}
                     src={imageBase?.src}
                     srcSet={imageBase?.srcSet}
-                    alt={imageBase?.alt || "Base image"}
+                    alt={imageBase?.alt || "Back image"}
                     draggable={false}
                     style={{
                         width: "100%",
@@ -1288,9 +1425,7 @@ export default function LiquidMask(props: Props) {
                 />
             </figure>
 
-            {/* Hover image rendered by canvas - no DOM element needed */}
-
-            {/* Three.js canvas - renders hover effect (hidden on mobile) */}
+            {/* Three.js canvas - renders liquid mask effect (hidden on mobile) */}
             {!isMobile && (
                 <canvas
                     ref={canvasRef}
@@ -1302,14 +1437,23 @@ export default function LiquidMask(props: Props) {
                         height: "100%",
                         zIndex: 3,
                         pointerEvents: "none",
-                        opacity: 1,
-                        minWidth: "100%",
-                        minHeight: "100%",
-                        maxWidth: "100%",
-                        maxHeight: "100%",
+                        mixBlendMode: "normal",
+                        background: "transparent",
                     }}
                 />
             )}
+
+            {/* Hidden 20x20 zoom probe for Canvas resize/zoom detection */}
+            <div
+                ref={zoomProbeRef}
+                style={{
+                    position: "absolute",
+                    width: 20,
+                    height: 20,
+                    opacity: 0,
+                    pointerEvents: "none",
+                }}
+            />
         </div>
     )
 }
@@ -1318,25 +1462,53 @@ addPropertyControls(LiquidMask, {
     preview: {
         type: ControlType.Boolean,
         title: "Preview",
-        defaultValue: false,
+        defaultValue: true,
         enabledTitle: "On",
         disabledTitle: "Off",
     },
     imageBase: {
         type: ControlType.ResponsiveImage,
-        title: "Base",
+        title: "Front",
     },
     imageHover: {
         type: ControlType.ResponsiveImage,
-        title: "Hover",
+        title: "Back",
+    },
+    parallax: {
+        type: ControlType.Boolean,
+        title: "Parallax",
+        defaultValue: true,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
+    parallaxAmount: {
+        type: ControlType.Number,
+        title: "Amount",
+        min: 0,
+        max: 100,
+        step: 5,
+        defaultValue: 100,
+        unit: "px",
+        hidden: (props: Props) => !props.parallax,
+    },
+    parallaxSmoothing: {
+        type: ControlType.Number,
+        title: "Smoothing",
+        min: 0,
+        max: 1,
+        step: 0.05,
+        defaultValue: 0,
+        unit: "",
+        hidden: (props: Props) => !props.parallax,
     },
     borderRadius: {
-        type: ControlType.Number,
-        title: "Corner radius",
+        //@ts-ignore
+        type: ControlType.BorderRadius,
+        title: "Radius",
         min: 0,
         max: 100,
         step: 1,
-        defaultValue: 10,
+        defaultValue: 0,
         unit: "px",
     },
     splatRadius: {
@@ -1363,7 +1535,7 @@ addPropertyControls(LiquidMask, {
         min: 0.5,
         max: 10,
         step: 0.1,
-        defaultValue: 2.3,
+        defaultValue: 2.4,
         unit: "s",
     },
     texture: {
@@ -1372,7 +1544,7 @@ addPropertyControls(LiquidMask, {
         min: 0,
         max: 1,
         step: 0.1,
-        defaultValue: 0.5,
+        defaultValue: 0.7,
         unit: "",
     },
     curl: {
@@ -1383,43 +1555,9 @@ addPropertyControls(LiquidMask, {
         step: 5,
         defaultValue: 30,
         unit: "",
-    },
-    hover: {
-        type: ControlType.Object,
-        title: "Zoom",
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
-        controls: {
-            enabled: {
-                type: ControlType.Boolean,
-                title: "Enabled",
-                defaultValue: false,
-                enabledTitle: "On",
-                disabledTitle: "Off",
-            },
-            scale: {
-                type: ControlType.Number,
-                title: "Scale",
-                min: 1,
-                max: 3,
-                step: 0.1,
-                defaultValue: 1.2,
-                unit: "x",
-                hidden: (props) => !props.enabled,
-            },
-            transition: {
-                type: ControlType.Transition,
-                title: "Transition",
-                defaultValue: {
-                    type: "tween",
-                    duration: 0.5,
-                    ease: [0.44, 0, 0.56, 1],
-                    delay: 0,
-                },
-                hidden: (props) => !props.enabled,
-            },
-        },
     },
 })
 
-LiquidMask.displayName = "Liquid Mask"
+LiquidMask.displayName = "Hover Mask Reveal"

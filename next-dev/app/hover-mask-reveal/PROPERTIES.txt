@@ -1,0 +1,37 @@
+Hover Mask Reveal - Property Controls
+
+Preview
+Toggles the liquid mask effect in the Framer canvas. On: effect visible; Off: static. Default: On.
+
+Front
+Base image shown by default (responsive image). Required for the effect.
+
+Back
+Image revealed on hover/interaction (responsive image). Swaps with Front via the liquid mask.
+
+Parallax
+Enables mouse-based parallax movement of the effect. Default: On.
+
+Amount
+Parallax movement distance in pixels when Parallax is On. Range: 0–100 px. Default: 100 px. Hidden when Parallax is Off.
+
+Smoothing
+Smoothing of the parallax motion (0 = snappy, 1 = very smooth). Range: 0–1. Default: 0. Hidden when Parallax is Off.
+
+Radius
+Border radius of the component. Range: 0–100 px. Default: 0.
+
+Size
+Size of the liquid “splat” on interaction. Range: 0.02–0.2. Default: 0.08.
+
+Strength
+Strength of the circular reveal. Range: 0.2–1. Default: 0.6.
+
+Return time
+Time in seconds for the mask to shrink back after interaction. Range: 0.5–10 s. Default: 2.4 s.
+
+Edge grain
+Amount of texture/grain on the liquid edge. Range: 0–1. Default: 0.7.
+
+Swirl
+Curl/swirl intensity of the liquid. Range: 0–100. Default: 30.
