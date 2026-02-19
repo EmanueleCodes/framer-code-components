@@ -1,0 +1,52 @@
+Depth Globe - Property Controls
+
+Preview
+When enabled, the globe animation runs in the Framer canvas. When disabled, the globe is frozen to improve editor performance.
+
+Globe data URL
+URL to a JSON file containing the globe elevation data. The JSON must have a "points" array; each point is [latitude, longitude, elevation, land] where land is 0 or 1. Host your own file or use a provided sample URL.
+
+Animate
+When enabled, the globe’s elevation points animate in with a subtle wobble. When disabled, the globe appears in its final state.
+
+Auto rotate
+When enabled, the globe slowly rotates. When disabled, you can still drag to orbit the camera.
+
+Rotate speed
+Speed of auto-rotation. Higher values rotate the globe faster.
+
+Land color
+Color of the elevated land (terrain) points on the globe.
+
+Water color
+Color of the ocean and low-lying areas, and the inner water sphere.
+
+Land/water blend
+How much the water color blends into the land color at low elevations. Higher values make coastlines blend more with the water color.
+
+Elevation scale
+How exaggerated the terrain height is. Higher values make mountains stand out more.
+
+Water opacity
+Opacity of the inner water sphere (ocean surface). Lower values make it more transparent.
+
+Background
+Background color of the scene behind the globe.
+
+Bloom radius
+Size of the bloom glow around bright areas. Higher values create a softer, wider glow.
+
+Bloom strength
+Intensity of the bloom effect. Higher values make the globe appear brighter and more glowing.
+
+Bloom threshold
+Brightness level above which bloom is applied. Lower values make more of the scene bloom.
+
+Light color
+Color of the directional and ambient light illuminating the globe.
+
+Light intensity
+Brightness of the scene lighting. Higher values make the globe brighter.
+
+Exposure
+Overall exposure (brightness) of the rendered image. Adjust if the globe looks too dark or too bright.

@@ -21,6 +21,9 @@ import {
     Vector2,
     EdgesGeometry,
     LineSegments,
+    TubeGeometry,
+    CatmullRomCurve3,
+    Vector3,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 import {
     geoEquirectangular,
@@ -55,7 +58,7 @@ interface Marker {
 interface MarkerConfig {
     markers: Marker[]
     color: string
-    radius: number
+    size: number
 }
 
 interface GlobeProps {
@@ -74,11 +77,36 @@ interface GlobeProps {
     outlineColor?: string
     dotColor?: string
     graticuleColor?: string
+    outlineWidth?: number
+    gridWidth?: number
+    dragSpeed?: number
+    detail?: number
+    drag?: boolean
     style?: React.CSSProperties
+}
+
+// CSS variable token and color parsing (hex/rgba/var())
+const cssVariableRegex =
+    /var\s*\(\s*(--[\w-]+)(?:\s*,\s*((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*))?\s*\)/
+
+function extractDefaultValue(cssVar: string): string {
+    if (!cssVar || !cssVar.startsWith("var(")) return cssVar
+    const match = cssVariableRegex.exec(cssVar)
+    if (!match) return cssVar
+    const fallback = (match[2] || "").trim()
+    if (fallback.startsWith("var(")) return extractDefaultValue(fallback)
+    return fallback || cssVar
+}
+
+function resolveTokenColor(input: any): any {
+    if (typeof input !== "string") return input
+    if (!input.startsWith("var(")) return input
+    return extractDefaultValue(input)
 }
 
 // Color parsing function to extract RGB and alpha
 // Returns transparent if input is empty/undefined
+// Supports hex, rgba, and CSS variables (Framer color tokens)
 function parseColorToRgba(input: string | undefined): {
     r: number
     g: number
@@ -184,6 +212,47 @@ function mapMarkerDotSizeUiToMultiplier(ui: number): number {
     return mapLinear(clamped, 0, 100, 0.1, 2.5)
 }
 
+// Detail: UI [0.1..1] → point sampling step [10..1] (higher detail = smaller step = more points)
+function mapDetailToStepSize(ui: number): number {
+    const clamped = Math.max(0.1, Math.min(1, ui))
+    // detail = 1 → step = 1 (use all points)
+    // detail = 0.1 → step = 10 (use every 10th point)
+    return mapLinear(clamped, 0.1, 1.0, 10, 1)
+}
+
+// Simplify coordinate ring by sampling points based on detail level
+// Always keeps first and last point to maintain closed loops
+function simplifyRing(ring: number[][], detail: number): number[][] {
+    if (ring.length < 2) return ring
+    if (detail >= 1) return ring // No simplification at max detail
+
+    const stepSize = Math.max(1, Math.floor(mapDetailToStepSize(detail)))
+    const simplified: number[][] = []
+
+    // Always include first point
+    simplified.push(ring[0])
+
+    // Sample points at step intervals
+    for (let i = stepSize; i < ring.length - 1; i += stepSize) {
+        const idx = Math.min(i, ring.length - 1)
+        simplified.push(ring[idx])
+    }
+
+    // Always include last point (if different from first)
+    const lastPoint = ring[ring.length - 1]
+    const firstPoint = ring[0]
+    const isClosed =
+        Math.abs(lastPoint[0] - firstPoint[0]) < 0.0001 &&
+        Math.abs(lastPoint[1] - firstPoint[1]) < 0.0001
+
+    if (!isClosed) {
+        simplified.push(lastPoint)
+    }
+
+    // Ensure we have at least 2 points
+    return simplified.length >= 2 ? simplified : ring
+}
+
 // Convert lat/lng to 3D position on unit sphere
 // Standard geographic to 3D conversion:
 // - lat: -90 (south pole) to +90 (north pole)
@@ -216,41 +285,80 @@ function latLngToPosition(
  */
 export default function Globe({
     preview = false,
-    speed = 0.5,
-    smoothing = 0.5,
-    density = 0.5,
-    dotSize = 0.5,
-    scale = 0.5,
-    stopOnHover = false,
-    markerConfig = { markers: [], color: "#ffffff", radius: 0.5 },
+    speed = 0.1,
+    smoothing = 1,
+    density = 0.8,
+    dotSize = 0.4,
+    scale = 0.9,
+    stopOnHover = true,
+    markerConfig = { markers: [], color: "#ffffff", size: 0.4 },
     rotationDirection = "clockwise",
-    initialLatitude = 0,
-    initialLongitude = 0,
-    oceanColor,
+    initialLatitude = 42,
+    initialLongitude = -15,
+    oceanColor = "#000000",
     outlineColor,
-    dotColor,
-    graticuleColor,
+    dotColor = "#ffffff",
+    graticuleColor = "#616161",
+    outlineWidth = 1,
+    gridWidth = 1,
+    dragSpeed = 0.5,
+    detail = 1,
+    drag = true,
     style,
 }: GlobeProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+    // Check canvas mode ONCE at component mount and cache it
+    // RenderTarget doesn't change during component lifetime, so we cache it for performance
+    const isCanvasRef = useRef<boolean | null>(null)
+    if (isCanvasRef.current === null) {
+        isCanvasRef.current = RenderTarget.current() === RenderTarget.canvas
+    }
+    const isCanvas = isCanvasRef.current
 
-    // Map UI values to internal values
-    const baseRotationSpeed = mapSpeedUiToInternal(speed)
-    // Apply direction: clockwise = positive, anticlockwise = negative
-    const rotationSpeed =
-        rotationDirection === "anticlockwise"
-            ? -baseRotationSpeed
-            : baseRotationSpeed
-    const dotSpacing = mapDensityUiToSpacing(density)
-    const dotSizeMultiplier = mapDotSizeUiToMultiplier(dotSize)
-    const markerRadiusMultiplier = mapMarkerDotSizeUiToMultiplier(
-        markerConfig.radius
+    // Ref for preview - only matters in canvas mode
+    // In preview/production mode, preview prop is completely ignored
+    const previewRef = useRef(preview)
+
+    // Ref to store animation frame ID for preview effect to restart animation
+    const animationFrameRef = useRef<number | null>(null)
+    const animateFnRef = useRef<(() => void) | null>(null)
+    const startAnimationRef = useRef<(() => void) | null>(null)
+
+    // Update previewRef ONLY when in canvas mode
+    // Use a stable value when not in canvas to prevent React from tracking preview changes
+    // This prevents React from re-running effects when preview changes in non-canvas mode
+    const previewForRefUpdate = isCanvas ? preview : false
+    useEffect(() => {
+        if (isCanvas) {
+            previewRef.current = preview
+        }
+    }, [previewForRefUpdate, isCanvas])
+
+    // Map UI values to internal values - memoized to prevent unnecessary recalculations
+    const rotationSpeed = React.useMemo(() => {
+        const baseSpeed = mapSpeedUiToInternal(speed)
+        return rotationDirection === "anticlockwise" ? -baseSpeed : baseSpeed
+    }, [speed, rotationDirection])
+
+    const dotSpacing = React.useMemo(
+        () => mapDensityUiToSpacing(density),
+        [density]
     )
-    const scaleMultiplier = mapScaleUiToMultiplier(scale)
+    const dotSizeMultiplier = React.useMemo(
+        () => mapDotSizeUiToMultiplier(dotSize),
+        [dotSize]
+    )
+    const markerRadiusMultiplier = React.useMemo(
+        () => mapMarkerDotSizeUiToMultiplier(markerConfig.size),
+        [markerConfig.size]
+    )
+    const scaleMultiplier = React.useMemo(
+        () => mapScaleUiToMultiplier(scale),
+        [scale]
+    )
 
     useEffect(() => {
         if (!containerRef.current) return
@@ -291,20 +399,31 @@ export default function Globe({
         canvas.style.width = "100%"
         canvas.style.height = "100%"
         canvas.style.display = "block"
+        // Hide canvas until all data is loaded (only in preview mode, not in canvas)
+        if (!isCanvas) {
+            canvas.style.opacity = "0"
+            canvas.style.visibility = "hidden"
+        }
         container.appendChild(canvas)
 
-        // Parse colors for opacity
-        const oceanRgba = parseColorToRgba(oceanColor)
-        const outlineRgba = parseColorToRgba(outlineColor)
-        const dotRgba = parseColorToRgba(dotColor)
-        const markerRgba = parseColorToRgba(markerConfig.color)
-        const graticuleRgba = parseColorToRgba(graticuleColor)
+        // Resolve color tokens (CSS variables) and parse colors for opacity
+        const resolvedOceanColor = resolveTokenColor(oceanColor)
+        const resolvedOutlineColor = resolveTokenColor(outlineColor)
+        const resolvedDotColor = resolveTokenColor(dotColor)
+        const resolvedMarkerColor = resolveTokenColor(markerConfig.color)
+        const resolvedGraticuleColor = resolveTokenColor(graticuleColor)
+
+        const oceanRgba = parseColorToRgba(resolvedOceanColor)
+        const outlineRgba = parseColorToRgba(resolvedOutlineColor)
+        const dotRgba = parseColorToRgba(resolvedDotColor)
+        const markerRgba = parseColorToRgba(resolvedMarkerColor)
+        const graticuleRgba = parseColorToRgba(resolvedGraticuleColor)
 
         // Create ocean sphere (globe background)
-        // Use Color constructor with original string for proper sRGB handling
+        // Use Color constructor with resolved color for proper sRGB handling
         const oceanGeometry = new SphereGeometry(globeRadius, 64, 64)
-        const oceanColorObj = oceanColor
-            ? new Color(oceanColor)
+        const oceanColorObj = resolvedOceanColor
+            ? new Color(resolvedOceanColor)
             : new Color(0, 0, 0)
         const oceanMaterial = new MeshBasicMaterial({
             color: oceanColorObj,
@@ -314,24 +433,52 @@ export default function Globe({
         const oceanMesh = new Mesh(oceanGeometry, oceanMaterial)
         scene.add(oceanMesh)
 
-        // Create outline around the globe sphere (similar to 3D-globe-source.tsx)
-        // COMMENTED OUT: EdgesGeometry creates a grid pattern from sphere faces
-        // Using EdgesGeometry on a 64x64 sphere creates all the edges, which looks like a grid
-        // If you want a simple sphere outline, we'd need to create a single circle instead
+        // Create globe outside outline - a simple circle around the sphere with tube geometry
         let globeOutlineMesh: any = null
-        /*
         if (outlineColor && outlineRgba.a > 0) {
-            const outlineGeometry = new EdgesGeometry(oceanGeometry)
-            const outlineColorObj = new Color(outlineColor)
-            const outlineMaterial = new LineBasicMaterial({
-                color: outlineColorObj,
-                transparent: outlineRgba.a < 1,
-                opacity: outlineRgba.a,
-                linewidth: 2, // Note: linewidth only works with WebGL1, but we'll set it anyway
-            })
-            globeOutlineMesh = new LineSegments(outlineGeometry, outlineMaterial)
+            const outlinePositions: number[] = []
+            const segments = 128
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * Math.PI * 2
+                const x = Math.cos(angle) * globeRadius
+                const y = Math.sin(angle) * globeRadius
+                const z = 0
+                outlinePositions.push(x, y, z)
+            }
+
+            const outlinePoints: any[] = []
+            for (let i = 0; i < outlinePositions.length; i += 3) {
+                outlinePoints.push(
+                    new Vector3(
+                        outlinePositions[i],
+                        outlinePositions[i + 1],
+                        outlinePositions[i + 2]
+                    )
+                )
+            }
+
+            if (outlinePoints.length >= 2) {
+                outlinePoints.push(outlinePoints[0].clone())
+
+                const outlineColorObj = new Color(resolvedOutlineColor)
+                const outlineMaterial = new MeshBasicMaterial({
+                    color: outlineColorObj,
+                    transparent: outlineRgba.a < 1,
+                    opacity: outlineRgba.a,
+                })
+
+                const curve = new CatmullRomCurve3(outlinePoints)
+                const radius = (outlineWidth / 10) * 0.01
+                const tubeGeometry = new TubeGeometry(
+                    curve,
+                    outlinePoints.length * 2,
+                    radius,
+                    8,
+                    false
+                )
+                globeOutlineMesh = new Mesh(tubeGeometry, outlineMaterial)
+            }
         }
-        */
 
         // Continent outlines will be created from GeoJSON data in loadWorldData
         const continentOutlineGroup = new Group()
@@ -339,12 +486,12 @@ export default function Globe({
         // Create simple graticule - circles for parallels, lines for meridians, every 15 degrees
         const graticuleGroup = new Group()
 
-        if (graticuleColor && graticuleRgba.a > 0) {
-            const graticuleColorObj = graticuleColor
-                ? new Color(graticuleColor)
+        if (resolvedGraticuleColor && graticuleRgba.a > 0) {
+            const graticuleColorObj = resolvedGraticuleColor
+                ? new Color(resolvedGraticuleColor)
                 : new Color(1, 1, 1)
 
-            const graticuleMaterial = new LineBasicMaterial({
+            const graticuleMaterial = new MeshBasicMaterial({
                 color: graticuleColorObj,
                 transparent: graticuleRgba.a < 1 || graticuleRgba.a === 0,
                 opacity: graticuleRgba.a,
@@ -366,13 +513,36 @@ export default function Globe({
                     )
                 }
 
-                const lineGeometry = new BufferGeometry()
-                lineGeometry.setAttribute(
-                    "position",
-                    new Float32BufferAttribute(positions, 3)
-                )
-                const line = new Line(lineGeometry, graticuleMaterial)
-                graticuleGroup.add(line)
+                if (positions && positions.length >= 6) {
+                    const points: any[] = []
+                    for (let i = 0; i < positions.length; i += 3) {
+                        points.push(
+                            new Vector3(
+                                positions[i],
+                                positions[i + 1],
+                                positions[i + 2]
+                            )
+                        )
+                    }
+
+                    if (points.length >= 2) {
+                        const curve = new CatmullRomCurve3(points)
+                        const radius = (gridWidth / 10) * 0.01
+                        const tubeGeometry = new TubeGeometry(
+                            curve,
+                            points.length * 2,
+                            radius,
+                            8,
+                            false
+                        )
+                        const tubeMesh = new Mesh(
+                            tubeGeometry,
+                            graticuleMaterial
+                        )
+                        tubeMesh.renderOrder = 0
+                        graticuleGroup.add(tubeMesh)
+                    }
+                }
             }
 
             // Create meridians (longitude lines) - vertical lines from pole to pole
@@ -389,13 +559,36 @@ export default function Globe({
                     )
                 }
 
-                const lineGeometry = new BufferGeometry()
-                lineGeometry.setAttribute(
-                    "position",
-                    new Float32BufferAttribute(positions, 3)
-                )
-                const line = new Line(lineGeometry, graticuleMaterial)
-                graticuleGroup.add(line)
+                if (positions && positions.length >= 6) {
+                    const points: any[] = []
+                    for (let i = 0; i < positions.length; i += 3) {
+                        points.push(
+                            new Vector3(
+                                positions[i],
+                                positions[i + 1],
+                                positions[i + 2]
+                            )
+                        )
+                    }
+
+                    if (points.length >= 2) {
+                        const curve = new CatmullRomCurve3(points)
+                        const radius = (gridWidth / 10) * 0.01
+                        const tubeGeometry = new TubeGeometry(
+                            curve,
+                            points.length * 2,
+                            radius,
+                            8,
+                            false
+                        )
+                        const tubeMesh = new Mesh(
+                            tubeGeometry,
+                            graticuleMaterial
+                        )
+                        tubeMesh.renderOrder = 0
+                        graticuleGroup.add(tubeMesh)
+                    }
+                }
             }
         }
 
@@ -426,12 +619,13 @@ export default function Globe({
                 }
 
                 if (outlineColor && outlineRgba.a > 0) {
-                    const outlineColorObj = new Color(outlineColor)
-                    const outlineMaterial = new LineBasicMaterial({
+                    const outlineColorObj = new Color(resolvedOutlineColor)
+                    const outlineMaterial = new MeshBasicMaterial({
                         color: outlineColorObj,
                         transparent: outlineRgba.a < 1,
                         opacity: outlineRgba.a,
-                        linewidth: 1,
+                        depthTest: true,
+                        depthWrite: true,
                     })
 
                     // Use d3's geoPath to extract only the actual boundaries (like the source file does)
@@ -502,8 +696,11 @@ export default function Globe({
                         const processRing = (ring: number[][]) => {
                             if (ring.length < 2) return
 
+                            // Simplify ring based on detail level
+                            const simplifiedRing = simplifyRing(ring, detail)
+
                             const positions: number[] = []
-                            ring.forEach((coord: number[]) => {
+                            simplifiedRing.forEach((coord: number[]) => {
                                 const [lng, lat] = coord
                                 const pos = latLngToPosition(lat, lng)
                                 positions.push(
@@ -513,18 +710,44 @@ export default function Globe({
                                 )
                             })
 
-                            if (positions.length >= 6) {
-                                const lineGeometry = new BufferGeometry()
-                                lineGeometry.setAttribute(
-                                    "position",
-                                    new Float32BufferAttribute(positions, 3)
-                                )
-                                // Use LineLoop for closed rings (continent boundaries)
-                                const line = new LineLoop(
-                                    lineGeometry,
-                                    outlineMaterial
-                                )
-                                continentOutlineGroup.add(line)
+                            if (positions && positions.length >= 6) {
+                                const points: any[] = []
+                                for (let i = 0; i < positions.length; i += 3) {
+                                    points.push(
+                                        new Vector3(
+                                            positions[i],
+                                            positions[i + 1],
+                                            positions[i + 2]
+                                        )
+                                    )
+                                }
+
+                                if (
+                                    points.length > 0 &&
+                                    points[0].distanceTo(
+                                        points[points.length - 1]
+                                    ) > 0.001
+                                ) {
+                                    points.push(points[0].clone())
+                                }
+
+                                if (points.length >= 2) {
+                                    const curve = new CatmullRomCurve3(points)
+                                    const radius = (outlineWidth / 10) * 0.01
+                                    const tubeGeometry = new TubeGeometry(
+                                        curve,
+                                        points.length * 2,
+                                        radius,
+                                        8,
+                                        false
+                                    )
+                                    const tubeMesh = new Mesh(
+                                        tubeGeometry,
+                                        outlineMaterial
+                                    )
+                                    tubeMesh.renderOrder = 0
+                                    continentOutlineGroup.add(tubeMesh)
+                                }
                             }
                         }
 
@@ -547,12 +770,10 @@ export default function Globe({
                         }
                     })
 
-                    console.log(
-                        `[Globe] Processed ${processedCount} land features, skipped ${skippedCount} grid features`
-                    )
-
-                    // Render after adding continent outlines
-                    renderer.render(scene, camera)
+                    // In canvas mode, render immediately so props update is visible
+                    if (isCanvas) {
+                        renderer.render(scene, camera)
+                    }
                 }
 
                 // Create a high-resolution bitmap for accurate land detection
@@ -631,10 +852,6 @@ export default function Globe({
                     }
                 }
 
-                // Render globe immediately before adding dots
-                renderer.render(scene, camera)
-                setIsLoading(false)
-
                 // Create dots using instanced mesh (GPU-efficient)
                 if (dotCoordinates.length > 0) {
                     // Use simpler geometry (4 segments) for better performance
@@ -644,8 +861,8 @@ export default function Globe({
                         4
                     )
 
-                    const dotColorObj = dotColor
-                        ? new Color(dotColor)
+                    const dotColorObj = resolvedDotColor
+                        ? new Color(resolvedDotColor)
                         : new Color(0.6, 0.6, 0.6)
                     const dotMaterial = new MeshBasicMaterial({
                         color: dotColorObj,
@@ -675,8 +892,26 @@ export default function Globe({
 
                     dotInstances.instanceMatrix.needsUpdate = true
                     globeGroup.add(dotInstances)
-                    renderer.render(scene, camera)
+
+                    // In canvas mode, render immediately so props update is visible
+                    if (isCanvas) {
+                        renderer.render(scene, camera)
+                    }
                 }
+
+                // Update markers before final render
+                updateMarkers()
+
+                // Final render
+                renderer.render(scene, camera)
+
+                // Show canvas only if we're not in canvas mode (in canvas, it's already visible)
+                if (!isCanvas) {
+                    canvas.style.opacity = "1"
+                    canvas.style.visibility = "visible"
+                }
+
+                setIsLoading(false)
             } catch (err) {
                 setError("Failed to load land map data")
                 setIsLoading(false)
@@ -692,8 +927,8 @@ export default function Globe({
             if (markerConfig.markers && markerConfig.markers.length > 0) {
                 const markerSize = 0.01 * markerRadiusMultiplier
                 const markerGeometry = new SphereGeometry(markerSize, 16, 16)
-                const markerColorObj = markerConfig.color
-                    ? new Color(markerConfig.color)
+                const markerColorObj = resolvedMarkerColor
+                    ? new Color(resolvedMarkerColor)
                     : new Color(1, 1, 1)
                 const markerMaterial = new MeshBasicMaterial({
                     color: markerColorObj,
@@ -734,7 +969,14 @@ export default function Globe({
         let isHovering = false
         let lastMouseX = 0
         let lastMouseY = 0
+        let lastDragTime = 0 // Timestamp for time-normalized velocity capture
         let animationFrameId: number | null = null
+
+        // Delta time tracking for frame-rate independent animation
+        // All time-based calculations use deltaTime to ensure consistent behavior
+        // regardless of display refresh rate (60Hz, 120Hz, etc.)
+        let lastFrameTime = performance.now()
+        const targetDeltaTime = 1000 / 60 // Reference delta time (60 FPS = 16.67ms)
 
         // Lerp factor: smoothing 0 = instant (factor=1), smoothing 1 = very smooth (factor=0.03)
         const lerpFactor =
@@ -749,7 +991,6 @@ export default function Globe({
         globeGroup.rotation.x = initialLatitudeRad
         scene.add(globeGroup)
         globeGroup.add(oceanMesh)
-        if (globeOutlineMesh) globeGroup.add(globeOutlineMesh)
         // Add graticule grid (independent from country contours, uses graticuleColor)
         if (graticuleColor && graticuleRgba.a > 0) {
             globeGroup.add(graticuleGroup)
@@ -758,39 +999,62 @@ export default function Globe({
         if (dotInstances) globeGroup.add(dotInstances)
         markerMeshes.forEach((mesh) => globeGroup.add(mesh))
 
+        // Animation loop - uses cached isCanvas value for performance
+        // RenderTarget doesn't change during component lifetime, so we use the cached value
         const animate = () => {
-            // Pause animation in canvas mode when preview is off
-            if (isCanvas && !preview) {
+            // CANVAS MODE: Check preview prop to pause animation when preview is off
+            // Use cached isCanvas value instead of checking RenderTarget every frame
+            if (isCanvas && !previewRef.current) {
                 animationFrameId = null
+                animationFrameRef.current = null
                 return
             }
+
+            // Continue with animation (either not canvas mode, or preview is on)
+            animateCore()
+        }
+
+        // Core animation logic - uses delta time for frame-rate independent animation
+        const animateCore = () => {
+            const now = performance.now()
+
+            // Calculate delta time and normalize it relative to 60 FPS
+            // deltaFactor = 1.0 at 60 FPS, 0.5 at 120 FPS, 2.0 at 30 FPS
+            const deltaTime = now - lastFrameTime
+            lastFrameTime = now
+            const deltaFactor = deltaTime / targetDeltaTime
 
             let needsRender = false
             const threshold = 0.01
 
             // Auto-rotation: add to target when not dragging and not hovering
+            // Multiply by deltaFactor for frame-rate independent speed
             if (
                 !isDragging &&
                 rotationSpeed !== 0 &&
                 (!stopOnHover || !isHovering)
             ) {
-                targetRotation.x += rotationSpeed * 0.01
+                targetRotation.x += rotationSpeed * 0.01 * deltaFactor
             }
 
             // Apply throw velocity when not dragging
+            // Velocity and decay are also time-scaled
             if (!isDragging && smoothing > 0) {
                 if (
                     Math.abs(velocity.x) > threshold ||
                     Math.abs(velocity.y) > threshold
                 ) {
-                    targetRotation.x += velocity.x
-                    targetRotation.y += velocity.y
+                    targetRotation.x += velocity.x * deltaFactor
+                    targetRotation.y += velocity.y * deltaFactor
                     targetRotation.y = Math.max(
                         -Math.PI / 2,
                         Math.min(Math.PI / 2, targetRotation.y)
                     )
-                    velocity.x *= velocityDecay
-                    velocity.y *= velocityDecay
+                    // Time-based decay: use pow to make decay frame-rate independent
+                    // decay^deltaFactor ensures same decay over same real time
+                    const decayFactor = Math.pow(velocityDecay, deltaFactor)
+                    velocity.x *= decayFactor
+                    velocity.y *= decayFactor
                 } else {
                     velocity.x = 0
                     velocity.y = 0
@@ -798,6 +1062,7 @@ export default function Globe({
             }
 
             // Lerp current rotation toward target
+            // Time-based lerp: use 1 - (1 - factor)^deltaFactor for smooth interpolation
             const dx = targetRotation.x - rotation.x
             const dy = targetRotation.y - rotation.y
 
@@ -807,8 +1072,10 @@ export default function Globe({
                 rotationSpeed !== 0 ||
                 isDragging
             ) {
-                rotation.x += dx * lerpFactor
-                rotation.y += dy * lerpFactor
+                // Frame-rate independent lerp
+                const timeLerpFactor = 1 - Math.pow(1 - lerpFactor, deltaFactor)
+                rotation.x += dx * timeLerpFactor
+                rotation.y += dy * timeLerpFactor
                 rotation.y = Math.max(
                     -Math.PI / 2,
                     Math.min(Math.PI / 2, rotation.y)
@@ -816,7 +1083,8 @@ export default function Globe({
                 needsRender = true
             }
 
-            // Always render if dragging, rotating, or there's movement
+            // Render every frame - no frame limiting needed with delta time
+            // The animation is now smooth at any refresh rate
             if (needsRender || rotationSpeed !== 0 || isDragging) {
                 // Apply rotation: y-axis for horizontal rotation, x-axis for vertical rotation
                 globeGroup.rotation.y = rotation.x
@@ -836,37 +1104,53 @@ export default function Globe({
 
             if (needsContinue) {
                 animationFrameId = requestAnimationFrame(animate)
+                animationFrameRef.current = animationFrameId
             } else {
                 animationFrameId = null
+                animationFrameRef.current = null
             }
         }
 
-        // Start animation loop
+        // Store animate function in ref for preview effect to use
+        animateFnRef.current = animate
+
+        // Start animation loop - resets lastFrameTime to prevent delta jump
         const startAnimation = () => {
-            if (animationFrameId === null && !(isCanvas && !preview)) {
+            if (animationFrameId === null) {
+                // Reset frame time to prevent huge delta after pause
+                lastFrameTime = performance.now()
                 animationFrameId = requestAnimationFrame(animate)
+                animationFrameRef.current = animationFrameId
             }
         }
+
+        // Store startAnimation in ref for preview effect to use
+        startAnimationRef.current = startAnimation
 
         // Initial start if auto-rotation is enabled
         if (rotationSpeed !== 0) {
             startAnimation()
         }
 
-        // Mouse interaction handlers
+        // Mouse interaction handlers (only if drag is enabled)
         const handleMouseDown = (event: MouseEvent) => {
+            if (!drag) return
             isDragging = true
             velocity.x = 0
             velocity.y = 0
             lastMouseX = event.clientX
             lastMouseY = event.clientY
+            lastDragTime = performance.now() // Initialize drag timestamp
             startAnimation()
 
             const handleMouseMove = (moveEvent: MouseEvent) => {
+                const currentTime = performance.now()
+                const timeSinceLastMove = currentTime - lastDragTime
+
                 // Use proper spherical coordinate rotation
                 // Horizontal drag rotates around Y-axis (longitude)
                 // Vertical drag rotates around X-axis (latitude)
-                const sensitivity = 0.01
+                const sensitivity = mapLinear(dragSpeed, 0, 1, 0.001, 0.02)
                 const dx = moveEvent.clientX - lastMouseX
                 const dy = moveEvent.clientY - lastMouseY
 
@@ -882,12 +1166,20 @@ export default function Globe({
                     Math.min(Math.PI / 2, targetRotation.y)
                 )
 
-                // Track velocity for throw (in radians per frame)
-                velocity.x = dx * sensitivity * 0.3
-                velocity.y = dy * sensitivity * 0.3
+                // Track velocity for throw - TIME NORMALIZED
+                // Normalize velocity to "radians per reference frame (16.67ms)"
+                // This ensures consistent throw behavior regardless of frame rate
+                if (timeSinceLastMove > 0) {
+                    // Scale velocity to what it would be at 60 FPS (16.67ms per frame)
+                    const timeNormalization =
+                        targetDeltaTime / timeSinceLastMove
+                    velocity.x = dx * sensitivity * 0.3 * timeNormalization
+                    velocity.y = dy * sensitivity * 0.3 * timeNormalization
+                }
 
                 lastMouseX = moveEvent.clientX
                 lastMouseY = moveEvent.clientY
+                lastDragTime = currentTime
             }
 
             const handleMouseUp = () => {
@@ -900,7 +1192,9 @@ export default function Globe({
             document.addEventListener("mouseup", handleMouseUp)
         }
 
-        canvas.addEventListener("mousedown", handleMouseDown)
+        if (drag) {
+            canvas.addEventListener("mousedown", handleMouseDown)
+        }
 
         // Handle hover to stop auto-rotation (only when cursor is over the globe)
         const raycaster = new Raycaster()
@@ -947,25 +1241,25 @@ export default function Globe({
 
         resizeObserver.observe(container)
 
-        // Initial render - show globe immediately (ocean + graticule) before dots load
-        renderer.render(scene, camera)
-
-        // Load world data and update markers
+        // Load world data (which will call updateMarkers and show canvas when complete)
         loadWorldData()
-        updateMarkers()
 
         // Cleanup
         return () => {
             if (animationFrameId !== null)
                 cancelAnimationFrame(animationFrameId)
-            canvas.removeEventListener("mousedown", handleMouseDown)
+            if (drag) {
+                canvas.removeEventListener("mousedown", handleMouseDown)
+            }
             canvas.removeEventListener("mousemove", handleMouseMove)
             resizeObserver.disconnect()
             renderer.dispose()
             container.removeChild(canvas)
         }
     }, [
-        preview,
+        // Note: preview is intentionally NOT in dependencies to prevent re-initialization
+        // Preview only affects behavior in canvas mode via the animate function
+        // Derived values (rotationSpeed, dotSpacing, etc.) are memoized and included
         speed,
         smoothing,
         density,
@@ -980,6 +1274,12 @@ export default function Globe({
         outlineColor,
         dotColor,
         graticuleColor,
+        outlineWidth,
+        gridWidth,
+        dragSpeed,
+        detail,
+        drag,
+        // Memoized derived values
         rotationSpeed,
         dotSpacing,
         dotSizeMultiplier,
@@ -987,6 +1287,24 @@ export default function Globe({
         scaleMultiplier,
         isCanvas,
     ])
+
+    // Handle preview changes - restart animation loop when preview toggles (CANVAS MODE ONLY)
+    // Use a stable value when not in canvas to prevent React from tracking preview changes
+    // This prevents React from re-running effects when preview changes in non-canvas mode
+    const previewForAnimation = isCanvas ? preview : false
+    useEffect(() => {
+        if (!isCanvas) return
+
+        // Canvas mode only: If preview turned ON and animation is stopped, restart it
+        // Use startAnimationRef to properly reset frame time and prevent delta jump
+        if (
+            preview &&
+            startAnimationRef.current &&
+            animationFrameRef.current === null
+        ) {
+            startAnimationRef.current()
+        }
+    }, [previewForAnimation, isCanvas])
 
     // Container styles (inline only)
     const containerStyle: React.CSSProperties = {
@@ -1017,7 +1335,11 @@ export default function Globe({
         )
     }
 
-    return <div ref={containerRef} style={containerStyle} />
+    return (
+        <div style={containerStyle}>
+            <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        </div>
+    )
 }
 
 // Property Controls (single-word titles, last control with Framer University link)
@@ -1046,9 +1368,25 @@ addPropertyControls(Globe, {
         step: 0.1,
         defaultValue: 0.1,
     },
+    drag: {
+        type: ControlType.Boolean,
+        title: "Drag",
+        defaultValue: true,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
     smoothing: {
         type: ControlType.Number,
         title: "Smoothing",
+        min: 0,
+        max: 1,
+        step: 0.1,
+        defaultValue: 1,
+        hidden: (props: GlobeProps) => !props.drag,
+    },
+    dragSpeed: {
+        type: ControlType.Number,
+        title: "Drag Speed",
         min: 0,
         max: 1,
         step: 0.1,
@@ -1065,7 +1403,7 @@ addPropertyControls(Globe, {
     stopOnHover: {
         type: ControlType.Boolean,
         title: "On Hover",
-        defaultValue: false,
+        defaultValue: true,
         enabledTitle: "Stop",
         disabledTitle: "Rotate",
     },
@@ -1075,7 +1413,7 @@ addPropertyControls(Globe, {
         min: -90,
         max: 90,
         step: 1,
-        defaultValue: 0,
+        defaultValue: 42,
     },
     initialLongitude: {
         type: ControlType.Number,
@@ -1083,7 +1421,7 @@ addPropertyControls(Globe, {
         min: -180,
         max: 180,
         step: 1,
-        defaultValue: 0,
+        defaultValue: -15,
     },
     density: {
         type: ControlType.Number,
@@ -1091,7 +1429,15 @@ addPropertyControls(Globe, {
         min: 0.1,
         max: 1,
         step: 0.1,
-        defaultValue: 0.7,
+        defaultValue: 0.8,
+    },
+    detail: {
+        type: ControlType.Number,
+        title: "Detail",
+        min: 0.1,
+        max: 1,
+        step: 0.1,
+        defaultValue: 0.5,
     },
     dotSize: {
         type: ControlType.Number,
@@ -1123,7 +1469,7 @@ addPropertyControls(Globe, {
                             min: -90,
                             max: 90,
                             step: 0.1,
-                            defaultValue: 39,
+                            defaultValue: 25.2,
                         },
                         lng: {
                             type: ControlType.Number,
@@ -1131,7 +1477,7 @@ addPropertyControls(Globe, {
                             min: -180,
                             max: 180,
                             step: 0.1,
-                            defaultValue: 11,
+                            defaultValue: 55.5,
                         },
                     },
                 },
@@ -1139,28 +1485,22 @@ addPropertyControls(Globe, {
             color: {
                 type: ControlType.Color,
                 title: "Color",
-                defaultValue: "#ffffff",
+                defaultValue: "#00f7ff",
             },
-            radius: {
+            size: {
                 type: ControlType.Number,
-                title: "Radius",
+                title: "Size",
                 min: 0,
                 max: 100,
                 step: 0.1,
-                defaultValue: 50,
+                defaultValue: 40,
             },
         },
     },
     dotColor: {
         type: ControlType.Color,
         title: "Dots",
-        defaultValue: "#5E5E5E",
-    },
-    oceanColor: {
-        type: ControlType.Color,
-        title: "Ocean",
-        optional: true,
-        defaultValue: "rgba(0,0,0,0.8)",
+        defaultValue: "#ffffff",
     },
     outlineColor: {
         type: ControlType.Color,
@@ -1168,11 +1508,35 @@ addPropertyControls(Globe, {
         optional: true,
         defaultValue: "#ffffff",
     },
+    outlineWidth: {
+        type: ControlType.Number,
+        title: "Width",
+        min: 0.5,
+        max: 10,
+        step: 0.5,
+        defaultValue: 1,
+        hidden: (props: GlobeProps) => !props.outlineColor,
+    },
     graticuleColor: {
         type: ControlType.Color,
         title: "Grid",
         optional: true,
-        defaultValue: "rgba(255,255,255,0.15)",
+        defaultValue: "#616161",
+    },
+    gridWidth: {
+        type: ControlType.Number,
+        title: "Width",
+        min: 0.5,
+        max: 10,
+        step: 0.5,
+        defaultValue: 1,
+        hidden: (props: GlobeProps) => !props.graticuleColor,
+    },
+    oceanColor: {
+        type: ControlType.Color,
+        title: "Ocean",
+        optional: true,
+        defaultValue: "#000000",
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },

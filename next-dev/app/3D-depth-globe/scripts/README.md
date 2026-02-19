@@ -17,7 +17,10 @@ Then the **raw URL** (replace `USER`, `REPO`, `BRANCH` with yours) is:
 https://raw.githubusercontent.com/USER/REPO/BRANCH/next-dev/app/3D-depth-globe/source/src/data/globe_samples_50m_0.1.json
 ```
 
-Use that URL as the **Data URL** in the 3D Depth Globe component.
+**Important:** Use `raw.githubusercontent.com` and the path **without** `/blob/` — e.g. `.../REPO/BRANCH/path/to/file.json`.
+
+**Using the URL in Framer:**  
+In the Framer canvas, select the Depth Globe component and paste the raw URL into the **Globe data URL** property. The component will fetch the JSON and render the globe.
 
 - **50m:** `globe_samples_50m_0.1.json` (~71 MB) – recommended, full detail.
 - **10m:** `globe_samples_10m_0.1.json` (~72 MB) – same size, slightly different resolution.
