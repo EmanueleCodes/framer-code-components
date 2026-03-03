@@ -1,6 +1,7 @@
 
 import React, { useRef, useEffect, useState } from "react"
 import { addPropertyControls, ControlType } from "framer"
+import { animate } from "framer-motion"
 import {
     Scene,
     PerspectiveCamera,
@@ -24,7 +25,19 @@ import {
 
 type LetterState = "open" | "closed"
 
-const FOLD_DURATION = 0.8
+/** Transition config from Framer ControlType.Transition (tween + spring) */
+interface TransitionConfig {
+    type?: "tween" | "spring" | "keyframes" | "inertia"
+    duration?: number
+    ease?: string | number[]
+    delay?: number
+    stiffness?: number
+    damping?: number
+    mass?: number
+    bounce?: number
+    restDelta?: number
+    restSpeed?: number
+}
 
 const DEFAULT_BODY = `Thank you for this note — and for the work behind it. I've already spent some time with the new screensaver, and I genuinely find it enchanting.
 
@@ -71,6 +84,35 @@ function resolveColor(input: string | undefined): string {
     if (/^[0-9A-Fa-f]{6}$/.test(s)) return `#${s}`
     if (/^[0-9A-Fa-f]{8}$/.test(s)) return `#${s}`
     return s
+}
+
+function degToRad(deg: number): number {
+    return (deg * Math.PI) / 180
+}
+
+/** Build Framer Motion transition config from ControlType.Transition value */
+function buildTransitionConfig(transitionValue: TransitionConfig | undefined): Record<string, unknown> {
+    const config: Record<string, unknown> = {}
+    if (!transitionValue) {
+        config.type = "tween"
+        config.duration = 0.4
+        config.ease = "easeOut"
+        return config
+    }
+    if (transitionValue.type === "spring") {
+        config.type = "spring"
+        if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
+        if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
+        if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
+        if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
+        if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
+        if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
+    } else {
+        config.type = transitionValue.type || "tween"
+        if (transitionValue.duration !== undefined) config.duration = transitionValue.duration
+        if (transitionValue.ease !== undefined) config.ease = transitionValue.ease
+    }
+    return config
 }
 
 // Clone font object so we don't share Framer's reference (font picker mutates in place and affects all sections)
@@ -122,6 +164,12 @@ interface LetterTestimonialProps {
     bgColor?: string
     /** 0.25–2: scale of the letter within the frame. 1 = fit container */
     letterSize?: number
+    /** Fold angle in degrees when state is Open */
+    angleOpen?: number
+    /** Fold angle in degrees when state is Closed */
+    angleClosed?: number
+    /** Fold animation transition (duration, easing, spring, delay) */
+    transition?: TransitionConfig
     style?: React.CSSProperties
 }
 
@@ -129,15 +177,6 @@ interface LetterTestimonialProps {
 const PAPER_WIDTH = 2.4
 const PAPER_HEIGHT = 3.2
 const SEGMENT_HEIGHT = PAPER_HEIGHT / 3  // Each of the 3 panels
-
-// For a complete accordion fold where all 3 panels stack:
-// Each fold angle should be 60° (π/3) so panels form equilateral triangles when viewed from side
-// At 60°, the panels will be at 60° to each other, creating tight accordion
-const FOLD_THETA_MAX = Math.PI / 3  // 60° per fold for tight accordion
-
-function lerpAngle(current: number, target: number, alpha: number): number {
-    return current + (target - current) * alpha
-}
 
 // Create plane geometry with skinning for 3 equal panels (Z-fold).
 // Edges (from top to bottom of paper, viewing from front):
@@ -312,11 +351,19 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         signature: signatureSection,
         bgColor = DEFAULT_BG_COLOR,
         letterSize = 1,
+        angleOpen = 0,
+        angleClosed = 60,
+        transition: transitionProp = {
+            type: "tween",
+            duration: 0.8,
+            ease: "easeOut",
+        },
         style,
     } = props
 
     const letterSizeRef = useRef(letterSize)
     letterSizeRef.current = letterSize
+    const foldAnimationRef = useRef<ReturnType<typeof animate> | null>(null)
 
     // Resolve section objects to flat values (with defaults)
     const greeting = greetingSection?.text ?? DEFAULT_GREETING
@@ -337,14 +384,37 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
     const rendererRef = useRef<InstanceType<typeof WebGLRenderer> | null>(null)
     const meshRef = useRef<InstanceType<typeof SkinnedMesh> | null>(null)
     const bonesRef = useRef<InstanceType<typeof Bone>[]>([])
-    // theta: the primary fold angle (at Second edge / b1)
+    // theta: the primary fold angle (at Second edge / b1), driven by framer-motion animate()
     const thetaRef = useRef(0)
-    const thetaTargetRef = useRef(0)
     const frameRef = useRef<number>(0)
 
     const isClosed = state === "closed"
-    // When closed, fold by FOLD_THETA_MAX. When open, theta = 0
-    thetaTargetRef.current = isClosed ? FOLD_THETA_MAX : 0
+    const angleOpenRad = degToRad(angleOpen)
+    const angleClosedRad = degToRad(angleClosed)
+    const targetThetaRad = isClosed ? angleClosedRad : angleOpenRad
+
+    // Serialize transition for effect dependency (avoid object reference churn)
+    const transitionKey = transitionProp
+        ? `${transitionProp.type ?? "tween"}-${transitionProp.duration ?? ""}-${transitionProp.ease ?? ""}-${transitionProp.delay ?? ""}-${transitionProp.stiffness ?? ""}-${transitionProp.damping ?? ""}`
+        : ""
+
+    // Drive fold angle with Framer Motion transition (duration, easing, spring, delay)
+    useEffect(() => {
+        const config = buildTransitionConfig(transitionProp)
+        const delay = transitionProp?.delay ?? 0
+        foldAnimationRef.current?.stop()
+        foldAnimationRef.current = animate(thetaRef.current, targetThetaRad, {
+            ...config,
+            delay,
+            onUpdate: (v) => {
+                thetaRef.current = v
+            },
+        })
+        return () => {
+            foldAnimationRef.current?.stop()
+            foldAnimationRef.current = null
+        }
+    }, [state, angleOpen, angleClosed, targetThetaRad, transitionKey])
 
     // Serialize font so we react to actual font changes (Framer may pass same object reference)
     const greetingFontKey = greetingFont
@@ -569,14 +639,9 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             }
 
             const now = performance.now()
-            const delta = (now - lastTime) / 1000
             lastTime = now
 
-            const speed = 1 / FOLD_DURATION
-            const alpha = Math.min(1, delta * speed * 3)
-            
-            // Animate theta toward target
-            thetaRef.current = lerpAngle(thetaRef.current, thetaTargetRef.current, alpha)
+            // Theta is driven by framer-motion in useEffect; we just read it here
             const theta = thetaRef.current
 
             // ACCORDION FOLD GEOMETRY (matching your diagram):
@@ -691,6 +756,35 @@ addPropertyControls(LetterTestimonial, {
         step: 0.05,
         displayStepper: true,
         description: "Scale of the letter in the frame. 1 = fit container",
+    },
+    angleOpen: {
+        type: ControlType.Number,
+        title: "Angle (open)",
+        defaultValue: 0,
+        min: 0,
+        max: 90,
+        step: 1,
+        unit: "°",
+        displayStepper: true,
+    },
+    angleClosed: {
+        type: ControlType.Number,
+        title: "Angle (closed)",
+        defaultValue: 60,
+        min: 0,
+        max: 90,
+        step: 1,
+        unit: "°",
+        displayStepper: true,
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Fold transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.8,
+            ease: "easeOut",
+        },
     },
     greeting: {
         type: ControlType.Object,
