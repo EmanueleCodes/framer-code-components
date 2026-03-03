@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useCallback } from "react"
+import React, { useEffect, useRef, useMemo, useCallback, useState } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
@@ -310,6 +310,7 @@ export default function PixelMaskReveal({
     const scrollTriggerRef = useRef<ScrollTrigger | null>(null)
     const rafRef = useRef<number | null>(null)
     const imageSrcRef = useRef<string | null>(null)
+    const [textureReady, setTextureReady] = useState(0)
 
     const imageSrc = useMemo(() => resolveImageSource(image), [image])
     const hasImage = !!imageSrc
@@ -381,6 +382,7 @@ export default function PixelMaskReveal({
                 tex.magFilter = LinearFilter
                 material.uniforms.uTexture.value = tex
                 material.uniforms.uResolution.value = new Vector2(tex.image.naturalWidth, tex.image.naturalHeight)
+                setTextureReady((v) => v + 1)
             },
             undefined,
             () => {}
@@ -391,7 +393,6 @@ export default function PixelMaskReveal({
         const { axis, flip } = directionToUniforms(direction)
         material.uniforms.uRevealAxis.value = axis
         material.uniforms.uRevealFlip.value = flip
-        // No imageSrc in deps: scene is created once; texture updates via separate effect
     }, [])
 
     const resize = useCallback((observedWidth?: number, observedHeight?: number) => {
@@ -493,6 +494,7 @@ export default function PixelMaskReveal({
             const r = rendererRef.current as { dispose?: () => void } | null
             if (r?.dispose) r.dispose()
             rendererRef.current = null
+            setTextureReady(0)
             return
         }
         if (!containerRef.current) return
@@ -525,6 +527,7 @@ export default function PixelMaskReveal({
                 tex.magFilter = LinearFilter
                 material.uniforms.uTexture.value = tex
                 material.uniforms.uResolution.value = new Vector2(tex.image.naturalWidth, tex.image.naturalHeight)
+                setTextureReady((v) => v + 1)
             },
             undefined,
             () => {}
@@ -588,7 +591,7 @@ export default function PixelMaskReveal({
 
     useEffect(() => {
         const material = materialRef.current as ShaderMaterialRef | null
-        if (!hasImage || !material) return
+        if (!hasImage || !material || textureReady === 0) return
         if (isCanvas) {
             if (preview) runAppearAnimation()
             else material.uniforms.uProgress.value = 1
@@ -603,8 +606,7 @@ export default function PixelMaskReveal({
             scrollTriggerRef.current?.kill()
             scrollTriggerRef.current = null
         }
-        // Re-trigger preview when animation/style props change so the animation plays again
-    }, [hasImage, isCanvas, preview, mode, runAppearAnimation, setupScrollTrigger, revealDuration, revealDelay, gridSize, pixelColor, direction])
+    }, [hasImage, isCanvas, preview, mode, runAppearAnimation, setupScrollTrigger, revealDuration, revealDelay, gridSize, pixelColor, direction, textureReady])
 
     if (!hasImage) {
         return (
@@ -654,8 +656,6 @@ export default function PixelMaskReveal({
         </div>
     )
 }
-
-PixelMaskReveal.displayName = "Pixel Mask Reveal"
 
 addPropertyControls(PixelMaskReveal, {
     preview: {
@@ -743,3 +743,6 @@ addPropertyControls(PixelMaskReveal, {
     },
 
 })
+
+
+PixelMaskReveal.displayName = "Pixel Mask Reveal"

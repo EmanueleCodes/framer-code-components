@@ -1,8 +1,16 @@
 import React, { useRef, useState, useEffect, useCallback } from "react"
 import { addPropertyControls, ControlType } from "framer"
+import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
 type StrokeMode = "default" | "custom"
-type BrushShape = "circle" | "square" | "triangle" | "hexagon" | "pentagon" | "star"
+type BrushShape =
+    | "circle"
+    | "square"
+    | "triangle"
+    | "hexagon"
+    | "pentagon"
+    | "star"
+type OverlayMode = "color" | "image"
 
 type BrushImageSource =
     | string
@@ -13,8 +21,16 @@ type BrushImageSource =
 function resolveBrushImageUrl(input: BrushImageSource): string | null {
     if (!input) return null
     if (typeof input === "string") return input.trim() || null
-    const obj = input as { src?: string; url?: string; asset?: { url?: string } }
+    const obj = input as {
+        src?: string
+        url?: string
+        asset?: { url?: string }
+    }
     return obj?.src ?? obj?.url ?? obj?.asset?.url ?? null
+}
+
+function resolveImageUrl(input: BrushImageSource): string | null {
+    return resolveBrushImageUrl(input)
 }
 
 // Framer color tokens: resolve var(--token) to fallback (see how-to-build-framer-components/colorInFramerCanvas.md)
@@ -37,7 +53,9 @@ function resolveTokenColor(input: string | undefined): string {
 }
 
 interface ImageScratchProps {
+    overlayMode: OverlayMode
     color: string
+    overlayImage: BrushImageSource
     borderRadius: string | number
     brushSize: number
     stroke: StrokeMode
@@ -45,7 +63,6 @@ interface ImageScratchProps {
     brushImage: BrushImageSource
     style?: React.CSSProperties
 }
-
 
 function drawPolygon(
     ctx: CanvasRenderingContext2D,
@@ -67,7 +84,12 @@ function drawPolygon(
     ctx.fill()
 }
 
-function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number) {
+function drawStar(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    radius: number
+) {
     const points = 5
     const innerRadius = radius * 0.4
     const startAngle = -Math.PI / 2
@@ -85,16 +107,17 @@ function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius:
 }
 
 /**
- * Scratchable rectangle: a colored overlay that becomes transparent where the user scratches (drags).
- * @framerSupportedLayoutWidth fixed
- * @framerSupportedLayoutHeight fixed
- * @framerIntrinsicWidth 500
- * @framerIntrinsicHeight 400
+ * @framerSupportedLayoutWidth any-prefer-fixed
+ * @framerSupportedLayoutHeight any-prefer-fixed
+ * @framerIntrinsicWidth 600
+ * @framerIntrinsicHeight 300
+ * @framerDisableUnlink
  */
-
 export default function ImageScratch(props: ImageScratchProps) {
     const {
+        overlayMode = "color",
         color = "#1a1a1a",
+        overlayImage,
         borderRadius = 0,
         brushSize = 40,
         stroke = "default",
@@ -105,12 +128,19 @@ export default function ImageScratch(props: ImageScratchProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const brushImageRef = useRef<HTMLImageElement | null>(null)
+    const overlayImageRef = useRef<HTMLImageElement | null>(null)
     const [isDrawing, setIsDrawing] = useState(false)
     const [brushImageLoaded, setBrushImageLoaded] = useState(false)
+    const [overlayImageLoaded, setOverlayImageLoaded] = useState(false)
     const lastPosRef = useRef<{ x: number; y: number } | null>(null)
 
     const brushImageUrl = resolveBrushImageUrl(brushImage)
-    const useCustomBrush = stroke === "custom" && !!brushImageUrl && brushImageLoaded
+    const useCustomBrush =
+        stroke === "custom" && !!brushImageUrl && brushImageLoaded
+
+    const overlayImageUrl = resolveImageUrl(overlayImage)
+    const useOverlayImage =
+        overlayMode === "image" && !!overlayImageUrl && overlayImageLoaded
 
     useEffect(() => {
         if (!brushImageUrl) {
@@ -141,13 +171,80 @@ export default function ImageScratch(props: ImageScratchProps) {
         }
     }, [brushImageUrl])
 
+    useEffect(() => {
+        if (!overlayImageUrl) {
+            overlayImageRef.current = null
+            setOverlayImageLoaded(false)
+            return
+        }
+        setOverlayImageLoaded(false)
+        const img = new Image()
+        img.crossOrigin = "anonymous"
+        let cancelled = false
+        img.onload = () => {
+            if (!cancelled) {
+                overlayImageRef.current = img
+                setOverlayImageLoaded(true)
+            }
+        }
+        img.onerror = () => {
+            if (!cancelled) {
+                overlayImageRef.current = null
+                setOverlayImageLoaded(false)
+            }
+        }
+        img.src = overlayImageUrl
+        return () => {
+            cancelled = true
+            img.src = ""
+            overlayImageRef.current = null
+        }
+    }, [overlayImageUrl])
+
     const drawOverlay = useCallback(
         (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-            ctx.fillStyle = resolveTokenColor(color)
-            ctx.fillRect(0, 0, width, height)
+            if (useOverlayImage && overlayImageRef.current) {
+                const img = overlayImageRef.current
+                const iw = img.naturalWidth
+                const ih = img.naturalHeight
+                if (iw <= 0 || ih <= 0) {
+                    ctx.fillStyle = resolveTokenColor(color)
+                    ctx.fillRect(0, 0, width, height)
+                    return
+                }
+                const scale = Math.max(width / iw, height / ih)
+                const sw = iw * scale
+                const sh = ih * scale
+                const sx = (width - sw) / 2
+                const sy = (height - sh) / 2
+                ctx.drawImage(img, sx, sy, sw, sh)
+            } else {
+                ctx.fillStyle = resolveTokenColor(color)
+                ctx.fillRect(0, 0, width, height)
+            }
         },
-        [color]
+        [color, useOverlayImage]
     )
+
+    const redrawOverlay = useCallback(() => {
+        const container = containerRef.current
+        const canvas = canvasRef.current
+        if (!container || !canvas) return
+        const width = container.clientWidth
+        const height = container.clientHeight
+        if (width <= 0 || height <= 0) return
+        const dpr =
+            typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+        const ctx = canvas.getContext("2d")
+        if (!ctx) return
+        canvas.width = width * dpr
+        canvas.height = height * dpr
+        canvas.style.width = `${width}px`
+        canvas.style.height = `${height}px`
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.scale(dpr, dpr)
+        drawOverlay(ctx, width, height)
+    }, [drawOverlay])
 
     useEffect(() => {
         const container = containerRef.current
@@ -157,7 +254,8 @@ export default function ImageScratch(props: ImageScratchProps) {
         const ro = new ResizeObserver((entries) => {
             const { width, height } = entries[0].contentRect
             if (width <= 0 || height <= 0) return
-            const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+            const dpr =
+                typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
             canvas.width = width * dpr
             canvas.height = height * dpr
             canvas.style.width = `${width}px`
@@ -171,6 +269,10 @@ export default function ImageScratch(props: ImageScratchProps) {
         ro.observe(container)
         return () => ro.disconnect()
     }, [drawOverlay])
+
+    useEffect(() => {
+        if (overlayMode === "image" && overlayImageLoaded) redrawOverlay()
+    }, [overlayMode, overlayImageLoaded, overlayImageUrl, redrawOverlay])
 
     const getPoint = useCallback((e: React.PointerEvent) => {
         const container = containerRef.current
@@ -282,6 +384,36 @@ export default function ImageScratch(props: ImageScratchProps) {
         lastPosRef.current = null
     }, [])
 
+    if (overlayMode === "image" && !overlayImageUrl) {
+        return (
+            <div
+                style={{
+                    ...style,
+                    width: "100%",
+                    height: "100%",
+                    borderRadius,
+                    overflow: "hidden",
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <ComponentMessage
+                    style={{
+                        position: "relative",
+                        width: "100%",
+                        height: "100%",
+                        minWidth: 0,
+                        minHeight: 0,
+                    }}
+                    title="Image Scratch"
+                    subtitle="Add an image to see the scratch effect"
+                />
+            </div>
+        )
+    }
+
     return (
         <div
             ref={containerRef}
@@ -293,7 +425,6 @@ export default function ImageScratch(props: ImageScratchProps) {
                 overflow: "hidden",
                 position: "relative",
                 touchAction: "none",
-                cursor: "crosshair",
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -315,9 +446,26 @@ export default function ImageScratch(props: ImageScratchProps) {
     )
 }
 
-ImageScratch.displayName = "Image Scratch"
-
 addPropertyControls(ImageScratch, {
+    overlayMode: {
+        type: ControlType.Enum,
+        title: "Mode",
+        options: ["color", "image"],
+        optionTitles: ["Color", "Image"],
+        defaultValue: "color",
+        displaySegmentedControl: true,
+    },
+    color: {
+        type: ControlType.Color,
+        title: "Color",
+        defaultValue: "#1a1a1a",
+        hidden: (props: ImageScratchProps) => props.overlayMode !== "color",
+    },
+    overlayImage: {
+        type: ControlType.ResponsiveImage,
+        title: "Image",
+        hidden: (props: ImageScratchProps) => props.overlayMode !== "image",
+    },
     stroke: {
         type: ControlType.Enum,
         title: "Stroke",
@@ -330,30 +478,38 @@ addPropertyControls(ImageScratch, {
     brushShape: {
         type: ControlType.Enum,
         title: "Shape",
-        options: ["circle", "square", "triangle", "hexagon", "pentagon", "star"],
-        optionTitles: ["Circle", "Square", "Triangle", "Hexagon", "Pentagon", "Star"],
+        options: [
+            "circle",
+            "square",
+            "triangle",
+            "hexagon",
+            "pentagon",
+            "star",
+        ],
+        optionTitles: [
+            "Circle",
+            "Square",
+            "Triangle",
+            "Hexagon",
+            "Pentagon",
+            "Star",
+        ],
         defaultValue: "circle",
         hidden: (props: ImageScratchProps) => props.stroke !== "default",
     },
     brushImage: {
         type: ControlType.ResponsiveImage,
-        title: "Image",
+        title: "Brush",
         hidden: (props: ImageScratchProps) => props.stroke !== "custom",
-    },
-    color: {
-        type: ControlType.Color,
-        title: "Background",
-        defaultValue: "#1a1a1a",
     },
     brushSize: {
         type: ControlType.Number,
         title: "Brush size",
-        min: 8,
-        max: 120,
-        step: 4,
+        min: 5,
+        max: 200,
+        step: 5,
         defaultValue: 40,
     },
-    
     borderRadius: {
         // @ts-ignore
         type: ControlType.BorderRadius,
@@ -363,7 +519,9 @@ addPropertyControls(ImageScratch, {
         step: 1,
         defaultValue: 0,
         unit: "px",
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
     },
-    
-    
 })
+
+ImageScratch.displayName = "Image Scratch"

@@ -1,0 +1,23 @@
+{
+  "name": "depth-globe-full-bundle",
+  "version": "1.0.0",
+  "description": "Single bundle: three + postprocessing + @react-three/fiber + @react-three/drei for Depth Globe",
+  "main": "dist/bundle.js",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.105.6",
+    "@react-three/fiber": "^8.16.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.170.0",
+    "three-stdlib": "^2.29.7"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "rollup": "^4.28.1"
+  }
+}

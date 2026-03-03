@@ -3,6 +3,9 @@ import { addPropertyControls, ControlType } from "framer"
 
 const PROGRESS_BAR_DURATION_MS = 5000
 
+const VIDEO_WIDTH = 400
+const DEFAULT_ASPECT_RATIO = 16 / 9
+
 function useIsLightTheme(): boolean {
     const [isLight, setIsLight] = useState(false)
     useEffect(() => {
@@ -36,6 +39,16 @@ const PARAGRAPH_TEXT =
 const WATCH_BUTTON_LABEL = "Watch Video"
 const CONTROLS_LABEL = "Controls on Right Panel"
 
+
+/**
+ * 
+ * @framerSupportedLayoutWidth auto
+ * @framerSupportedLayoutHeight auto
+ * @framerIntrinsicWidth 424
+ * @framerIntrinsicHeight 360
+ * @framerDisableUnlink
+ */
+
 export default function VideoPlayer(props: VideoPlayerProps) {
     const { playback = "stop", progress = 0, volume = 100, style } = props
     const isLight = useIsLightTheme()
@@ -44,6 +57,7 @@ export default function VideoPlayer(props: VideoPlayerProps) {
     const prevProgressRef = useRef(progress)
     const [showProgressBar, setShowProgressBar] = useState(false)
     const [isHovering, setIsHovering] = useState(false)
+    const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO)
     const isPlaying = playback === "play"
 
     // Show progress bar for a short time when user seeks (progress prop changes)
@@ -103,6 +117,20 @@ export default function VideoPlayer(props: VideoPlayerProps) {
         return () => video.removeEventListener("loadedmetadata", onLoadedMetadata)
     }, [progress])
 
+    // Update aspect ratio from video metadata when loaded
+    useEffect(() => {
+        const video = videoRef.current
+        if (!video) return
+        const onLoadedMetadata = () => {
+            if (video.videoHeight > 0) {
+                setAspectRatio(video.videoWidth / video.videoHeight)
+            }
+        }
+        video.addEventListener("loadedmetadata", onLoadedMetadata)
+        if (video.videoWidth && video.videoHeight) onLoadedMetadata()
+        return () => video.removeEventListener("loadedmetadata", onLoadedMetadata)
+    }, [])
+
     const progressPct = Math.max(0, Math.min(100, progress))
     const progressBarVisible = showProgressBar || (isPlaying && isHovering)
 
@@ -140,12 +168,10 @@ export default function VideoPlayer(props: VideoPlayerProps) {
         </div>
     )
 
-    // Inline: static card (poster + play overlay + title/paragraph + button) or playing (video + optional progress bar + controls label)
     return (
         <div
             style={{
-                width: "100%",
-                height: "100%",
+                width: VIDEO_WIDTH + 24,
                 position: "relative",
                 overflow: "hidden",
                 background: isLight ? "#ffffff" : "#111111",
@@ -155,16 +181,16 @@ export default function VideoPlayer(props: VideoPlayerProps) {
                 padding: 12,
                 ...style,
                 gap: 12,
-                boxShadow:"0px 20px 20px 0px rgba(0,0,0,0.1)",
+                boxShadow: "0px 20px 20px 0px rgba(0,0,0,0.1)",
             }}
         >
-            {/* Video area: takes remaining height; video stays 16:9 letterboxed inside */}
+            {/* Video area: fixed 400px wide, height from aspect ratio */}
             <div
                 style={{
                     position: "relative",
-                    width: "100%",
-                    flex: 1,
-                    minHeight: 0,
+                    width: VIDEO_WIDTH,
+                    height: VIDEO_WIDTH / aspectRatio,
+                    flexShrink: 0,
                     overflow: "hidden",
                     borderRadius: 6,
                     background: "#000000",
@@ -186,134 +212,158 @@ export default function VideoPlayer(props: VideoPlayerProps) {
                         objectFit: "contain",
                     }}
                 />
-                {!isPlaying ? (
-                    <>
-                        {/* Play overlay: pill with solid icon container + title */}
+                {/* Play overlay: pill with solid icon container + title - fades out when playing */}
+                <div
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        opacity: isPlaying ? 0 : 1,
+                        pointerEvents: isPlaying ? "none" : "auto",
+                        transition: "opacity 0.3s ease-in-out",
+                    }}
+                >
+                    <div
+                        style={{
+                            gap: 10,
+                            fontFamily: "Inter, sans-serif",
+                            fontWeight: 600,
+                            padding: "0px 16px 0px 4px",
+                            height: 32,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: isLight ? "#fff" : "#111",
+                            borderRadius: 40,
+                            color: isLight ? "#111" : "#fff",
+                            fontSize: 12,
+                            textAlign: "center",
+                        }}
+                    >
                         <div
                             style={{
-                                position: "absolute",
-                                inset: 0,
+                                width: 24,
+                                height: 24,
+                                borderRadius: "50%",
+                                background: isLight ? "#111" : "#fff",
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
+                                flexShrink: 0,
                             }}
                         >
-                            <div
-                                style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: 10,
-                                    fontFamily: "Inter, sans-serif",
-                                    fontWeight:600,
-                                    padding: "4px 16px 4px 4px",
-                                    background: isLight ? "#fff" : "#111",
-                                    borderRadius: 9999,
-                                    color: isLight ? "#111" : "#fff",
-                                    fontSize: 12,
-                                    whiteSpace: "nowrap",
-                                    maxWidth: "90%",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                }}
-                            >
-                                <div
-                                    style={{
-                                        width: 28,
-                                        height: 28,
-                                        borderRadius: "50%",
-                                        background: isLight ? "#111" : "#fff",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                        flexShrink: 0,
-                                    }}
-                                >
-                                    <svg width={14} height={14} viewBox="0 0 24 24" fill={isLight ? "#fff" : "#111"}>
-                                        <path d="M8 5v14l11-7z" />
-                                    </svg>
-                                </div>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{PLAY_TITLE}</span>
-                            </div>
+                            <svg width={14} height={14} viewBox="0 0 24 24" fill={isLight ? "#fff" : "#111"}>
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
                         </div>
-                    </>
-                ) : (
-                    videoWithProgressBar
-                )}
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{PLAY_TITLE}</span>
+                    </div>
+                </div>
+                {videoWithProgressBar}
             </div>
 
 
-            {/* Bottom: fixed height (description + button) — never shrinks */}
+            {/* Bottom: animated height container with fade transitions */}
             <div
                 style={{
                     display: "flex",
                     flexDirection: "column",
                     gap: 12,
                     flexShrink: 0,
+                    overflow: "hidden",
                 }}
             >
-                {!isPlaying ? (
-                    <>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            <p
-                                style={{
-                                    margin: 0,
-                                    color: isLight ? "#111" : "#fff",
-                                    fontSize: 14,
-                                    lineHeight: 1.5,
-                                    fontFamily: "Inter, sans-serif",
-                                    fontWeight: 600,
-                                }}
-                            >
-                                {TITLE_TEXT}
-                            </p>
-                            <p
-                                style={{
-                                    margin: 0,
-                                    color: isLight ? "#666" : "#999",
-                                    fontSize: 14,
-                                    lineHeight: 1.5,
-                                    fontFamily: "Inter, sans-serif",
-                                    fontWeight: 500,
-                                }}
-                            >
-                                {PARAGRAPH_TEXT}
-                            </p>
-                        </div>
-                        <div
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                height: 30,
-                                background: isLight ? "#F2F2F2" : "rgba(40,40,40,0.9)",
-                                borderRadius: 8,
-                                color: isLight ? "#111" : "#fff",
-                                fontSize: 12,
-                                fontFamily: "Inter, sans-serif",
-                                fontWeight: 500,
-                                textAlign: "center",
-                            }}
-                        >
-                            {WATCH_BUTTON_LABEL}
-                        </div>
-                    </>
-                ) : (
+                {/* Description text - fades and collapses when playing */}
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        opacity: isPlaying ? 0 : 1,
+                        maxHeight: isPlaying ? 0 : 200,
+                        marginBottom: isPlaying ? -12 : 0,
+                        transition: "opacity 0.3s ease-in-out, max-height 0.3s ease-in-out, margin-bottom 0.3s ease-in-out",
+                        overflow: "hidden",
+                    }}
+                >
+                    <p
+                        style={{
+                            margin: 0,
+                            color: isLight ? "#111" : "#fff",
+                            fontSize: 14,
+                            lineHeight: 1.5,
+                            fontFamily: "Inter, sans-serif",
+                            fontWeight: 600,
+                        }}
+                    >
+                        {TITLE_TEXT}
+                    </p>
+                    <p
+                        style={{
+                            margin: 0,
+                            color: isLight ? "#666" : "#999",
+                            fontSize: 14,
+                            lineHeight: 1.5,
+                            fontFamily: "Inter, sans-serif",
+                            fontWeight: 500,
+                        }}
+                    >
+                        {PARAGRAPH_TEXT}
+                    </p>
+                </div>
+                
+                {/* Button - always present, content crossfades */}
+                <div
+                    style={{
+                        position: "relative",
+                        height: 30,
+                        borderRadius: 8,
+                        overflow: "hidden",
+                    }}
+                >
+                    {/* Watch Video button */}
                     <div
                         style={{
-                            display: "inline-block",
-                            padding: "10px 20px",
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                             background: isLight ? "#F2F2F2" : "rgba(40,40,40,0.9)",
-                            borderRadius: 8,
-                            color: isLight ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,0.8)",
-                            fontSize: 14,
+                            color: isLight ? "#111" : "#fff",
+                            fontSize: 12,
                             fontFamily: "Inter, sans-serif",
                             fontWeight: 500,
                             textAlign: "center",
+                            opacity: isPlaying ? 0 : 1,
+                            transition: "opacity 0.3s ease-in-out",
+                        }}
+                    >
+                        {WATCH_BUTTON_LABEL}
+                    </div>
+                    
+                    {/* Controls label */}
+                    <div
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: isLight ? "#F2F2F2" : "rgba(40,40,40,0.9)",
+                            color: isLight ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,1)",
+                            fontSize: 12,
+                            fontFamily: "Inter, sans-serif",
+                            fontWeight: 500,
+                            opacity: isPlaying ? 1 : 0,
+                            transition: "opacity 0.3s ease-in-out",
                         }}
                     >
                         {CONTROLS_LABEL}
                     </div>
-                )}
+                </div>
             </div>
         </div>
     )

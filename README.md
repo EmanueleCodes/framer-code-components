@@ -11,6 +11,7 @@ Next.js development environment containing all Framer Code Components. This is w
 Documentation and guides for building Framer components, including:
 - Canvas sizing fixes
 - Color handling in Framer Canvas
+- **Mouse and pointer events** (global listeners, `pointermove`, `touch-action`)
 - Overrides and components workflow
 - Props live rendering fixes
 - Preview behavior
