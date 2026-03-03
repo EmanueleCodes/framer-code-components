@@ -5,6 +5,7 @@ import {
     Scene,
     PerspectiveCamera,
     WebGLRenderer,
+    Group,
     PlaneGeometry,
     MeshBasicMaterial,
     LineBasicMaterial,
@@ -72,25 +73,55 @@ function resolveColor(input: string | undefined): string {
     return s
 }
 
+// Clone font object so we don't share Framer's reference (font picker mutates in place and affects all sections)
+function cloneFont(font: React.CSSProperties | undefined): React.CSSProperties | undefined {
+    if (!font || typeof font !== "object") return font
+    return {
+        fontFamily: font.fontFamily,
+        fontWeight: font.fontWeight,
+        fontStyle: font.fontStyle,
+        fontSize: font.fontSize,
+        lineHeight: font.lineHeight,
+    }
+}
+
 interface TextureOptions {
     bgColor: string
-    textColor: string
+    greetingColor: string
+    bodyColor: string
     signatureColor: string
+    greetingFont: React.CSSProperties | undefined
     bodyFont: React.CSSProperties | undefined
     signatureFont: React.CSSProperties | undefined
 }
 
+interface GreetingSection {
+    text?: string
+    font?: React.CSSProperties
+    color?: string
+}
+
+interface BodySection {
+    text?: string
+    closing?: string
+    font?: React.CSSProperties
+    color?: string
+}
+
+interface SignatureSection {
+    text?: string
+    font?: React.CSSProperties
+    color?: string
+}
+
 interface LetterTestimonialProps {
     state: LetterState
-    greeting?: string
-    bodyText?: string
-    closing?: string
-    signature?: string
+    greeting?: GreetingSection
+    body?: BodySection
+    signature?: SignatureSection
     bgColor?: string
-    textColor?: string
-    signatureColor?: string
-    bodyFont?: React.CSSProperties
-    signatureFont?: React.CSSProperties
+    /** 0.25–2: scale of the letter within the frame. 1 = fit container */
+    letterSize?: number
     style?: React.CSSProperties
 }
 
@@ -170,7 +201,7 @@ function createTextTexture(
     signature: string,
     options: TextureOptions
 ): InstanceType<typeof CanvasTexture> {
-    const { bgColor, textColor, signatureColor, bodyFont, signatureFont } =
+    const { bgColor, greetingColor, bodyColor, signatureColor, greetingFont, bodyFont, signatureFont } =
         options
 
     const canvas = document.createElement("canvas")
@@ -181,6 +212,14 @@ function createTextTexture(
 
     ctx.fillStyle = resolveColor(bgColor)
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    // Greeting font (fallback to body font)
+    const greetingFontRes = greetingFont ?? bodyFont
+    const greetingFontFamily = (greetingFontRes?.fontFamily as string) || "Inter, system-ui, sans-serif"
+    const greetingFontWeight = greetingFontRes?.fontWeight != null ? String(greetingFontRes.fontWeight) : "400"
+    const greetingFontStyle = (greetingFontRes?.fontStyle as string) || "normal"
+    const greetingFontSizeRaw = parseFontSize(greetingFontRes?.fontSize as string | number | undefined)
+    const greetingFontSize = (greetingFontSizeRaw ?? 18) * scale
 
     // Extract font properties from Framer font controls
     const bodyFontFamily = (bodyFont?.fontFamily as string) || "Inter, system-ui, sans-serif"
@@ -205,16 +244,15 @@ function createTextTexture(
     
     let y = padding + 32 * scale
 
-    // Greeting (slightly larger than body)
-    const greetingSize = Math.round(bodyFontSize * 1.3) * scale
-    ctx.fillStyle = resolveColor(textColor)
-    ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${greetingSize}px ${bodyFontFamily}`
+    // Greeting (uses greeting font or body font)
+    ctx.fillStyle = resolveColor(greetingColor)
+    ctx.font = `${greetingFontStyle} ${greetingFontWeight} ${greetingFontSize}px ${greetingFontFamily}`
     ctx.fillText(greeting, padding, y)
     y += lineHeight * 1.8
 
     // Body text
     const bodySize = bodyFontSize * scale
-    ctx.fillStyle = resolveColor(textColor)
+    ctx.fillStyle = resolveColor(bodyColor)
     ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${bodySize}px ${bodyFontFamily}`
     const maxWidth = canvas.width - padding * 2
     const words = body.split(" ")
@@ -238,7 +276,7 @@ function createTextTexture(
 
     // Closing
     y += lineHeight * 0.8
-    ctx.fillStyle = resolveColor(textColor)
+    ctx.fillStyle = resolveColor(bodyColor)
     ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${bodySize}px ${bodyFontFamily}`
     ctx.fillText(closing, padding, y)
 
@@ -264,22 +302,34 @@ function createTextTexture(
  * @framerSupportedLayoutWidth fixed
  * @framerSupportedLayoutHeight fixed
  * @framerIntrinsicWidth 400
- * @framerIntrinsicHeight 500
+ * @framerIntrinsicHeight 533
  */
 export default function LetterTestimonial(props: LetterTestimonialProps) {
     const {
         state = "open",
-        greeting = DEFAULT_GREETING,
-        bodyText = DEFAULT_BODY,
-        closing = DEFAULT_CLOSING,
-        signature = DEFAULT_SIGNATURE,
+        greeting: greetingSection,
+        body: bodySection,
+        signature: signatureSection,
         bgColor = DEFAULT_BG_COLOR,
-        textColor = DEFAULT_TEXT_COLOR,
-        signatureColor = DEFAULT_SIGNATURE_COLOR,
-        bodyFont,
-        signatureFont,
+        letterSize = 1,
         style,
     } = props
+
+    const letterSizeRef = useRef(letterSize)
+    letterSizeRef.current = letterSize
+
+    // Resolve section objects to flat values (with defaults)
+    const greeting = greetingSection?.text ?? DEFAULT_GREETING
+    const bodyText = bodySection?.text ?? DEFAULT_BODY
+    const closing = bodySection?.closing ?? DEFAULT_CLOSING
+    const signature = signatureSection?.text ?? DEFAULT_SIGNATURE
+    // Clone fonts so we don't share Framer's object reference (font picker mutates in place)
+    const greetingFont = cloneFont(greetingSection?.font ?? bodySection?.font)
+    const bodyFont = cloneFont(bodySection?.font)
+    const signatureFont = cloneFont(signatureSection?.font)
+    const greetingColor = greetingSection?.color ?? DEFAULT_TEXT_COLOR
+    const bodyColor = bodySection?.color ?? DEFAULT_TEXT_COLOR
+    const signatureColor = signatureSection?.color ?? DEFAULT_SIGNATURE_COLOR
 
     const containerRef = useRef<HTMLDivElement>(null)
     const sceneRef = useRef<InstanceType<typeof Scene> | null>(null)
@@ -297,6 +347,9 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
     thetaTargetRef.current = isClosed ? FOLD_THETA_MAX : 0
 
     // Serialize font so we react to actual font changes (Framer may pass same object reference)
+    const greetingFontKey = greetingFont
+        ? `${greetingFont.fontFamily ?? ""}-${greetingFont.fontWeight ?? ""}-${greetingFont.fontStyle ?? ""}-${greetingFont.fontSize ?? ""}`
+        : ""
     const bodyFontKey = bodyFont
         ? `${bodyFont.fontFamily ?? ""}-${bodyFont.fontWeight ?? ""}-${bodyFont.fontStyle ?? ""}-${bodyFont.fontSize ?? ""}-${bodyFont.lineHeight ?? ""}`
         : ""
@@ -307,35 +360,40 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
     // Debug: log font values in development
     useEffect(() => {
         if (typeof window !== "undefined") {
+            console.log("[LetterTestimonial] greetingFont:", JSON.stringify(greetingFont, null, 2))
             console.log("[LetterTestimonial] bodyFont:", JSON.stringify(bodyFont, null, 2))
             console.log("[LetterTestimonial] signatureFont:", JSON.stringify(signatureFont, null, 2))
+            console.log("[LetterTestimonial] greetingFontKey:", greetingFontKey)
             console.log("[LetterTestimonial] bodyFontKey:", bodyFontKey)
             console.log("[LetterTestimonial] signatureFontKey:", signatureFontKey)
         }
-    }, [bodyFont, signatureFont, bodyFontKey, signatureFontKey])
+    }, [greetingFont, bodyFont, signatureFont, greetingFontKey, bodyFontKey, signatureFontKey])
 
     const [texture, setTexture] = useState<InstanceType<typeof CanvasTexture> | null>(null)
 
     // Load web fonts then create/update the canvas texture when content or fonts change
     useEffect(() => {
         const descriptors: string[] = []
-        // Parse actual font sizes from the font controls
+        const greetingFontRes = greetingFont ?? bodyFont
+        const greetingFontSizeVal = parseFontSize(greetingFontRes?.fontSize as string | number | undefined) ?? 18
         const bodyFontSizeVal = parseFontSize(bodyFont?.fontSize as string | number | undefined) ?? 14
         const sigFontSizeVal = parseFontSize(signatureFont?.fontSize as string | number | undefined) ?? 26
-        
-        const bodyDescGreeting = fontToLoadDescriptor(bodyFont, Math.round(bodyFontSizeVal * 1.3))
+
+        const greetingDesc = fontToLoadDescriptor(greetingFontRes, greetingFontSizeVal)
         const bodyDescBody = fontToLoadDescriptor(bodyFont, bodyFontSizeVal)
         const sigDesc = fontToLoadDescriptor(signatureFont, sigFontSizeVal)
-        
-        if (bodyDescGreeting) descriptors.push(bodyDescGreeting)
-        if (bodyDescBody && bodyDescBody !== bodyDescGreeting) descriptors.push(bodyDescBody)
+
+        if (greetingDesc) descriptors.push(greetingDesc)
+        if (bodyDescBody && bodyDescBody !== greetingDesc) descriptors.push(bodyDescBody)
         if (sigDesc) descriptors.push(sigDesc)
 
         const loadAndCreate = () => {
             const tex = createTextTexture(greeting, bodyText, closing, signature, {
                 bgColor,
-                textColor,
+                greetingColor,
+                bodyColor,
                 signatureColor,
+                greetingFont,
                 bodyFont,
                 signatureFont,
             })
@@ -361,8 +419,10 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         closing,
         signature,
         bgColor,
-        textColor,
+        greetingColor,
+        bodyColor,
         signatureColor,
+        greetingFontKey,
         bodyFontKey,
         signatureFontKey,
     ])
@@ -427,7 +487,12 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         mesh.add(b2)
         mesh.bind(skeleton)
         meshRef.current = mesh
-        scene.add(mesh)
+
+        // Keep letter centered in both open and folded states: counter-move group so the
+        // paper's geometric center (middle of middle segment) stays at world origin.
+        const group = new Group()
+        group.add(mesh)
+        scene.add(group)
 
         // DEBUG: Add colored lines at each edge to visualize fold structure
         // Colors:
@@ -475,14 +540,34 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         resize()
         window.addEventListener("resize", resize)
 
+        // Visible world size at origin (camera at z=5, fov 45°)
+        const cameraDistance = 5
+        const visibleHeightAtOrigin = 2 * cameraDistance * Math.tan((45 / 2) * (Math.PI / 180))
+
         // Bind pose positions
         const b0BindY = halfH              // 4th edge (top of paper)
         const b1BindY = halfH - segH       // Second edge (first fold line)
         const b2BindY = halfH - 2 * segH   // Third edge (second fold line)
         
         let lastTime = performance.now()
+        let lastW = 0
+        let lastH = 0
         const animate = () => {
             frameRef.current = requestAnimationFrame(animate)
+
+            // Sync renderer and camera to container size (Framer resizes the frame without firing window resize)
+            const w = container.clientWidth
+            const h = container.clientHeight
+            if (w !== lastW || h !== lastH) {
+                lastW = w
+                lastH = h
+                if (w > 0 && h > 0 && camera) {
+                    camera.aspect = w / h
+                    camera.updateProjectionMatrix()
+                }
+                if (renderer) renderer.setSize(w, h)
+            }
+
             const now = performance.now()
             const delta = (now - lastTime) / 1000
             lastTime = now
@@ -536,6 +621,23 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             
             if (meshRef.current?.skeleton) meshRef.current.skeleton.update()
 
+            // Paper geometric center (local 0,0,0) lies in middle segment: it's segH/2 below b1 in bind pose.
+            // After b1 rotates by theta: centerWorld = b1.position + (0, -segH/2*cos(θ), segH/2*sin(θ)).
+            // Counter-move group so this center stays at world origin (works for both open and closed).
+            const centerY = b1.position.y - (segH / 2) * Math.cos(theta)
+            const centerZ = b1.position.z + (segH / 2) * Math.sin(theta)
+            group.position.set(0, -centerY, -centerZ)
+
+            // Scale letter to fit container, then apply user letterSize (so frame isn't mostly empty)
+            const aspect = w > 0 && h > 0 ? w / h : 1
+            const visibleWidthAtOrigin = aspect * visibleHeightAtOrigin
+            const scaleToFit = Math.min(
+                visibleWidthAtOrigin / PAPER_WIDTH,
+                visibleHeightAtOrigin / PAPER_HEIGHT
+            )
+            const scale = scaleToFit * letterSizeRef.current
+            group.scale.setScalar(scale)
+
             renderer.render(scene, camera)
         }
         animate()
@@ -580,65 +682,110 @@ addPropertyControls(LetterTestimonial, {
         defaultValue: "open",
         displaySegmentedControl: true,
     },
+    letterSize: {
+        type: ControlType.Number,
+        title: "Letter size",
+        defaultValue: 1,
+        min: 0.25,
+        max: 2,
+        step: 0.05,
+        displayStepper: true,
+        description: "Scale of the letter in the frame. 1 = fit container",
+    },
     greeting: {
-        type: ControlType.String,
+        type: ControlType.Object,
         title: "Greeting",
-        defaultValue: DEFAULT_GREETING,
+        controls: {
+            text: {
+                type: ControlType.String,
+                title: "Text",
+                defaultValue: DEFAULT_GREETING,
+            },
+            font: {
+                type: ControlType.Font,
+                title: "Font",
+                controls: "extended",
+                defaultFontType: "sans-serif",
+                defaultValue: {
+                    fontSize: 18,
+                    // @ts-ignore — Framer font control accepts fontFamily at runtime
+                    fontFamily: "Inter, system-ui, sans-serif",
+                    fontWeight: "400",
+                },
+            },
+            color: {
+                type: ControlType.Color,
+                title: "Color",
+                defaultValue: DEFAULT_TEXT_COLOR,
+            },
+        },
     },
-    bodyText: {
-        type: ControlType.String,
+    body: {
+        type: ControlType.Object,
         title: "Body",
-        defaultValue: DEFAULT_BODY,
-        displayTextArea: true,
-    },
-    closing: {
-        type: ControlType.String,
-        title: "Closing",
-        defaultValue: DEFAULT_CLOSING,
+        controls: {
+            text: {
+                type: ControlType.String,
+                title: "Text",
+                defaultValue: DEFAULT_BODY,
+                displayTextArea: true,
+            },
+            closing: {
+                type: ControlType.String,
+                title: "Closing",
+                defaultValue: DEFAULT_CLOSING,
+            },
+            font: {
+                type: ControlType.Font,
+                title: "Font",
+                controls: "extended",
+                defaultFontType: "sans-serif",
+                defaultValue: {
+                    fontSize: 14,
+                    // @ts-ignore — Framer font control accepts fontFamily at runtime
+                    fontFamily: "Inter, system-ui, sans-serif",
+                    fontWeight: "400",
+                },
+            },
+            color: {
+                type: ControlType.Color,
+                title: "Color",
+                defaultValue: DEFAULT_TEXT_COLOR,
+            },
+        },
     },
     signature: {
-        type: ControlType.String,
+        type: ControlType.Object,
         title: "Signature",
-        defaultValue: DEFAULT_SIGNATURE,
+        controls: {
+            text: {
+                type: ControlType.String,
+                title: "Text",
+                defaultValue: DEFAULT_SIGNATURE,
+            },
+            font: {
+                type: ControlType.Font,
+                title: "Font",
+                controls: "extended",
+                defaultFontType: "sans-serif",
+                defaultValue: {
+                    fontSize: 26,
+                    // @ts-ignore — Framer font control accepts fontFamily at runtime
+                    fontFamily: "Georgia, \"Times New Roman\", serif",
+                    fontStyle: "italic",
+                    fontWeight: "500",
+                },
+            },
+            color: {
+                type: ControlType.Color,
+                title: "Color",
+                defaultValue: DEFAULT_SIGNATURE_COLOR,
+            },
+        },
     },
     bgColor: {
         type: ControlType.Color,
         title: "Bg color",
         defaultValue: DEFAULT_BG_COLOR,
-    },
-    textColor: {
-        type: ControlType.Color,
-        title: "Text color",
-        defaultValue: DEFAULT_TEXT_COLOR,
-    },
-    signatureColor: {
-        type: ControlType.Color,
-        title: "Signature color",
-        defaultValue: DEFAULT_SIGNATURE_COLOR,
-    },
-    bodyFont: {
-        type: ControlType.Font,
-        title: "Body Font",
-        controls: "extended",
-        defaultFontType: "sans-serif",
-        defaultValue: {
-            fontSize: 14,
-            // @ts-ignore — Framer font control accepts fontFamily at runtime
-            fontFamily: "Inter, system-ui, sans-serif",
-            fontWeight: "400",
-        },
-    },
-    signatureFont: {
-        type: ControlType.Font,
-        title: "Signature Font",
-        controls: "extended",
-        defaultFontType: "sans-serif",
-        defaultValue: {
-            fontSize: 26,
-            // @ts-ignore — Framer font control accepts fontFamily at runtime
-            fontFamily: "Georgia, \"Times New Roman\", serif",
-            fontStyle: "italic",
-            fontWeight: "500",
-        },
     },
 })
