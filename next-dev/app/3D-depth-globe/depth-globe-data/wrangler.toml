@@ -1,0 +1,8 @@
+name = "depth-globe-data"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+account_id = "8fa2ec3c5a448b4859992628a5b9728d"
+
+[[r2_buckets]]
+binding = "GLOBE_BUCKET"
+bucket_name = "depth-globe-data"

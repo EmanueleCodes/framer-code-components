@@ -47,12 +47,29 @@ import type { OrbitControls as OrbitControlsType } from "https://cdn.jsdelivr.ne
 // SECTION: Scene context (from DepthGlobeSceneContext.tsx)
 // =============================================================================
 
-const POINTS_COUNT_URLS = {
-    "10M": "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
-    "50M": "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_50m_0.1.json",
+// Binary format: ~4x smaller, no JSON.parse. Served from Cloudflare Pages.
+const GLOBE_DATA_BASE = "https://depth-globe-data.pages.dev"
+
+const BINARY_URLS: Record<string, string> = {
+    low: `${GLOBE_DATA_BASE}/globe_low.bin`,
+    medium: `${GLOBE_DATA_BASE}/globe_medium.bin`,
+    high: `${GLOBE_DATA_BASE}/globe_high.bin`,
+}
+
+// JSON fallback (GitHub raw) – slower parse, larger transfer
+const JSON_FALLBACK_URLS: Record<string, string> = {
+    low: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
+    medium: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
+    high: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
 }
 
 export type GlobePoint = [number, number, number, number] // [lat, lon, elevation, land]
+
+export type GeometryArrays = {
+    directions: Float32Array
+    elevations: Float32Array
+    landMask: Float32Array
+}
 
 export interface DepthGlobeSceneState {
     animate: boolean
@@ -74,6 +91,7 @@ export interface DepthGlobeSceneState {
     smoothing: number
     quality: number
     points: GlobePoint[] | null
+    geometryData: GeometryArrays | null
 }
 
 const defaultSceneState: DepthGlobeSceneState = {
@@ -96,6 +114,7 @@ const defaultSceneState: DepthGlobeSceneState = {
     smoothing: 0.6,
     quality: 1,
     points: null,
+    geometryData: null,
 }
 
 const DepthGlobeSceneContext =
@@ -158,15 +177,22 @@ function pointGeometryShared(samples: GlobePoint[]): BufferGeometry {
         elevations.push(land ? scaleElevation(elevation, 1.0, 1) : 0)
         landMask.push(land)
     }
+    return pointGeometryFromArrays({
+        directions: new Float32Array(directions),
+        elevations: new Float32Array(elevations),
+        landMask: new Float32Array(landMask),
+    })
+}
+
+function pointGeometryFromArrays(data: {
+    directions: Float32Array
+    elevations: Float32Array
+    landMask: Float32Array
+}): BufferGeometry {
+    const { directions, elevations, landMask } = data
     const geometry = new BufferGeometry()
-    geometry.setAttribute(
-        "direction",
-        new Float32BufferAttribute(directions, 3)
-    )
-    geometry.setAttribute(
-        "elevation",
-        new Float32BufferAttribute(elevations, 1)
-    )
+    geometry.setAttribute("direction", new Float32BufferAttribute(directions, 3))
+    geometry.setAttribute("elevation", new Float32BufferAttribute(elevations, 1))
     geometry.setAttribute("land", new Float32BufferAttribute(landMask, 1))
     geometry.setAttribute(
         "position",
@@ -378,12 +404,14 @@ function GlobeWebGL() {
     const cameraDelta = useRef(new Vector3())
 
     const points = state.points
-    const hasPoints = points && points.length > 0
+    const geometryData = state.geometryData
+    const hasData = geometryData || (points && points.length > 0)
 
     const geometry = useMemo(() => {
-        if (!hasPoints) return null
-        return pointGeometryShared(points)
-    }, [points, hasPoints])
+        if (geometryData) return pointGeometryFromArrays(geometryData)
+        if (points && points.length > 0) return pointGeometryShared(points)
+        return null
+    }, [geometryData, points])
 
     const dpr = gl.getPixelRatio()
     const pointsMaterial = useMemo(() => {
@@ -463,7 +491,7 @@ function GlobeWebGL() {
         wm.opacity = state.opacity
     })
 
-    if (!geometry || !hasPoints) {
+    if (!geometry || !hasData) {
         return (
             <mesh geometry={waterGeometry} ref={waterRef}>
                 <primitive object={waterMaterial} attach="material" />
@@ -665,7 +693,7 @@ interface LightGroup {
 }
 
 interface DepthGlobeProps {
-    pointsCount: "10M" | "50M"
+    pointsCount: "low" | "medium" | "high"
     preview: boolean
     globe?: GlobeGroup
     colors?: ColorsGroup
@@ -801,7 +829,11 @@ export default function DepthGlobe({
         light.toneMappingExposure ?? defaultLight.toneMappingExposure!
     const containerRef = useRef<HTMLDivElement>(null)
     const zoomProbeRef = useRef<HTMLDivElement>(null)
-    const globeDataRef = useRef<{ points: Point[] } | null>(null)
+    const globeDataRef = useRef<
+        | { points: Point[] }
+        | { geometryData: GeometryArrays }
+        | null
+    >(null)
 
     const isCanvasRef = useRef<boolean | null>(null)
     if (isCanvasRef.current === null) {
@@ -818,43 +850,101 @@ export default function DepthGlobe({
     const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
 
     useEffect(() => {
-        const dataUrl =
-            pointsCount === "10M"
-                ? POINTS_COUNT_URLS["10M"]
-                : POINTS_COUNT_URLS["50M"]
-        if (!dataUrl) {
-            setLoading(false)
-            setReady(false)
-            globeDataRef.current = null
-            return
-        }
         setLoading(true)
         setError(null)
+        globeDataRef.current = null
         let cancelled = false
-        fetch(dataUrl)
-            .then((res) => {
-                if (!res.ok)
-                    throw new Error(`Failed to load: ${res.statusText}`)
-                return res.json()
-            })
-            .then((data: { points?: Point[] }) => {
+
+        const binaryUrl = BINARY_URLS[pointsCount]
+        const jsonUrl = JSON_FALLBACK_URLS[pointsCount]
+
+        const workerCode = `
+const MAX_ELEVATION = 6000;
+function coordinatesToUnitDirection(lat, lon) {
+  const phi = ((90 - lat) * Math.PI) / 180;
+  const theta = ((90 - lon) * Math.PI) / 180;
+  return [Math.sin(phi) * Math.cos(theta), Math.cos(phi), Math.sin(phi) * Math.sin(theta)];
+}
+function scaleElevation(elevation, scalingFactor, gamma) {
+  const t = Math.max(0, Math.min(1, elevation / MAX_ELEVATION));
+  return Math.pow(t, gamma) * scalingFactor;
+}
+self.onmessage = (e) => {
+  const view = new Float32Array(e.data);
+  const n = view.length / 4;
+  const directions = new Float32Array(n * 3);
+  const elevations = new Float32Array(n);
+  const landMask = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const [dx, dy, dz] = coordinatesToUnitDirection(view[i*4], view[i*4+1]);
+    directions[i*3]=dx; directions[i*3+1]=dy; directions[i*3+2]=dz;
+    elevations[i] = view[i*4+3] ? scaleElevation(view[i*4+2], 1, 1) : 0;
+    landMask[i] = view[i*4+3];
+  }
+  self.postMessage({ directions, elevations, landMask, count: n }, [directions.buffer, elevations.buffer, landMask.buffer]);
+};
+`
+
+        const runBinary = (buffer: ArrayBuffer) => {
+            if (cancelled) return
+            const blob = new Blob([workerCode], { type: "application/javascript" })
+            const worker = new Worker(URL.createObjectURL(blob))
+            worker.onmessage = (e: MessageEvent<{ directions: Float32Array; elevations: Float32Array; landMask: Float32Array }>) => {
                 if (cancelled) return
-                if (!data.points || !Array.isArray(data.points)) {
-                    setError("Invalid data: expected { points: [...] }")
-                    setLoading(false)
-                    return
-                }
-                globeDataRef.current = { points: data.points }
+                const { directions, elevations, landMask } = e.data
+                globeDataRef.current = { geometryData: { directions, elevations, landMask } }
                 setError(null)
                 setReady(true)
                 setLoading(false)
-            })
-            .catch((err) => {
+            }
+            worker.onerror = () => {
                 if (!cancelled) {
-                    setError(err?.message ?? "Failed to load globe data")
+                    setError("Worker failed")
                     setLoading(false)
                 }
+            }
+            worker.postMessage(buffer, [buffer])
+        }
+
+        const runJsonFallback = () => {
+            fetch(jsonUrl)
+                .then((res) => {
+                    if (!res.ok) throw new Error(`Failed to load: ${res.statusText}`)
+                    return res.json()
+                })
+                .then((data: { points?: Point[] }) => {
+                    if (cancelled) return
+                    if (!data.points || !Array.isArray(data.points)) {
+                        setError("Invalid data: expected { points: [...] }")
+                        setLoading(false)
+                        return
+                    }
+                    globeDataRef.current = { points: data.points }
+                    setError(null)
+                    setReady(true)
+                    setLoading(false)
+                })
+                .catch((err) => {
+                    if (!cancelled) {
+                        setError(err?.message ?? "Failed to load globe data")
+                        setLoading(false)
+                    }
+                })
+        }
+
+        fetch(binaryUrl)
+            .then((res) => {
+                if (cancelled) return
+                if (res.ok) return res.arrayBuffer()
+                return null
             })
+            .then((buffer) => {
+                if (cancelled) return
+                if (buffer) runBinary(buffer)
+                else runJsonFallback()
+            })
+            .catch(() => runJsonFallback())
+
         return () => {
             cancelled = true
         }
@@ -885,7 +975,8 @@ export default function DepthGlobe({
         )
     }, [isCanvas])
 
-    // Canvas mode: zoom-probe RAF loop to size Canvas wrapper so R3F (getBoundingClientRect) sees correct visual size
+    // Canvas mode: zoom-probe RAF loop to size Canvas wrapper so R3F (getBoundingClientRect) sees correct visual size.
+    // When we first get valid dimensions, set canvasLayoutReady so Canvas mounts immediately (no extra 50/150ms delay).
     useEffect(() => {
         const container = containerRef.current
         if (!container || !isCanvas) return
@@ -921,6 +1012,7 @@ export default function DepthGlobe({
                 last.h = ch
                 const safeZoom = Math.max(zoom, 0.0001)
                 setCanvasSize({ width: cw / safeZoom, height: ch / safeZoom })
+                setCanvasLayoutReady(true)
             }
             rafId = requestAnimationFrame(tick)
         }
@@ -945,25 +1037,19 @@ export default function DepthGlobe({
         return () => ro?.disconnect()
     }, [isCanvas, updateCanvasSize])
 
-    // In Framer canvas, layout may not be ready on first paint; delay Canvas mount and re-measure (reverse-fish-eye pattern)
+    // In Framer canvas, layout may not be ready on first paint. Set canvasLayoutReady when we have valid size.
+    // Use rAF so we mount Canvas on the next frame after ready (no 50/150ms delay); RAF loop above also sets canvasLayoutReady when size is set.
     useEffect(() => {
         if (!isCanvas) {
             setCanvasLayoutReady(true)
             return
         }
         if (!ready) return
-        const t1 = setTimeout(() => {
+        const rafId = requestAnimationFrame(() => {
             updateCanvasSize()
             setCanvasLayoutReady(true)
-        }, 50)
-        const t2 = setTimeout(() => {
-            updateCanvasSize()
-            setCanvasLayoutReady(true)
-        }, 150)
-        return () => {
-            clearTimeout(t1)
-            clearTimeout(t2)
-        }
+        })
+        return () => cancelAnimationFrame(rafId)
     }, [isCanvas, ready, updateCanvasSize])
 
     if (error) {
@@ -990,6 +1076,7 @@ export default function DepthGlobe({
         )
     }
 
+    const data = globeDataRef.current
     const sceneState: DepthGlobeSceneState = {
         animate,
         autoRotate,
@@ -1009,7 +1096,8 @@ export default function DepthGlobe({
         edgeSoftness,
         smoothing,
         quality,
-        points: globeDataRef.current?.points ?? null,
+        points: data && "points" in data ? data.points : null,
+        geometryData: data && "geometryData" in data ? data.geometryData : null,
     }
 
     return (
@@ -1027,6 +1115,7 @@ export default function DepthGlobe({
                 display: "block",
                 margin: 0,
                 padding: 0,
+                background: resolveTokenColor(backgroundColor),
             }}
         >
             {/* Intrinsic sizing for Fit layouts (3D-scan, ASCII-background pattern) */}
@@ -1058,22 +1147,6 @@ export default function DepthGlobe({
                 }}
                 aria-hidden="true"
             />
-            {loading && (
-                <div
-                    style={{
-                        position: "absolute",
-                        inset: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "#0d0d0d",
-                        color: "#fff",
-                        fontSize: 14,
-                    }}
-                >
-                    Loading globe…
-                </div>
-            )}
             {ready && canvasLayoutReady && (
                 <div
                     style={{
@@ -1088,7 +1161,7 @@ export default function DepthGlobe({
                             canvasSize.height > 0
                                 ? canvasSize.height
                                 : INTRINSIC_HEIGHT,
-                        display: loading ? "none" : "block",
+                        display: "block",
                         minHeight: 0,
                         minWidth: 0,
                     }}
@@ -1139,14 +1212,15 @@ export default function DepthGlobe({
 // =============================================================================
 
 addPropertyControls(DepthGlobe, {
-    pointsCount:{
-        type:ControlType.Enum,
-        title: "Points Count",
-        options: ["10M","50M"],
-        optionTitles: ["10M", "50M"],
-        defaultValue: "10M",
+    pointsCount: {
+        type: ControlType.Enum,
+        title: "Detail",
+        options: ["low", "medium", "high"],
+        optionTitles: ["Low (~300k)", "Medium (~600k)", "High (~1.2M)"],
+        defaultValue: "medium",
         displaySegmentedControl: true,
         segmentedControlDirection: "vertical",
+        description: "Lower = faster load, less detail.",
     },
     preview: {
         type: ControlType.Boolean,
@@ -1296,6 +1370,8 @@ addPropertyControls(DepthGlobe, {
     light: {
         type: ControlType.Object,
         title: "Light",
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
         controls: {
             lightColor: {
                 type: ControlType.Color,
@@ -1317,8 +1393,6 @@ addPropertyControls(DepthGlobe, {
                 max: 2,
                 step: 0.05,
                 defaultValue: 1.0,
-                description:
-                    "More components at [Framer University](https://frameruni.link/cc).",
             },
         },
     },
