@@ -74,6 +74,8 @@ export type GeometryArrays = {
 export interface DepthGlobeSceneState {
     animate: boolean
     autoRotate: boolean
+    runAnimation: boolean
+    scale: number
     backgroundColor: string
     landColor: string
     waterColor: string
@@ -97,6 +99,8 @@ export interface DepthGlobeSceneState {
 const defaultSceneState: DepthGlobeSceneState = {
     animate: true,
     autoRotate: true,
+    runAnimation: true,
+    scale: 1,
     backgroundColor: "#0d0d0d",
     landColor: "#fff0d1",
     waterColor: "#0d111a",
@@ -191,8 +195,14 @@ function pointGeometryFromArrays(data: {
 }): BufferGeometry {
     const { directions, elevations, landMask } = data
     const geometry = new BufferGeometry()
-    geometry.setAttribute("direction", new Float32BufferAttribute(directions, 3))
-    geometry.setAttribute("elevation", new Float32BufferAttribute(elevations, 1))
+    geometry.setAttribute(
+        "direction",
+        new Float32BufferAttribute(directions, 3)
+    )
+    geometry.setAttribute(
+        "elevation",
+        new Float32BufferAttribute(elevations, 1)
+    )
     geometry.setAttribute("land", new Float32BufferAttribute(landMask, 1))
     geometry.setAttribute(
         "position",
@@ -572,6 +582,27 @@ function PostProcessingWebGL({ children }: { children: ReactNode }) {
 }
 
 // =============================================================================
+// SECTION: CameraController – sets camera distance based on scale
+// =============================================================================
+
+const BASE_CAMERA_DISTANCE = 5.2
+
+function CameraController() {
+    const { camera } = useThree()
+    const state = useDepthGlobeScene()
+
+    useEffect(() => {
+        const scaleMult = state.scale
+        const distance = BASE_CAMERA_DISTANCE / scaleMult
+        const dir = new Vector3(0, 1, 5.1).normalize()
+        camera.position.copy(dir).multiplyScalar(distance)
+        camera.lookAt(0, 0, 0)
+    }, [camera, state.scale])
+
+    return null
+}
+
+// =============================================================================
 // SECTION: SceneWebGL component (from SceneWebGL.tsx)
 // =============================================================================
 
@@ -610,6 +641,7 @@ function SceneWebGL() {
     useEffect(() => {
         invalidate()
     }, [
+        state.runAnimation,
         state.animate,
         state.autoRotate,
         state.backgroundColor,
@@ -628,6 +660,7 @@ function SceneWebGL() {
     ])
 
     useFrame(() => {
+        if (!state.runAnimation) return
         if (state.autoRotate && controlsRef.current) {
             controlsRef.current.update()
             invalidate()
@@ -638,6 +671,7 @@ function SceneWebGL() {
 
     return (
         <>
+            <CameraController />
             <ambientLight intensity={state.lightIntensity / 2} />
             <directionalLight
                 position={[1.2, 0, 0.66]}
@@ -665,6 +699,7 @@ const INTRINSIC_WIDTH = 600
 const INTRINSIC_HEIGHT = 400
 
 interface GlobeGroup {
+    scale?: number
     scaleFactor?: number
     animate?: boolean
     autoRotate?: boolean
@@ -757,7 +792,13 @@ function parseColorToRgb(input: string | undefined): {
 
 type Point = GlobePoint
 
+function mapScaleUiToMultiplier(ui: number): number {
+    const clamped = Math.max(0, Math.min(1, ui))
+    return clamped * 0.8 + 0.2
+}
+
 const defaultGlobe: GlobeGroup = {
+    scale: 0.9,
     scaleFactor: 0.3,
     animate: true,
     autoRotate: true,
@@ -805,6 +846,8 @@ export default function DepthGlobe({
     const colors = { ...defaultColors, ...colorsProp }
     const glow = { ...defaultGlow, ...glowProp }
     const light = { ...defaultLight, ...lightProp }
+    const scale = globe.scale ?? defaultGlobe.scale ?? 0.9
+    const scaleMultiplier = mapScaleUiToMultiplier(scale)
     const scaleFactor = globe.scaleFactor ?? defaultGlobe.scaleFactor!
     const animate = globe.animate ?? defaultGlobe.animate!
     const autoRotate = globe.autoRotate ?? defaultGlobe.autoRotate!
@@ -828,11 +871,8 @@ export default function DepthGlobe({
     const toneMappingExposure =
         light.toneMappingExposure ?? defaultLight.toneMappingExposure!
     const containerRef = useRef<HTMLDivElement>(null)
-    const zoomProbeRef = useRef<HTMLDivElement>(null)
     const globeDataRef = useRef<
-        | { points: Point[] }
-        | { geometryData: GeometryArrays }
-        | null
+        { points: Point[] } | { geometryData: GeometryArrays } | null
     >(null)
 
     const isCanvasRef = useRef<boolean | null>(null)
@@ -844,10 +884,20 @@ export default function DepthGlobe({
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [ready, setReady] = useState(false)
-    // In canvas mode, delay Canvas mount so layout has time to settle (reverse-fish-eye pattern)
-    const [canvasLayoutReady, setCanvasLayoutReady] = useState(!isCanvas)
-    // Explicit pixel size for Canvas wrapper so R3F gets layout size (clientWidth/clientHeight), not scaled rect
-    const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
+    const [isInView, setIsInView] = useState(true)
+
+    const runAnimation = (!isCanvas || preview) && isInView
+
+    useEffect(() => {
+        const el = containerRef.current
+        if (!el || typeof IntersectionObserver === "undefined") return
+        const io = new IntersectionObserver(
+            ([entry]) => setIsInView(entry.isIntersecting),
+            { threshold: 0 }
+        )
+        io.observe(el)
+        return () => io.disconnect()
+    }, [])
 
     useEffect(() => {
         setLoading(true)
@@ -887,12 +937,22 @@ self.onmessage = (e) => {
 
         const runBinary = (buffer: ArrayBuffer) => {
             if (cancelled) return
-            const blob = new Blob([workerCode], { type: "application/javascript" })
+            const blob = new Blob([workerCode], {
+                type: "application/javascript",
+            })
             const worker = new Worker(URL.createObjectURL(blob))
-            worker.onmessage = (e: MessageEvent<{ directions: Float32Array; elevations: Float32Array; landMask: Float32Array }>) => {
+            worker.onmessage = (
+                e: MessageEvent<{
+                    directions: Float32Array
+                    elevations: Float32Array
+                    landMask: Float32Array
+                }>
+            ) => {
                 if (cancelled) return
                 const { directions, elevations, landMask } = e.data
-                globeDataRef.current = { geometryData: { directions, elevations, landMask } }
+                globeDataRef.current = {
+                    geometryData: { directions, elevations, landMask },
+                }
                 setError(null)
                 setReady(true)
                 setLoading(false)
@@ -909,7 +969,8 @@ self.onmessage = (e) => {
         const runJsonFallback = () => {
             fetch(jsonUrl)
                 .then((res) => {
-                    if (!res.ok) throw new Error(`Failed to load: ${res.statusText}`)
+                    if (!res.ok)
+                        throw new Error(`Failed to load: ${res.statusText}`)
                     return res.json()
                 })
                 .then((data: { points?: Point[] }) => {
@@ -950,108 +1011,6 @@ self.onmessage = (e) => {
         }
     }, [pointsCount, isCanvas])
 
-    // Measure container; in canvas mode compensate for editor zoom via zoom probe (interactive-wave, electric-border pattern)
-    const updateCanvasSize = useCallback(() => {
-        const el = containerRef.current
-        if (!el) return
-        const cw = el.clientWidth || el.offsetWidth || 0
-        const ch = el.clientHeight || el.offsetHeight || 0
-        if (cw <= 0 || ch <= 0) return
-        let width: number
-        let height: number
-        if (isCanvas && zoomProbeRef.current) {
-            const zoom = zoomProbeRef.current.getBoundingClientRect().width / 20
-            const safeZoom = Math.max(zoom, 0.0001)
-            width = cw / safeZoom
-            height = ch / safeZoom
-        } else {
-            width = cw
-            height = ch
-        }
-        setCanvasSize((prev) =>
-            prev.width === width && prev.height === height
-                ? prev
-                : { width, height }
-        )
-    }, [isCanvas])
-
-    // Canvas mode: zoom-probe RAF loop to size Canvas wrapper so R3F (getBoundingClientRect) sees correct visual size.
-    // When we first get valid dimensions, set canvasLayoutReady so Canvas mounts immediately (no extra 50/150ms delay).
-    useEffect(() => {
-        const container = containerRef.current
-        if (!container || !isCanvas) return
-
-        const runOnce = () => {
-            if (zoomProbeRef.current) updateCanvasSize()
-        }
-        const id = requestAnimationFrame(runOnce)
-
-        let rafId = 0
-        const TICK_MS = 150
-        const last = { ts: 0, zoom: 0, w: 0, h: 0 }
-
-        const tick = (now?: number) => {
-            const probe = zoomProbeRef.current
-            if (!container || !probe) {
-                rafId = requestAnimationFrame(tick)
-                return
-            }
-            const cw = container.clientWidth || container.offsetWidth || 0
-            const ch = container.clientHeight || container.offsetHeight || 0
-            const zoom = probe.getBoundingClientRect().width / 20
-            const timeOk =
-                !last.ts || (now ?? performance.now()) - last.ts >= TICK_MS
-            const zoomChanged = Math.abs(zoom - last.zoom) > 0.001
-            const sizeChanged =
-                Math.abs(cw - last.w) > 2 || Math.abs(ch - last.h) > 2
-
-            if (timeOk && (zoomChanged || sizeChanged) && cw >= 1 && ch >= 1) {
-                last.ts = now ?? performance.now()
-                last.zoom = zoom
-                last.w = cw
-                last.h = ch
-                const safeZoom = Math.max(zoom, 0.0001)
-                setCanvasSize({ width: cw / safeZoom, height: ch / safeZoom })
-                setCanvasLayoutReady(true)
-            }
-            rafId = requestAnimationFrame(tick)
-        }
-        rafId = requestAnimationFrame(tick)
-        return () => {
-            cancelAnimationFrame(id)
-            cancelAnimationFrame(rafId)
-        }
-    }, [isCanvas, updateCanvasSize])
-
-    // ResizeObserver: keep canvas size in sync when not in canvas mode (preview/production)
-    useEffect(() => {
-        if (isCanvas) return
-        const el = containerRef.current
-        if (!el) return
-        updateCanvasSize()
-        const ro =
-            typeof ResizeObserver !== "undefined"
-                ? new ResizeObserver(updateCanvasSize)
-                : null
-        if (ro) ro.observe(el)
-        return () => ro?.disconnect()
-    }, [isCanvas, updateCanvasSize])
-
-    // In Framer canvas, layout may not be ready on first paint. Set canvasLayoutReady when we have valid size.
-    // Use rAF so we mount Canvas on the next frame after ready (no 50/150ms delay); RAF loop above also sets canvasLayoutReady when size is set.
-    useEffect(() => {
-        if (!isCanvas) {
-            setCanvasLayoutReady(true)
-            return
-        }
-        if (!ready) return
-        const rafId = requestAnimationFrame(() => {
-            updateCanvasSize()
-            setCanvasLayoutReady(true)
-        })
-        return () => cancelAnimationFrame(rafId)
-    }, [isCanvas, ready, updateCanvasSize])
-
     if (error) {
         return (
             <div
@@ -1080,6 +1039,8 @@ self.onmessage = (e) => {
     const sceneState: DepthGlobeSceneState = {
         animate,
         autoRotate,
+        runAnimation,
+        scale: scaleMultiplier,
         backgroundColor: resolveTokenColor(backgroundColor),
         landColor: resolveTokenColor(landColor),
         waterColor: resolveTokenColor(waterColor),
@@ -1133,34 +1094,13 @@ self.onmessage = (e) => {
                 }}
                 aria-hidden="true"
             />
-            {/* Zoom probe for canvas: 20px logical size so zoom = getBoundingClientRect().width / 20 (StickerDrag, interactive-wave pattern) */}
-            <div
-                ref={zoomProbeRef}
-                style={{
-                    position: "absolute",
-                    width: 20,
-                    height: 20,
-                    top: 0,
-                    left: 0,
-                    opacity: 0,
-                    pointerEvents: "none",
-                }}
-                aria-hidden="true"
-            />
-            {ready && canvasLayoutReady && (
+            {ready && (
                 <div
                     style={{
                         position: "absolute",
-                        left: 0,
-                        top: 0,
-                        width:
-                            canvasSize.width > 0
-                                ? canvasSize.width
-                                : INTRINSIC_WIDTH,
-                        height:
-                            canvasSize.height > 0
-                                ? canvasSize.height
-                                : INTRINSIC_HEIGHT,
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
                         display: "block",
                         minHeight: 0,
                         minWidth: 0,
@@ -1168,8 +1108,9 @@ self.onmessage = (e) => {
                 >
                     <Canvas
                         camera={{ position: [0, 1, 5.1], fov: 30 }}
-                        frameloop="always"
+                        frameloop="demand"
                         flat
+                        resize={{ offsetSize: true }}
                         gl={(canvas) => {
                             const renderer = new WebGLRenderer({
                                 canvas,
@@ -1233,9 +1174,17 @@ addPropertyControls(DepthGlobe, {
         type: ControlType.Object,
         title: "Globe",
         controls: {
+            scale: {
+                type: ControlType.Number,
+                title: "Scale",
+                min: 0,
+                max: 1,
+                step: 0.1,
+                defaultValue: 0.9,
+            },
             scaleFactor: {
                 type: ControlType.Number,
-                title: "Topography",
+                title: "Depth",
                 min: 0.01,
                 max: 0.5,
                 step: 0.01,
@@ -1266,7 +1215,7 @@ addPropertyControls(DepthGlobe, {
             },
             particleSize: {
                 type: ControlType.Number,
-                title: "Particle size",
+                title: "Dots Size",
                 min: 0.3,
                 max: 2.5,
                 step: 0.05,
@@ -1274,7 +1223,7 @@ addPropertyControls(DepthGlobe, {
             },
             edgeSoftness: {
                 type: ControlType.Number,
-                title: "Edge softness",
+                title: "Softness",
                 min: 0,
                 max: 1,
                 step: 0.05,
