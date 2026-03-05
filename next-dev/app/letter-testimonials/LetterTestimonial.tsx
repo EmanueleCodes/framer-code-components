@@ -24,8 +24,8 @@ import {
     Vector3,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
-/** Animation phase for fold -> flip -> unfold sequence */
-type AnimationPhase = "idle" | "folding" | "flipping" | "unfolding"
+/** Animation phase for entry transition */
+type AnimationPhase = "idle" | "folding"
 
 /** Transition config from Framer ControlType.Transition (tween + spring) */
 interface TransitionConfig {
@@ -183,12 +183,10 @@ interface LetterTestimonialProps {
     entries?: LetterEntry[]
     /** Axis for 180° flip when changing entry */
     flipAxis?: "horizontal" | "vertical"
+    /** Direction of the 180° flip */
+    flipDirection?: "front" | "back"
     /** 0.25–2: scale of the letter within the frame. 1 = fit container */
     letterSize?: number
-    /** Fold angle in degrees when open */
-    angleOpen?: number
-    /** Fold angle in degrees when closed */
-    angleClosed?: number
     /** Fold/flip animation transition (duration, easing, spring, delay) */
     transition?: TransitionConfig
     style?: React.CSSProperties
@@ -198,6 +196,8 @@ interface LetterTestimonialProps {
 const PAPER_WIDTH = 2.4
 const PAPER_HEIGHT = 3.2
 const SEGMENT_HEIGHT = PAPER_HEIGHT / 3  // Each of the 3 panels
+const ANGLE_OPEN_DEG = 10
+const ANGLE_CLOSED_DEG = 60
 
 // Create plane geometry with skinning for 3 equal panels (Z-fold).
 // Edges (from top to bottom of paper, viewing from front):
@@ -430,7 +430,7 @@ function createEmptyTexture(bgColor: string = DEFAULT_BG_COLOR): InstanceType<ty
 
 /**
  * 3D folding letter with text and signature. Uses Three.js (CDN) for realistic paper fold.
- * Supports multiple entries; changing entry animates fold -> 180° flip -> unfold.
+ * Supports multiple entries; changing entry animates fold/unfold while flipping 180° across full duration.
  * @framerSupportedLayoutWidth fixed
  * @framerSupportedLayoutHeight fixed
  * @framerIntrinsicWidth 400
@@ -441,9 +441,8 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         currentEntry: currentEntryProp = 1,
         entries: entriesProp = [],
         flipAxis = "horizontal",
+        flipDirection = "front",
         letterSize = 1,
-        angleOpen = 0,
-        angleClosed = 60,
         transition: transitionProp = {
             type: "tween",
             duration: 0.8,
@@ -495,6 +494,14 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
     const frameRef = useRef<number>(0)
     const prevEntryRef = useRef(currentEntry)
     const phaseRef = useRef<AnimationPhase>("idle")
+
+    // Debug: fold / unfold / flip progress 0–100 (for debug panel)
+    const [debugProgress, setDebugProgress] = useState({
+        fold: 0,
+        unfold: 0,
+        flip: 0,
+        flipAngleDeg: 0,
+    })
 
     // Which entry is currently shown (updates when flip animation completes)
     const [displayedEntry, setDisplayedEntry] = useState(currentEntry)
@@ -563,13 +570,14 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             .catch(createBoth)
     }, [frontEntryIndex, backEntryIndex, entriesLength, fontKeys, displayedEntry])
 
-    const angleOpenRad = degToRad(angleOpen)
-    const angleClosedRad = degToRad(angleClosed)
+    const angleOpenRad = degToRad(ANGLE_OPEN_DEG)
+    const angleClosedRad = degToRad(ANGLE_CLOSED_DEG)
     const transitionKey = transitionProp
         ? `${transitionProp.type ?? "tween"}-${transitionProp.duration ?? ""}-${transitionProp.ease ?? ""}-${transitionProp.delay ?? ""}-${transitionProp.stiffness ?? ""}-${transitionProp.damping ?? ""}`
         : ""
 
-    // Single smooth animation: one progress 0→1 drives fold, flip, and unfold
+    // Single smooth animation: one progress 0→1 drives flip for full duration,
+    // while fold and unfold each take half of the total duration.
     useEffect(() => {
         const prev = prevEntryRef.current
 
@@ -598,24 +606,34 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             ...config,
             delay: transitionProp?.delay ?? 0,
             onUpdate: (p) => {
-                // Single progress: 0–0.33 fold, 0.33–0.66 flip, 0.66–1 unfold
+                // Flip continuously over full progress (0→π),
+                // fold during first half, unfold during second half.
+                const clampedProgress = Math.max(0, Math.min(1, p))
+                const flipAngle = Math.PI * clampedProgress
+
                 let theta: number
-                let flipAngle: number
-                if (p <= 1 / 3) {
-                    const t = p / (1 / 3)
-                    theta = angleOpenRad + (angleClosedRad - angleOpenRad) * t
-                    flipAngle = 0
-                } else if (p >= 2 / 3) {
-                    const t = (p - 2 / 3) / (1 / 3)
-                    theta = angleClosedRad + (angleOpenRad - angleClosedRad) * t
-                    flipAngle = Math.PI
+                let foldPct: number
+                let unfoldPct: number
+                if (clampedProgress <= 0.5) {
+                    const foldT = clampedProgress / 0.5
+                    theta = angleOpenRad + (angleClosedRad - angleOpenRad) * foldT
+                    foldPct = Math.round(foldT * 100)
+                    unfoldPct = 0
                 } else {
-                    const t = (p - 1 / 3) / (1 / 3)
-                    theta = angleClosedRad
-                    flipAngle = Math.PI * t
+                    const unfoldT = (clampedProgress - 0.5) / 0.5
+                    theta = angleClosedRad + (angleOpenRad - angleClosedRad) * unfoldT
+                    foldPct = 100
+                    unfoldPct = Math.round(unfoldT * 100)
                 }
+
                 thetaRef.current = theta
                 flipAngleRef.current = flipAngle
+                setDebugProgress({
+                    fold: foldPct,
+                    unfold: unfoldPct,
+                    flip: Math.round(clampedProgress * 100),
+                    flipAngleDeg: Math.round((flipAngle * 180) / Math.PI),
+                })
             },
             onComplete: () => {
                 phaseRef.current = "idle"
@@ -623,6 +641,7 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
                 flipAngleRef.current = 0
                 thetaRef.current = angleOpenRad  // snap to exact open angle to avoid jump
                 setDisplayedEntry(currentEntry)
+                setDebugProgress({ fold: 0, unfold: 100, flip: 0, flipAngleDeg: 0 })
             },
         })
         return () => {
@@ -810,8 +829,9 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             letterGroup.position.set(0, -centerY, -centerZ)
 
             const flipAngle = flipAngleRef.current
-            flipGroup.rotation.x = flipAxis === "horizontal" ? flipAngle : 0
-            flipGroup.rotation.y = flipAxis === "vertical" ? flipAngle : 0
+            const flipSign = flipDirection === "back" ? -1 : 1
+            flipGroup.rotation.x = flipAxis === "horizontal" ? flipAngle * flipSign : 0
+            flipGroup.rotation.y = flipAxis === "vertical" ? flipAngle * flipSign : 0
 
             const aspect = w > 0 && h > 0 ? w / h : 1
             const visibleWidthAtOrigin = aspect * visibleHeightAtOrigin
@@ -843,18 +863,44 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             frontBonesRef.current = []
             backBonesRef.current = []
         }
-    }, [textures.front, textures.back, flipAxis])
+    }, [textures.front, textures.back, flipAxis, flipDirection])
 
     return (
-        <div
-            ref={containerRef}
-            style={{
-                ...style,
-                width: "100%",
-                height: "100%",
-                background: "transparent",
-            }}
-        />
+        <>
+            <div
+                ref={containerRef}
+                style={{
+                    ...style,
+                    width: "100%",
+                    height: "100%",
+                    background: "transparent",
+                }}
+            />
+            <div
+                style={{
+                    position: "fixed",
+                    top: 12,
+                    left: 12,
+                    zIndex: 9999,
+                    padding: "10px 14px",
+                    background: "rgba(0,0,0,0.85)",
+                    color: "#e0e0e0",
+                    fontFamily: "ui-monospace, monospace",
+                    fontSize: 13,
+                    borderRadius: 8,
+                    lineHeight: 1.5,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                }}
+            >
+                <div style={{ fontWeight: 600, marginBottom: 6, color: "#fff" }}>
+                    Animation progress
+                </div>
+                <div>Fold progress: {debugProgress.fold}/100</div>
+                <div>Unfold progress: {debugProgress.unfold}/100</div>
+                <div>Flip progress: {debugProgress.flip}/100</div>
+                <div>Flip angle: {debugProgress.flipAngleDeg}°</div>
+            </div>
+        </>
     )
 }
 
@@ -878,6 +924,13 @@ addPropertyControls(LetterTestimonial, {
         optionTitles: ["Horizontal (up/down)", "Vertical (left/right)"],
         defaultValue: "horizontal",
     },
+    flipDirection: {
+        type: ControlType.Enum,
+        title: "Flip direction",
+        options: ["front", "back"],
+        optionTitles: ["Front flip", "Back flip"],
+        defaultValue: "front",
+    },
     letterSize: {
         type: ControlType.Number,
         title: "Letter size",
@@ -887,26 +940,6 @@ addPropertyControls(LetterTestimonial, {
         step: 0.05,
         displayStepper: true,
         description: "Scale of the letter in the frame. 1 = fit container",
-    },
-    angleOpen: {
-        type: ControlType.Number,
-        title: "Angle (open)",
-        defaultValue: 0,
-        min: 0,
-        max: 90,
-        step: 1,
-        unit: "°",
-        displayStepper: true,
-    },
-    angleClosed: {
-        type: ControlType.Number,
-        title: "Angle (closed)",
-        defaultValue: 60,
-        min: 0,
-        max: 90,
-        step: 1,
-        unit: "°",
-        displayStepper: true,
     },
     transition: {
         type: ControlType.Transition,

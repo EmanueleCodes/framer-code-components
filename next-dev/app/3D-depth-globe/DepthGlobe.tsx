@@ -15,12 +15,12 @@ import React, {
     type ReactNode,
 } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
-import { Canvas } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
+import { Canvas } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
 import {
     useFrame,
     useThree,
-} from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
-import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
+} from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
+import { OrbitControls } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
 import {
     ACESFilmicToneMapping,
     BufferGeometry,
@@ -37,11 +37,13 @@ import {
     Vector2,
     Vector3,
     WebGLRenderer,
-} from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
-import { EffectComposer } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
-import { RenderPass } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
-import { UnrealBloomPass } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
-import type { OrbitControls as OrbitControlsType } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final.js"
+    WebGLRenderTarget,
+    HalfFloatType,
+} from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
+import { EffectComposer } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
+import { RenderPass } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
+import { UnrealBloomPass } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
+import type { OrbitControls as OrbitControlsType } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/depth-globe-final-2.js"
 
 // =============================================================================
 // SECTION: Scene context (from DepthGlobeSceneContext.tsx)
@@ -76,7 +78,7 @@ export interface DepthGlobeSceneState {
     autoRotate: boolean
     runAnimation: boolean
     scale: number
-    backgroundColor: string
+    backgroundColor: string | null
     landColor: string
     waterColor: string
     blendFactor: number
@@ -532,9 +534,22 @@ function PostProcessingWebGL({ children }: { children: ReactNode }) {
     const composerRef = useRef<EffectComposer | null>(null)
     const bloomPassRef = useRef<UnrealBloomPass | null>(null)
 
+    const isTransparent = state.backgroundColor == null
+
     useEffect(() => {
-        const composer = new EffectComposer(gl)
+        let renderTarget: any
+        if (isTransparent) {
+            renderTarget = new WebGLRenderTarget(size.width, size.height, {
+                type: HalfFloatType,
+                stencilBuffer: false,
+            })
+            renderTarget.texture.colorSpace = SRGBColorSpace
+        }
+        const composer = new EffectComposer(gl, renderTarget)
         const renderPass = new RenderPass(scene, camera)
+        if (isTransparent) {
+            renderPass.clearAlpha = 0
+        }
         composer.addPass(renderPass)
         const bloom = new UnrealBloomPass(
             new Vector2(size.width, size.height),
@@ -549,10 +564,11 @@ function PostProcessingWebGL({ children }: { children: ReactNode }) {
         bloomPassRef.current = bloom
         return () => {
             composer.dispose()
+            renderTarget?.dispose()
             composerRef.current = null
             bloomPassRef.current = null
         }
-    }, [gl, scene, camera])
+    }, [gl, scene, camera, isTransparent])
 
     useEffect(() => {
         const composer = composerRef.current
@@ -610,8 +626,8 @@ function SceneWebGL() {
     const state = useDepthGlobeScene()
     const { camera, gl, invalidate, scene } = useThree()
     const controlsRef = useRef<OrbitControlsType>(null)
-    const colorRef = useRef(new Color(state.backgroundColor))
     const lightRef = useRef<DirectionalLight | null>(null)
+    const colorRef = useRef(new Color(state.backgroundColor ?? "#0d0d0d"))
 
     if (!lightRef.current) {
         const light = new DirectionalLight("#ffffff", 0.6)
@@ -630,8 +646,12 @@ function SceneWebGL() {
     }, [camera, scene])
 
     useEffect(() => {
-        colorRef.current.set(state.backgroundColor)
-        scene.background = colorRef.current
+        if (state.backgroundColor != null) {
+            colorRef.current.set(state.backgroundColor)
+            scene.background = colorRef.current
+        } else {
+            scene.background = null
+        }
     }, [state.backgroundColor, scene])
 
     useEffect(() => {
@@ -755,6 +775,21 @@ function resolveTokenColor(input: string | undefined): string {
     return extractDefaultValue(input)
 }
 
+/** Returns true if the color should be treated as transparent (no background). */
+function isTransparentColor(input: string | undefined): boolean {
+    if (input == null || input.trim() === "") return true
+    const s = resolveTokenColor(input).trim().toLowerCase()
+    if (s === "transparent") return true
+    const rgbaMatch = s.match(
+        /rgba?\s*\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+(?:\s*,\s*([\d.]+)\s*)?\)/
+    )
+    if (rgbaMatch) {
+        const alpha = parseFloat(rgbaMatch[1] ?? "1")
+        return alpha < 0.01
+    }
+    return false
+}
+
 function parseColorToRgb(input: string | undefined): {
     r: number
     g: number
@@ -843,7 +878,7 @@ export default function DepthGlobe({
     style,
 }: DepthGlobeProps) {
     const globe = { ...defaultGlobe, ...globeProp }
-    const colors = { ...defaultColors, ...colorsProp }
+    const colors = colorsProp ?? {}
     const glow = { ...defaultGlow, ...glowProp }
     const light = { ...defaultLight, ...lightProp }
     const scale = globe.scale ?? defaultGlobe.scale ?? 0.9
@@ -858,7 +893,9 @@ export default function DepthGlobe({
     const smoothing = globe.smoothing ?? defaultGlobe.smoothing!
     const quality = globe.quality ?? defaultGlobe.quality ?? 1
     const backgroundColor =
-        colors.backgroundColor ?? defaultColors.backgroundColor!
+        colors.backgroundColor != null && !isTransparentColor(colors.backgroundColor)
+            ? resolveTokenColor(colors.backgroundColor)
+            : null
     const landColor = colors.landColor ?? defaultColors.landColor!
     const waterColor = colors.waterColor ?? defaultColors.waterColor!
     const blendFactor = colors.blendFactor ?? defaultColors.blendFactor!
@@ -1041,7 +1078,7 @@ self.onmessage = (e) => {
         autoRotate,
         runAnimation,
         scale: scaleMultiplier,
-        backgroundColor: resolveTokenColor(backgroundColor),
+        backgroundColor,
         landColor: resolveTokenColor(landColor),
         waterColor: resolveTokenColor(waterColor),
         blendFactor,
@@ -1076,7 +1113,10 @@ self.onmessage = (e) => {
                 display: "block",
                 margin: 0,
                 padding: 0,
-                background: resolveTokenColor(backgroundColor),
+                background:
+                    backgroundColor != null
+                        ? resolveTokenColor(backgroundColor)
+                        : "transparent",
             }}
         >
             {/* Intrinsic sizing for Fit layouts (3D-scan, ASCII-background pattern) */}
@@ -1115,9 +1155,10 @@ self.onmessage = (e) => {
                             const renderer = new WebGLRenderer({
                                 canvas,
                                 antialias: true,
-                                alpha: false,
+                                alpha: true,
                                 powerPreference: "high-performance",
                             })
+                            renderer.setClearColor(0x000000, 0)
                             renderer.toneMapping = ACESFilmicToneMapping
                             renderer.toneMappingExposure = 1
                             renderer.outputColorSpace = SRGBColorSpace
@@ -1137,9 +1178,13 @@ self.onmessage = (e) => {
                         }}
                     >
                         <DepthGlobeSceneProvider value={sceneState}>
-                            <PostProcessingWebGL>
+                            {backgroundColor == null ? (
                                 <SceneWebGL />
-                            </PostProcessingWebGL>
+                            ) : (
+                                <PostProcessingWebGL>
+                                    <SceneWebGL />
+                                </PostProcessingWebGL>
+                            )}
                         </DepthGlobeSceneProvider>
                     </Canvas>
                 </div>
@@ -1257,6 +1302,9 @@ addPropertyControls(DepthGlobe, {
                 type: ControlType.Color,
                 title: "Background",
                 defaultValue: "#0d0d0d",
+                optional: true,
+                description:
+                    "Leave unset for transparent background (see-through).",
             },
             landColor: {
                 type: ControlType.Color,

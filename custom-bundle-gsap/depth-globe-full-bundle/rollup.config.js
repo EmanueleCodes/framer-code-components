@@ -1,5 +1,6 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
+import terser from "@rollup/plugin-terser";
 
 export default {
   input: "src/index.js",
@@ -19,6 +20,9 @@ export default {
     commonjs({
       include: /node_modules/,
       transformMixedEsModules: true,
+    }),
+    terser({
+      format: { comments: false },
     }),
   ],
   external: [

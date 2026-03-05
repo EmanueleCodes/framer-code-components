@@ -11,6 +11,7 @@ export {
   DirectionalLight,
   DoubleSide,
   Float32BufferAttribute,
+  HalfFloatType,
   Mesh,
   MeshStandardMaterial,
   Points,
@@ -19,6 +20,7 @@ export {
   SRGBColorSpace,
   Vector2,
   Vector3,
+  WebGLRenderTarget,
   WebGLRenderer,
 } from "three";
 
