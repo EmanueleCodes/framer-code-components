@@ -807,16 +807,24 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
                         },
                     }
                 )
+                return () => {
+                    foldAnimationRef.current?.stop()
+                }
             }
-            return () => {
-                foldAnimationRef.current?.stop()
-            }
+            // When folding, prev/displayedEntry may be stale; don't return — fall through to mid-animation
         }
 
         // Already showing this entry: no flip, just keep in sync (allows 2 consecutive same entries)
+        // When folding, displayedEntry is stale — only skip if we're already animating to this entry
         if (currentEntry === displayedEntry) {
-            prevEntryRef.current = currentEntry
-            return
+            if (phaseRef.current === "idle") {
+                prevEntryRef.current = currentEntry
+                return
+            }
+            if (currentEntry === targetEntryRef.current) {
+                return
+            }
+            // Folding to a different entry; fall through to mid-animation (snap and start flip to currentEntry)
         }
 
         // Click mid-animation: treat current flip as finished, then start flip to new entry
