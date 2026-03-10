@@ -1,0 +1,34 @@
+SpotifyWidget - Property Controls
+
+Preview
+Whether the widget fetches live data in the Framer canvas. On / Off.
+
+Connect
+The URL to connect your Spotify account. Open this link, log in with Spotify, then copy the Widget ID shown on the confirmation page.
+
+Widget
+Paste the Widget ID you received after connecting your Spotify account.
+
+Theme
+Visual appearance preset. Options: Light, Dark, Auto (follows system), Custom.
+
+Background
+Background color. Only visible when Theme is Custom.
+
+Primary
+Primary text color (track name). Only visible when Theme is Custom.
+
+Secondary
+Secondary text color (artist, status). Only visible when Theme is Custom.
+
+Border
+Show a subtle border around the widget. Show / Hide.
+
+Radius
+Corner radius of the widget in pixels.
+
+Padding
+Inner padding of the widget in pixels.
+
+Refresh
+How often to fetch the current track (seconds). More components at Framer University.

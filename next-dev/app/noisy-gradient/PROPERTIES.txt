@@ -1,0 +1,16 @@
+Noisy Gradient - Property Controls
+
+Preview
+When On, the gradient animation runs in the Framer canvas. When Off, a static frame is shown to improve editor performance. On / Off.
+
+Speed
+Animation speed of the gradient wave. Range: 0–3. Default: 1.
+
+Top
+Color at the top of the gradient (peach in the original shader). Default: #e6664d.
+
+Left
+Color at the bottom-left (purple in the original). Default: #331a99.
+
+Right
+Color at the bottom-right (teal in the original). Default: #00cccc. More components at [Framer University](https://frameruni.link/cc).

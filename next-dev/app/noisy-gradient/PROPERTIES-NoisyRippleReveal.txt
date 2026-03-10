@@ -1,0 +1,22 @@
+Noisy Ripple Reveal - Property Controls
+
+Preview
+When On, the overlay gradient animates subtly in the Framer canvas. When Off, a static gradient is shown. On / Off.
+
+Masked
+When On, the overlay is fully visible (content hidden). When Off, the component animates to reveal the content from the center out with a noisy ripple edge. On / Off.
+
+Duration
+Length of the reveal animation when switching to Unmasked. Range: 0.3–4 s. Default: 1.5 s.
+
+Image
+Image to reveal. When Masked is On, the noisy gradient covers it; when Masked is Off, the ripple animates from the center to reveal this image.
+
+Top
+Overlay gradient color at top. Default: #e6664d.
+
+Left
+Overlay gradient color at bottom-left. Default: #331a99.
+
+Right
+Overlay gradient color at bottom-right. Default: #00cccc. More components at [Framer University](https://frameruni.link/cc).

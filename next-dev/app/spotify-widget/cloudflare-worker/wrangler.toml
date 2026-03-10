@@ -1,0 +1,20 @@
+name = "spotify-widget-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+account_id = "8fa2ec3c5a448b4859992628a5b9728d"
+
+# KV namespace for storing user tokens
+# Run: wrangler kv:namespace create "SPOTIFY_TOKENS"
+# Then replace the id below with the one returned
+kv_namespaces = [
+  { binding = "SPOTIFY_TOKENS", id = "aad10297b8da4ab39eefffdfa6f1d9e5" }
+]
+
+[vars]
+# Replace with your Spotify app Client ID (from developer.spotify.com/dashboard)
+SPOTIFY_CLIENT_ID = "10f59d45b26d4138a4f0dfdd471d17ea"
+FRONTEND_URL = "https://framer.com"
+
+# For local development
+[dev]
+port = 8787

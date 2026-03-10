@@ -1,0 +1,43 @@
+Blinds Text Reveal - Property Controls
+
+Trigger
+When the animation runs. "Appear" runs on load. "Layer in View" runs when the component enters the viewport.
+
+Start
+Which part of the component triggers the animation in "Layer in View" mode. Top / Center / Bottom of component relative to viewport. Shown only when Trigger is "Layer in View".
+
+Replay
+When on, blinds close again when scrolled out of view and reveal again when back in view. Shown only when Trigger is "Layer in View".
+
+Mode
+"Out": blinds start covering each line, then animate out to reveal. "In–Out": blinds animate in from the opposite side (text invisible), then animate out to reveal. Shown for both trigger types.
+
+Direction
+Reveal direction: Left to right, Right to left, Up–down, or Down–up.
+
+Order
+Which line animates first: First to last, Last to first, Center out (middle line then outward), or Outer–inner (edges then toward center).
+
+Stagger
+Delay in seconds between each line's blind reveal. Higher values create a stronger cascade.
+
+In
+Transition for the "in" phase when Mode is In–Out (blind sweeping in to cover the line). Shown only when Mode is "In–Out".
+
+Out
+Transition for the "out" phase: how each blind moves away to reveal the text.
+
+Text
+The content to split into lines and reveal. Multi-line supported.
+
+Color
+Text color.
+
+Blinds
+Fill color of the covering blinds over each line.
+
+Font
+Typography: family, size, weight, style, letter spacing, line height.
+
+Tag
+HTML element for the text (h1–h6, p, div, span). More components at [Framer University](https://frameruni.link/cc).

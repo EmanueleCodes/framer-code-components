@@ -1,0 +1,39 @@
+Letter Testimonial - Property Controls
+
+Entries
+Array of letter entries; each entry is one side of the card. Each entry has:
+- Greeting: Salutation line (e.g. "Hey Nandi,"). Sub-control: Text.
+- Body: Main letter text and closing phrase. Sub-controls: Text (multiline), Closing (e.g. "Warm regards,").
+- Signature: Sign-off name. Sub-control: Text.
+
+Entry
+1-based index of which entry to show (1 = first letter). Use with Variants or code to cycle through letters. Range: 1–10. Default: 1.
+
+Direction
+Which way the letter flips. "Front Flip" flips forward; "Back Flip" flips backward.
+
+Size
+Scale of the letter paper within the frame. 1 = fit container; lower values leave margin. Range: 0.25–1. Default: 0.75.
+
+Transition
+Animation for the fold/flip. Configure duration, easing (tween) or spring physics. Default: tween, 0.8s, easeOut.
+
+Shadows
+Controls for depth and drop shadow.
+- Box shadow: CSS-style box shadow rendered as drop-shadow on the letter (offset, blur, color).
+- Paper: Intensity of the paper self-shadow (depth). 0 = flat; 1 = stronger shadow. Range: 0–1. Default: 0.6.
+
+Paper
+Background color of the letter paper. Overrides per-entry background when set. Default: white.
+
+Body
+Font for the greeting and body text (family, size, weight). Uses Framer’s extended font control. Default: Inter, 17px, 400.
+
+Body color (ㅤ)
+Text color for greeting and body. Default: #333333.
+
+Signature
+Font for the signature line (e.g. cursive). Default: Caveat, 32px, italic, 500.
+
+Signature color (ㅤ)
+Color of the signature text. Default: #1a1a1a. More components at Framer University.

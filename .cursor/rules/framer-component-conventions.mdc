@@ -1,0 +1,102 @@
+---
+description: Framer Code Component conventions — default export, Framer tags, property controls, Framer University link, PROPERTIES.txt
+globs: next-dev/app/**/*.tsx
+alwaysApply: true
+---
+
+# Framer Code Component Conventions
+
+When creating or editing Framer Code Components in this repo, follow these rules.
+
+## 1. Default export and Framer tags
+
+- **Export the component as a default function**: use `export default function ComponentName(...)`, not `export function ComponentName` or `export const ComponentName`.
+- **Put Framer tags immediately above the export**: add a JSDoc block with the Framer annotations **directly above** the `export default function` declaration (no other code in between). Example:
+
+```ts
+/**
+ * @framerSupportedLayoutWidth any-prefer-fixed
+ * @framerSupportedLayoutHeight any-prefer-fixed
+ * @framerIntrinsicWidth 400
+ * @framerIntrinsicHeight 300
+ * @framerDisableUnlink
+ */
+export default function MyComponent(props: MyComponentProps) {
+```
+
+## 2. Build components as in how-to-build-framer-components/
+
+- Follow the patterns and structure described in **how-to-build-framer-components/** (especially `framer-uni.md`).
+- Use the guides for: component structure, property controls order, value mapping, empty states, mouse/pointer events (`mouseAndPointerEvents.md`), and color handling in the Framer canvas.
+- For external libraries, bundle them as in **custom-bundle-gsap/readme.md** and host the built `dist/bundle.js`. **Import from the bundle at the top of the component file** (same pattern as DepthGlobe, etc.). **Never** add a bundle URL as a property control — bundle imports always go in the file header.
+
+## 3. Bundled code: import at top, never as a property
+
+- **Always** import from the hosted bundle **at the top of the file**, e.g. `import { WebHaptics } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/haptics.js"`.
+- **Never** add a bundle-URL property control. Users do not configure bundle URLs; the component file has the import URL.
+
+## 4. Single-word titles for property controls
+
+Use **single-word** `title` values in `addPropertyControls` where possible.
+
+- Prefer: `title: "Preview"`, `title: "Preset"`, `title: "Debug"`, `title: "Speed"`.
+- Avoid: `title: "Bundle URL"` → use `title: "Bundle"` (or "URL"); `title: "Custom pattern"` → use `title: "Pattern"`.
+- For grouped or nested controls, keep each control’s title to one word when it still reads clearly.
+
+## 5. Framer University link in the last property control
+
+**Always** add the Framer University link to the **last** property control in `addPropertyControls`:
+
+```ts
+// Last control in addPropertyControls(ComponentName, { ... })
+debug: {
+    type: ControlType.Boolean,
+    title: "Debug",
+    defaultValue: false,
+    description: "More components at [Framer University](https://frameruni.link/cc).",
+},
+```
+
+Use the exact link: **https://frameruni.link/cc**
+
+## 6. Property control descriptions
+
+- **Don’t add descriptions** unless needed. Only the following should have a `description`:
+  - The **last** property control (must include the Framer University link).
+  - Other controls that need a **URL** (e.g. where users paste a link) — not bundle URLs; those are never props.
+- When you do use a description, keep it **as short as possible** (one short sentence or a few words).
+
+## 7. PROPERTIES.txt for every new component
+
+When you **create a new** Framer Code Component:
+
+- Add a **PROPERTIES.txt** file in the **same folder** as the component (e.g. `next-dev/app/MyComponent/PROPERTIES.txt`).
+- List each property control with a short description, in the same order as in the component.
+- End the file with a line that includes the Framer University link (e.g. "More components at Framer University" or the full sentence used in the last prop).
+
+Example layout:
+
+```
+ComponentName - Property Controls
+
+Preview
+Whether the effect runs in the Framer canvas. On / Off.
+
+Preset
+Built-in pattern. Options: …
+
+Framer
+… More components at Framer University.
+```
+
+## 8. displayName at the bottom of the file
+
+**Always** set a `displayName` on the exported component, at the **bottom** of the file (after `addPropertyControls`):
+
+```ts
+addPropertyControls(ComponentName, { ... })
+
+ComponentName.displayName = "Human Readable Name"
+```
+
+Use a short, readable label (e.g. `"Haptics"`, `"Letter Testimonial"`, `"Pixel Mask Reveal"`). This is what Framer shows in the components panel.

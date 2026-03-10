@@ -1304,7 +1304,7 @@ addPropertyControls(DepthGlobe, {
                 defaultValue: "#0d0d0d",
                 optional: true,
                 description:
-                    "Leave unset for transparent background (see-through).",
+                        "Leave unset for transparent background (it also disables glow though)",
             },
             landColor: {
                 type: ControlType.Color,

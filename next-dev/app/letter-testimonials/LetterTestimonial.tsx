@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState } from "react"
 import { addPropertyControls, ControlType } from "framer"
 import { animate } from "framer-motion"
@@ -8,10 +7,8 @@ import {
     WebGLRenderer,
     Group,
     PlaneGeometry,
-    MeshBasicMaterial,
-    LineBasicMaterial,
-    BufferGeometry,
-    Line,
+    MeshStandardMaterial,
+    Mesh,
     Bone,
     Skeleton,
     SkinnedMesh,
@@ -21,7 +18,8 @@ import {
     FrontSide,
     BackSide,
     SRGBColorSpace,
-    Vector3,
+    DirectionalLight,
+    AmbientLight,
 } from "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"
 
 /** Animation phase for entry transition */
@@ -41,20 +39,46 @@ interface TransitionConfig {
     restSpeed?: number
 }
 
-const DEFAULT_BODY = `Thank you for this note — and for the work behind it. I've already spent some time with the new screensaver, and I genuinely find it enchanting.
+const DEFAULT_BODY = `Framer has completely changed how we design and ship. The combination of visual design and code is exactly what our team needed — we ship faster and the quality is incredible.
 
-It really stands out in the best possible way. In a web full of visual noise and disposable design, this feels calm, intentional, and remarkably refined. You can sense immediately that someone cared deeply about proportions, color, depth, and the things most people would never explicitly point out — but absolutely feel.`
+Everything feels intentional: the layout engine, the way components connect, and how it all deploys. It's rare that a tool actually makes you better at your job.`
 
-const DEFAULT_GREETING = "Hey Atilla,"
+const DEFAULT_GREETING = "Hey Nandi,"
 const DEFAULT_CLOSING = "Warm regards,"
-const DEFAULT_SIGNATURE = "Dominik"
+const DEFAULT_SIGNATURE = "Prianca"
 
 const DEFAULT_BG_COLOR = "#ffffff"
 const DEFAULT_TEXT_COLOR = "#333333"
 const DEFAULT_SIGNATURE_COLOR = "#1a1a1a"
 
+// Hardcoded lighting/material
+const EMISSIVE_INTENSITY = 0.15
+const ROUGHNESS = 1
+const LIGHT_POSITION_X = -1.3
+const LIGHT_POSITION_Y = 1.3
+const LIGHT_POSITION_Z = 4
+
+// Paper self-shadow: one control 0–1 drives ambient + directional intensity (more shadow = less ambient, more directional)
+const AMBIENT_FLAT = 1.4
+const AMBIENT_SHADOW = 0.55
+const DIRECTIONAL_FLAT = 0.8
+const DIRECTIONAL_SHADOW = 2.5
+function paperShadowToIntensities(paperShadow: number): {
+    ambient: number
+    directional: number
+} {
+    const t = Math.max(0, Math.min(1, paperShadow))
+    return {
+        ambient: AMBIENT_FLAT + t * (AMBIENT_SHADOW - AMBIENT_FLAT),
+        directional:
+            DIRECTIONAL_FLAT + t * (DIRECTIONAL_SHADOW - DIRECTIONAL_FLAT),
+    }
+}
+
 // Parse fontSize from Framer font - can be number or string like "47px"
-function parseFontSize(fontSize: string | number | undefined): number | undefined {
+function parseFontSize(
+    fontSize: string | number | undefined
+): number | undefined {
     if (typeof fontSize === "number") return fontSize
     if (typeof fontSize === "string") {
         const parsed = parseFloat(fontSize)
@@ -64,7 +88,10 @@ function parseFontSize(fontSize: string | number | undefined): number | undefine
 }
 
 // Build a font descriptor for document.fonts.load() so the canvas uses the correct font
-function fontToLoadDescriptor(font: React.CSSProperties | undefined, sizePx: number): string {
+function fontToLoadDescriptor(
+    font: React.CSSProperties | undefined,
+    sizePx: number
+): string {
     if (!font?.fontFamily) return ""
     const style = (font.fontStyle as string) || "normal"
     const weight = font.fontWeight != null ? String(font.fontWeight) : "400"
@@ -88,12 +115,45 @@ function resolveColor(input: string | undefined): string {
     return s
 }
 
+/** Convert resolved CSS color string to Three.js hex number (e.g. "#ffffff" → 0xffffff). */
+function resolvedColorToHex(resolved: string): number {
+    const hexMatch = resolved.match(/^#?([0-9A-Fa-f]{6})/)
+    if (hexMatch) return parseInt(hexMatch[1], 16)
+    return 0xffffff
+}
+
+/** Convert CSS box-shadow string to filter: drop-shadow() for use on canvas (no spread). */
+function boxShadowToDropShadow(boxShadow: string | undefined): string {
+    if (!boxShadow || !boxShadow.trim()) return "none"
+    const s = boxShadow.trim()
+    const colorMatch = s.match(
+        /(rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}|\b[a-z]+\b(?=\s*$))/i
+    )
+    const color = colorMatch ? colorMatch[0] : "rgba(0,0,0,0.35)"
+    const numbers = s.match(/-?\d+(\.\d+)?(px)?/g)
+    if (!numbers || numbers.length < 3) return "none"
+    const vals = numbers.map((n) => parseFloat(n))
+    const x = vals[0] ?? 0
+    const y = vals[1] ?? 4
+    const blur = vals[2] ?? 24
+    return `drop-shadow(${x}px ${y}px ${blur}px ${color})`
+}
+
 function degToRad(deg: number): number {
     return (deg * Math.PI) / 180
 }
 
+/** Whether the front mesh (FrontSide) is currently facing the camera, based only on flip angle. */
+function isFrontMeshFacingCamera(flipAngle: number): boolean {
+    const twoPi = 2 * Math.PI
+    const mod = ((flipAngle % twoPi) + twoPi) % twoPi
+    return mod < 0.01 || mod > twoPi - 0.01
+}
+
 /** Build Framer Motion transition config from ControlType.Transition value */
-function buildTransitionConfig(transitionValue: TransitionConfig | undefined): Record<string, unknown> {
+function buildTransitionConfig(
+    transitionValue: TransitionConfig | undefined
+): Record<string, unknown> {
     const config: Record<string, unknown> = {}
     if (!transitionValue) {
         config.type = "tween"
@@ -109,26 +169,37 @@ function buildTransitionConfig(transitionValue: TransitionConfig | undefined): R
         // Time-based takes precedence if duration is provided
         if (transitionValue.duration !== undefined) {
             config.duration = transitionValue.duration
-            if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
+            if (transitionValue.bounce !== undefined)
+                config.bounce = transitionValue.bounce
         } else {
             // Physics-based spring
-            if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
-            if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
-            if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
-            if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
+            if (transitionValue.stiffness !== undefined)
+                config.stiffness = transitionValue.stiffness
+            if (transitionValue.damping !== undefined)
+                config.damping = transitionValue.damping
+            if (transitionValue.mass !== undefined)
+                config.mass = transitionValue.mass
+            if (transitionValue.bounce !== undefined)
+                config.bounce = transitionValue.bounce
         }
-        if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
-        if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
+        if (transitionValue.restDelta !== undefined)
+            config.restDelta = transitionValue.restDelta
+        if (transitionValue.restSpeed !== undefined)
+            config.restSpeed = transitionValue.restSpeed
     } else {
         config.type = transitionValue.type || "tween"
-        if (transitionValue.duration !== undefined) config.duration = transitionValue.duration
-        if (transitionValue.ease !== undefined) config.ease = transitionValue.ease
+        if (transitionValue.duration !== undefined)
+            config.duration = transitionValue.duration
+        if (transitionValue.ease !== undefined)
+            config.ease = transitionValue.ease
     }
     return config
 }
 
 // Clone font object so we don't share Framer's reference (font picker mutates in place and affects all sections)
-function cloneFont(font: React.CSSProperties | undefined): React.CSSProperties | undefined {
+function cloneFont(
+    font: React.CSSProperties | undefined
+): React.CSSProperties | undefined {
     if (!font || typeof font !== "object") return font
     return {
         fontFamily: font.fontFamily,
@@ -151,21 +222,15 @@ interface TextureOptions {
 
 interface GreetingSection {
     text?: string
-    font?: React.CSSProperties
-    color?: string
 }
 
 interface BodySection {
     text?: string
     closing?: string
-    font?: React.CSSProperties
-    color?: string
 }
 
 interface SignatureSection {
     text?: string
-    font?: React.CSSProperties
-    color?: string
 }
 
 /** Single letter entry (one "side" of the card) */
@@ -173,7 +238,6 @@ interface LetterEntry {
     greeting?: GreetingSection
     body?: BodySection
     signature?: SignatureSection
-    bgColor?: string
 }
 
 interface LetterTestimonialProps {
@@ -181,49 +245,69 @@ interface LetterTestimonialProps {
     currentEntry?: number
     /** Array of letter content; each entry is one side */
     entries?: LetterEntry[]
-    /** Axis for 180° flip when changing entry */
-    flipAxis?: "horizontal" | "vertical"
     /** Direction of the 180° flip */
     flipDirection?: "front" | "back"
     /** 0.25–2: scale of the letter within the frame. 1 = fit container */
     letterSize?: number
     /** Fold/flip animation transition (duration, easing, spring, delay) */
     transition?: TransitionConfig
+    /** Box shadow (drop-shadow on canvas) and paper self-shadow (depth). */
+    shadows?: { boxShadow?: string; paperShadow?: number }
+    /** Letter paper color (overrides per-entry bgColor when set). */
+    letterPaperColor?: string
+    /** Global body font (greeting + body text). */
+    bodyFont?: React.CSSProperties
+    /** Global body text color. */
+    bodyColor?: string
+    /** Global signature font. */
+    signatureFont?: React.CSSProperties
+    /** Global signature color. */
+    signatureColor?: string
     style?: React.CSSProperties
 }
 
 // Paper dimensions (A4-ish aspect ratio)
 const PAPER_WIDTH = 2.4
 const PAPER_HEIGHT = 3.2
-const SEGMENT_HEIGHT = PAPER_HEIGHT / 3  // Each of the 3 panels
+const SEGMENT_HEIGHT = PAPER_HEIGHT / 3 // Each of the 3 panels
+
+// Fold angles for top/middle panels
 const ANGLE_OPEN_DEG = 10
 const ANGLE_CLOSED_DEG = 60
+
+// Fold angle for bottom panel (smaller so it doesn't stick out)
+const ANGLE_OPEN_DEG_BOTTOM = 5
+const ANGLE_CLOSED_DEG_BOTTOM = 30
 
 // Create plane geometry with skinning for 3 equal panels (Z-fold).
 // Edges (from top to bottom of paper, viewing from front):
 //   - 4th edge: top of paper (y = +halfH) - stays fixed
 //   - Second edge: fold line at y = +halfH - segH (top/middle boundary)
-//   - Third edge: fold line at y = +halfH - 2*segH (middle/bottom boundary)  
+//   - Third edge: fold line at y = +halfH - 2*segH (middle/bottom boundary)
 //   - First edge: bottom of paper (y = -halfH)
 //
 // Bones:
 //   - b0: at 4th edge (top), controls top section - FIXED (no rotation)
 //   - b1: at Second edge, controls middle section - rotates by θ
 //   - b2: at Third edge, controls bottom section - rotates by -2θ (relative to b1)
-function createLetterGeometry(width: number, height: number, forBackFace?: boolean) {
+function createLetterGeometry(
+    width: number,
+    height: number,
+    forBackFace?: boolean
+) {
     // Use 6 height segments = 7 rows of vertices, ensuring fold lines have vertices on both sides
     const geometry = new PlaneGeometry(width, height, 1, 6)
     const pos = geometry.attributes.position
     const uv = geometry.attributes.uv
     const skinIndices: number[] = []
     const skinWeights: number[] = []
-    
+
     const halfH = height / 2
     const segH = height / 3
     // Fold line Y positions (with small epsilon for floating point)
-    const secondEdgeY = halfH - segH + 0.001   // between top and middle
+    const secondEdgeY = halfH - segH + 0.001 // between top and middle
     const thirdEdgeY = halfH - 2 * segH + 0.001 // between middle and bottom
-    
+
     // For back face: flip V only to compensate for the 180° X-axis rotation during flip
     // BackSide rendering already handles the horizontal mirror from viewing behind the plane
     if (forBackFace) {
@@ -231,7 +315,7 @@ function createLetterGeometry(width: number, height: number, forBackFace?: boole
             uv.setY(i, 1 - uv.getY(i))
         }
     }
-    
+
     for (let i = 0; i < pos.count; i++) {
         const y = pos.getY(i)
         // Assign each vertex to exactly one bone (no blending = sharp folds)
@@ -270,8 +354,15 @@ function createTextTexture(
     signature: string,
     options: TextureOptions
 ): InstanceType<typeof CanvasTexture> {
-    const { bgColor, greetingColor, bodyColor, signatureColor, greetingFont, bodyFont, signatureFont } =
-        options
+    const {
+        bgColor,
+        greetingColor,
+        bodyColor,
+        signatureColor,
+        greetingFont,
+        bodyFont,
+        signatureFont,
+    } = options
 
     const canvas = document.createElement("canvas")
     const ctx = canvas.getContext("2d")!
@@ -284,19 +375,30 @@ function createTextTexture(
 
     // Greeting font (fallback to body font)
     const greetingFontRes = greetingFont ?? bodyFont
-    const greetingFontFamily = (greetingFontRes?.fontFamily as string) || "Inter, system-ui, sans-serif"
-    const greetingFontWeight = greetingFontRes?.fontWeight != null ? String(greetingFontRes.fontWeight) : "400"
+    const greetingFontFamily =
+        (greetingFontRes?.fontFamily as string) ||
+        "Inter, system-ui, sans-serif"
+    const greetingFontWeight =
+        greetingFontRes?.fontWeight != null
+            ? String(greetingFontRes.fontWeight)
+            : "400"
     const greetingFontStyle = (greetingFontRes?.fontStyle as string) || "normal"
-    const greetingFontSizeRaw = parseFontSize(greetingFontRes?.fontSize as string | number | undefined)
+    const greetingFontSizeRaw = parseFontSize(
+        greetingFontRes?.fontSize as string | number | undefined
+    )
     const greetingFontSize = (greetingFontSizeRaw ?? 18) * scale
 
     // Extract font properties from Framer font controls
-    const bodyFontFamily = (bodyFont?.fontFamily as string) || "Inter, system-ui, sans-serif"
-    const bodyFontWeight = bodyFont?.fontWeight != null ? String(bodyFont.fontWeight) : "400"
+    const bodyFontFamily =
+        (bodyFont?.fontFamily as string) || "Inter, system-ui, sans-serif"
+    const bodyFontWeight =
+        bodyFont?.fontWeight != null ? String(bodyFont.fontWeight) : "400"
     const bodyFontStyle = (bodyFont?.fontStyle as string) || "normal"
-    
+
     // Parse fontSize - Framer can return number or string like "14px"
-    const bodyFontSizeRaw = parseFontSize(bodyFont?.fontSize as string | number | undefined)
+    const bodyFontSizeRaw = parseFontSize(
+        bodyFont?.fontSize as string | number | undefined
+    )
     const bodyFontSize = bodyFontSizeRaw ?? 14
 
     const padding = 48 * scale
@@ -305,12 +407,15 @@ function createTextTexture(
     let lineHeight: number
     if (typeof lineHeightRaw === "number") {
         lineHeight = lineHeightRaw * scale
-    } else if (typeof lineHeightRaw === "string" && lineHeightRaw.endsWith("%")) {
+    } else if (
+        typeof lineHeightRaw === "string" &&
+        lineHeightRaw.endsWith("%")
+    ) {
         lineHeight = (parseFloat(lineHeightRaw) / 100) * bodyFontSize * scale
     } else {
         lineHeight = bodyFontSize * 1.6 * scale
     }
-    
+
     let y = padding + 32 * scale
 
     // Greeting (uses greeting font or body font)
@@ -352,10 +457,16 @@ function createTextTexture(
     // Signature
     y += lineHeight * 2.2
     ctx.fillStyle = resolveColor(signatureColor)
-    const sigFontFamily = (signatureFont?.fontFamily as string) || "Georgia, \"Times New Roman\", serif"
-    const sigFontWeight = signatureFont?.fontWeight != null ? String(signatureFont.fontWeight) : "500"
+    const sigFontFamily =
+        (signatureFont?.fontFamily as string) || "Caveat, cursive"
+    const sigFontWeight =
+        signatureFont?.fontWeight != null
+            ? String(signatureFont.fontWeight)
+            : "500"
     const sigFontStyle = (signatureFont?.fontStyle as string) || "italic"
-    const sigFontSizeRaw = parseFontSize(signatureFont?.fontSize as string | number | undefined)
+    const sigFontSizeRaw = parseFontSize(
+        signatureFont?.fontSize as string | number | undefined
+    )
     const sigFontSize = (sigFontSizeRaw ?? 26) * scale
     ctx.font = `${sigFontStyle} ${sigFontWeight} ${sigFontSize}px ${sigFontFamily}`
     ctx.fillText(signature, padding, y)
@@ -367,7 +478,14 @@ function createTextTexture(
 }
 
 /** Resolve a LetterEntry to flat values and TextureOptions for createTextTexture */
-function entryToTextureInputs(entry: LetterEntry | undefined): {
+function entryToTextureInputs(
+    entry: LetterEntry | undefined,
+    letterPaperColorOverride: string | undefined,
+    bodyFont: React.CSSProperties | undefined,
+    bodyColor: string,
+    signatureFont: React.CSSProperties | undefined,
+    signatureColor: string
+): {
     greeting: string
     body: string
     closing: string
@@ -377,17 +495,13 @@ function entryToTextureInputs(entry: LetterEntry | undefined): {
     const g = entry?.greeting
     const b = entry?.body
     const s = entry?.signature
-    const bgColor = entry?.bgColor ?? DEFAULT_BG_COLOR
+    const bgColor = letterPaperColorOverride ?? DEFAULT_BG_COLOR
     const greeting = g?.text ?? DEFAULT_GREETING
     const bodyText = b?.text ?? DEFAULT_BODY
     const closing = b?.closing ?? DEFAULT_CLOSING
     const signature = s?.text ?? DEFAULT_SIGNATURE
-    const greetingFont = cloneFont(g?.font ?? b?.font)
-    const bodyFont = cloneFont(b?.font)
-    const signatureFont = cloneFont(s?.font)
-    const greetingColor = g?.color ?? DEFAULT_TEXT_COLOR
-    const bodyColor = b?.color ?? DEFAULT_TEXT_COLOR
-    const signatureColor = s?.color ?? DEFAULT_SIGNATURE_COLOR
+    const greetingFont = cloneFont(bodyFont)
+    const greetingColor = bodyColor
     return {
         greeting,
         body: bodyText,
@@ -399,22 +513,37 @@ function entryToTextureInputs(entry: LetterEntry | undefined): {
             bodyColor,
             signatureColor,
             greetingFont,
-            bodyFont,
-            signatureFont,
+            bodyFont: cloneFont(bodyFont),
+            signatureFont: cloneFont(signatureFont),
         },
     }
 }
 
 /** Create a canvas texture for a given letter entry. */
 function createTextureForEntry(
-    entry: LetterEntry | undefined
+    entry: LetterEntry | undefined,
+    letterPaperColorOverride: string | undefined,
+    bodyFont: React.CSSProperties | undefined,
+    bodyColor: string,
+    signatureFont: React.CSSProperties | undefined,
+    signatureColor: string
 ): InstanceType<typeof CanvasTexture> {
-    const { greeting, body, closing, signature, options } = entryToTextureInputs(entry)
+    const { greeting, body, closing, signature, options } =
+        entryToTextureInputs(
+            entry,
+            letterPaperColorOverride,
+            bodyFont,
+            bodyColor,
+            signatureFont,
+            signatureColor
+        )
     return createTextTexture(greeting, body, closing, signature, options)
 }
 
 /** Create a blank texture (e.g. for the back of the card during flip so we don't show flipped content). */
-function createEmptyTexture(bgColor: string = DEFAULT_BG_COLOR): InstanceType<typeof CanvasTexture> {
+function createEmptyTexture(
+    bgColor: string = DEFAULT_BG_COLOR
+): InstanceType<typeof CanvasTexture> {
     const scale = 2
     const canvas = document.createElement("canvas")
     canvas.width = 512 * scale
@@ -429,18 +558,16 @@ function createEmptyTexture(bgColor: string = DEFAULT_BG_COLOR): InstanceType<ty
 }
 
 /**
- * 3D folding letter with text and signature. Uses Three.js (CDN) for realistic paper fold.
- * Supports multiple entries; changing entry animates fold/unfold while flipping 180° across full duration.
  * @framerSupportedLayoutWidth fixed
  * @framerSupportedLayoutHeight fixed
  * @framerIntrinsicWidth 400
  * @framerIntrinsicHeight 533
+ * @framerDisableUnlink
  */
 export default function LetterTestimonial(props: LetterTestimonialProps) {
     const {
         currentEntry: currentEntryProp = 1,
         entries: entriesProp = [],
-        flipAxis = "horizontal",
         flipDirection = "front",
         letterSize = 1,
         transition: transitionProp = {
@@ -448,14 +575,32 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             duration: 0.8,
             ease: "easeOut",
         },
+        shadows = {},
+        letterPaperColor = DEFAULT_BG_COLOR,
+        bodyFont = {
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontWeight: "400",
+            fontSize: 17,
+        } as React.CSSProperties,
+        bodyColor = DEFAULT_TEXT_COLOR,
+        signatureFont = {
+            fontFamily: "Caveat, cursive",
+            fontStyle: "italic",
+            fontWeight: "500",
+            fontSize: 32,
+        } as React.CSSProperties,
+        signatureColor = DEFAULT_SIGNATURE_COLOR,
         style,
     } = props
+
+    const shadow = shadows?.boxShadow ?? "0px 4px 24px 0px rgba(0, 0, 0, 0.35)"
+    const paperShadow = shadows?.paperShadow ?? 0.6
 
     const letterSizeRef = useRef(letterSize)
     letterSizeRef.current = letterSize
     const foldAnimationRef = useRef<ReturnType<typeof animate> | null>(null)
 
-    // Normalize entries: ensure at least one, default two for testing
+    // Normalize entries: ensure at least one, default three entries (same template)
     const entries: LetterEntry[] =
         entriesProp?.length > 0
             ? entriesProp
@@ -464,16 +609,16 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
                       greeting: { text: DEFAULT_GREETING },
                       body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
                       signature: { text: DEFAULT_SIGNATURE },
-                      bgColor: DEFAULT_BG_COLOR,
                   },
                   {
-                      greeting: { text: "Hi again," },
-                      body: {
-                          text: "This is the second side of the letter. You can add more entries in the Entries array.",
-                          closing: "Cheers,",
-                      },
-                      signature: { text: "The Team" },
-                      bgColor: DEFAULT_BG_COLOR,
+                      greeting: { text: DEFAULT_GREETING },
+                      body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
+                      signature: { text: DEFAULT_SIGNATURE },
+                  },
+                  {
+                      greeting: { text: DEFAULT_GREETING },
+                      body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
+                      signature: { text: DEFAULT_SIGNATURE },
                   },
               ]
     const entriesLength = entries.length
@@ -483,51 +628,79 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
 
     const containerRef = useRef<HTMLDivElement>(null)
     const sceneRef = useRef<InstanceType<typeof Scene> | null>(null)
-    const cameraRef = useRef<InstanceType<typeof PerspectiveCamera> | null>(null)
+    const cameraRef = useRef<InstanceType<typeof PerspectiveCamera> | null>(
+        null
+    )
     const rendererRef = useRef<InstanceType<typeof WebGLRenderer> | null>(null)
     const frontMeshRef = useRef<InstanceType<typeof SkinnedMesh> | null>(null)
     const backMeshRef = useRef<InstanceType<typeof SkinnedMesh> | null>(null)
+    const frontMaterialRef = useRef<InstanceType<
+        typeof MeshStandardMaterial
+    > | null>(null)
+    const backMaterialRef = useRef<InstanceType<
+        typeof MeshStandardMaterial
+    > | null>(null)
+    const directionalLightRef = useRef<InstanceType<
+        typeof DirectionalLight
+    > | null>(null)
+    const ambientLightRef = useRef<InstanceType<typeof AmbientLight> | null>(
+        null
+    )
     const frontBonesRef = useRef<InstanceType<typeof Bone>[]>([])
     const backBonesRef = useRef<InstanceType<typeof Bone>[]>([])
-    const thetaRef = useRef(0)
+    const thetaRef = useRef(degToRad(ANGLE_OPEN_DEG))
+    const theta2Ref = useRef(degToRad(ANGLE_OPEN_DEG_BOTTOM))
     const flipAngleRef = useRef(0)
+    const startFlipAngleRef = useRef(0)
     const frameRef = useRef<number>(0)
     const prevEntryRef = useRef(currentEntry)
     const phaseRef = useRef<AnimationPhase>("idle")
-
-    // Debug: fold / unfold / flip progress 0–100 (for debug panel)
-    const [debugProgress, setDebugProgress] = useState({
-        fold: 0,
-        unfold: 0,
-        flip: 0,
-        flipAngleDeg: 0,
-    })
+    const targetEntryRef = useRef(currentEntry)
 
     // Which entry is currently shown (updates when flip animation completes)
     const [displayedEntry, setDisplayedEntry] = useState(currentEntry)
+    // Which mesh faces the user (kept in sync for display; front/back decided by rotation in logic)
+    const [visibleSide, setVisibleSide] = useState<"front" | "back">("front")
+    const [isAnimating, setIsAnimating] = useState(false)
+
+    // Track which entry index is assigned to each mesh (front mesh and back mesh).
+    // These only change when we explicitly update them (not derived from displayedEntry).
+    const [frontMeshEntry, setFrontMeshEntry] = useState(currentEntry - 1)
+    const [backMeshEntry, setBackMeshEntry] = useState(currentEntry - 1)
 
     const [textures, setTextures] = useState<{
         front: InstanceType<typeof CanvasTexture> | null
         back: InstanceType<typeof CanvasTexture> | null
     }>({ front: null, back: null })
 
-    const currentInputs = entryToTextureInputs(entries[currentIndex])
-    const nextInputs = entryToTextureInputs(entries[nextIndex])
-    const displayedIndex = displayedEntry - 1
-    const frontEntryIndex = displayedIndex
-    const backEntryIndex =
-        displayedEntry === currentEntry ? nextIndex : currentIndex
+    // Use the tracked mesh entries directly
+    const frontEntryIndex = frontMeshEntry
+    const backEntryIndex = backMeshEntry
 
-    const frontInputs = entryToTextureInputs(entries[frontEntryIndex])
-    const backInputs = entryToTextureInputs(entries[backEntryIndex])
+    const frontInputs = entryToTextureInputs(
+        entries[frontEntryIndex],
+        letterPaperColor,
+        bodyFont,
+        bodyColor,
+        signatureFont,
+        signatureColor
+    )
+    const backInputs = entryToTextureInputs(
+        entries[backEntryIndex],
+        letterPaperColor,
+        bodyFont,
+        bodyColor,
+        signatureFont,
+        signatureColor
+    )
 
     const fontKeys = [
-        frontInputs.options.greetingFont,
-        frontInputs.options.bodyFont,
-        frontInputs.options.signatureFont,
-        backInputs.options.greetingFont,
-        backInputs.options.bodyFont,
-        backInputs.options.signatureFont,
+        bodyFont,
+        bodyFont,
+        signatureFont,
+        bodyFont,
+        bodyFont,
+        signatureFont,
     ]
         .filter(Boolean)
         .map((f) =>
@@ -540,19 +713,36 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
     useEffect(() => {
         const descriptors: string[] = []
         const addDesc = (opts: TextureOptions, size: number) => {
-            const d = fontToLoadDescriptor(opts.greetingFont ?? opts.bodyFont, size)
+            const d = fontToLoadDescriptor(
+                opts.greetingFont ?? opts.bodyFont,
+                size
+            )
             if (d) descriptors.push(d)
-            const d2 = fontToLoadDescriptor(opts.bodyFont, 14)
+            const d2 = fontToLoadDescriptor(opts.bodyFont, 17)
             if (d2) descriptors.push(d2)
-            const d3 = fontToLoadDescriptor(opts.signatureFont, 26)
+            const d3 = fontToLoadDescriptor(opts.signatureFont, 32)
             if (d3) descriptors.push(d3)
         }
-        addDesc(frontInputs.options, 18)
-        addDesc(backInputs.options, 18)
+        addDesc(frontInputs.options, 22)
+        addDesc(backInputs.options, 22)
 
         const createBoth = () => {
-            const front = createTextureForEntry(entries[frontEntryIndex])
-            const back = createTextureForEntry(entries[backEntryIndex])
+            const front = createTextureForEntry(
+                entries[frontEntryIndex],
+                letterPaperColor,
+                bodyFont,
+                bodyColor,
+                signatureFont,
+                signatureColor
+            )
+            const back = createTextureForEntry(
+                entries[backEntryIndex],
+                letterPaperColor,
+                bodyFont,
+                bodyColor,
+                signatureFont,
+                signatureColor
+            )
             setTextures((prev) => {
                 if (prev.front) prev.front.dispose()
                 if (prev.back) prev.back.dispose()
@@ -568,10 +758,24 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         Promise.all(uniqueDescriptors.map((d) => document.fonts.load(d)))
             .then(createBoth)
             .catch(createBoth)
-    }, [frontEntryIndex, backEntryIndex, entriesLength, fontKeys, displayedEntry])
+    }, [
+        frontEntryIndex,
+        backEntryIndex,
+        entriesLength,
+        fontKeys,
+        displayedEntry,
+        letterPaperColor,
+        bodyFont,
+        bodyColor,
+        signatureFont,
+        signatureColor,
+    ])
 
+    const texturesReady = !!(textures.front && textures.back)
     const angleOpenRad = degToRad(ANGLE_OPEN_DEG)
     const angleClosedRad = degToRad(ANGLE_CLOSED_DEG)
+    const angleOpenRad2 = degToRad(ANGLE_OPEN_DEG_BOTTOM)
+    const angleClosedRad2 = degToRad(ANGLE_CLOSED_DEG_BOTTOM)
     const transitionKey = transitionProp
         ? `${transitionProp.type ?? "tween"}-${transitionProp.duration ?? ""}-${transitionProp.ease ?? ""}-${transitionProp.delay ?? ""}-${transitionProp.stiffness ?? ""}-${transitionProp.damping ?? ""}`
         : ""
@@ -585,75 +789,173 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             if (phaseRef.current === "idle") {
                 foldAnimationRef.current?.stop()
                 const config = buildTransitionConfig(transitionProp)
-                foldAnimationRef.current = animate(thetaRef.current, angleOpenRad, {
-                    ...config,
-                    delay: transitionProp?.delay ?? 0,
-                    onUpdate: (v) => {
-                        thetaRef.current = v
-                    },
-                })
+                foldAnimationRef.current = animate(
+                    thetaRef.current,
+                    angleOpenRad,
+                    {
+                        ...config,
+                        delay: transitionProp?.delay ?? 0,
+                        onUpdate: (v) => {
+                            thetaRef.current = v
+                            // Keep theta2 in sync proportionally
+                            const ratio =
+                                (v - angleOpenRad) /
+                                (angleClosedRad - angleOpenRad || 1)
+                            theta2Ref.current =
+                                angleOpenRad2 +
+                                ratio * (angleClosedRad2 - angleOpenRad2)
+                        },
+                    }
+                )
             }
             return () => {
                 foldAnimationRef.current?.stop()
             }
         }
 
+        // Already showing this entry: no flip, just keep in sync (allows 2 consecutive same entries)
+        if (currentEntry === displayedEntry) {
+            prevEntryRef.current = currentEntry
+            return
+        }
+
+        // Click mid-animation: treat current flip as finished, then start flip to new entry
+        if (phaseRef.current !== "idle") {
+            foldAnimationRef.current?.stop()
+            const target = targetEntryRef.current
+            const targetIdx = target - 1
+            prevEntryRef.current = target
+            phaseRef.current = "idle"
+            setIsAnimating(false)
+            const newFlipAngle = startFlipAngleRef.current + Math.PI
+            flipAngleRef.current = newFlipAngle
+            thetaRef.current = angleOpenRad
+            theta2Ref.current = angleOpenRad2
+            setDisplayedEntry(target)
+            const twoPi = 2 * Math.PI
+            const mod = newFlipAngle % twoPi
+            const newVisibleSide =
+                mod < 0.01 || mod > twoPi - 0.01 ? "front" : "back"
+            setVisibleSide(newVisibleSide)
+            // Sync both meshes to show target
+            setFrontMeshEntry(targetIdx)
+            setBackMeshEntry(targetIdx)
+            // Fall through to start flip to currentEntry
+        }
+
         phaseRef.current = "folding"
+        targetEntryRef.current = currentEntry
+        setIsAnimating(true)
         const config = buildTransitionConfig(transitionProp)
 
+        // Update only the mesh that is currently NOT facing the camera (the "back").
+        // Derive which side is front from current rotation, not from entry index or state.
+        const targetIdx = currentEntry - 1
+        const frontFacesCamera = isFrontMeshFacingCamera(flipAngleRef.current)
+        if (frontFacesCamera) {
+            setBackMeshEntry(targetIdx)
+        } else {
+            setFrontMeshEntry(targetIdx)
+        }
+
+        startFlipAngleRef.current = flipAngleRef.current
         foldAnimationRef.current?.stop()
         foldAnimationRef.current = animate(0, 1, {
             ...config,
             delay: transitionProp?.delay ?? 0,
             onUpdate: (p) => {
-                // Flip continuously over full progress (0→π),
-                // fold during first half, unfold during second half.
+                // Flip continuously: add π to current angle (0→π, π→2π, ...)
+                // For spring, allow progress to overshoot so the flip can bounce; for tween keep clamped.
+                const isSpring = transitionProp?.type === "spring"
                 const clampedProgress = Math.max(0, Math.min(1, p))
-                const flipAngle = Math.PI * clampedProgress
+                const progressForFlip = isSpring ? p : clampedProgress
+                const flipAngle =
+                    startFlipAngleRef.current + Math.PI * progressForFlip
 
                 let theta: number
+                let theta2: number
                 let foldPct: number
                 let unfoldPct: number
                 if (clampedProgress <= 0.5) {
                     const foldT = clampedProgress / 0.5
-                    theta = angleOpenRad + (angleClosedRad - angleOpenRad) * foldT
+                    theta =
+                        angleOpenRad + (angleClosedRad - angleOpenRad) * foldT
+                    theta2 =
+                        angleOpenRad2 +
+                        (angleClosedRad2 - angleOpenRad2) * foldT
                     foldPct = Math.round(foldT * 100)
                     unfoldPct = 0
                 } else {
                     const unfoldT = (clampedProgress - 0.5) / 0.5
-                    theta = angleClosedRad + (angleOpenRad - angleClosedRad) * unfoldT
+                    theta =
+                        angleClosedRad +
+                        (angleOpenRad - angleClosedRad) * unfoldT
+                    theta2 =
+                        angleClosedRad2 +
+                        (angleOpenRad2 - angleClosedRad2) * unfoldT
                     foldPct = 100
                     unfoldPct = Math.round(unfoldT * 100)
                 }
 
                 thetaRef.current = theta
+                theta2Ref.current = theta2
                 flipAngleRef.current = flipAngle
-                setDebugProgress({
-                    fold: foldPct,
-                    unfold: unfoldPct,
-                    flip: Math.round(clampedProgress * 100),
-                    flipAngleDeg: Math.round((flipAngle * 180) / Math.PI),
-                })
             },
             onComplete: () => {
                 phaseRef.current = "idle"
-                prevEntryRef.current = currentEntry
-                flipAngleRef.current = 0
-                thetaRef.current = angleOpenRad  // snap to exact open angle to avoid jump
-                setDisplayedEntry(currentEntry)
-                setDebugProgress({ fold: 0, unfold: 100, flip: 0, flipAngleDeg: 0 })
+                const target = targetEntryRef.current
+                const targetIdx = target - 1
+                prevEntryRef.current = target
+                const newFlipAngle = startFlipAngleRef.current + Math.PI
+                flipAngleRef.current = newFlipAngle
+                thetaRef.current = angleOpenRad
+                theta2Ref.current = angleOpenRad2
+                setDisplayedEntry(target)
+                setIsAnimating(false)
+                // After flip, the side facing the user is back at π, 3π, … and front at 0, 2π, …
+                const twoPi = 2 * Math.PI
+                const mod = newFlipAngle % twoPi
+                const newVisibleSide =
+                    mod < 0.01 || mod > twoPi - 0.01 ? "front" : "back"
+                setVisibleSide(newVisibleSide)
+                // Sync both meshes to show target (so the hidden one is ready for next flip)
+                setFrontMeshEntry(targetIdx)
+                setBackMeshEntry(targetIdx)
             },
         })
         return () => {
-            foldAnimationRef.current?.stop()
+            if (phaseRef.current === "idle") foldAnimationRef.current?.stop()
         }
-    }, [currentEntry, angleOpenRad, angleClosedRad, transitionKey])
+    }, [
+        currentEntry,
+        angleOpenRad,
+        angleClosedRad,
+        angleOpenRad2,
+        angleClosedRad2,
+        transitionKey,
+    ])
+
+    // When textures change (e.g. post-flip), update materials in place (no animation – flip angle accumulates)
+    useEffect(() => {
+        if (
+            !textures.front ||
+            !textures.back ||
+            !frontMaterialRef.current ||
+            !backMaterialRef.current
+        )
+            return
+        frontMaterialRef.current.map = textures.front
+        frontMaterialRef.current.emissiveMap = textures.front
+        backMaterialRef.current.map = textures.back
+        backMaterialRef.current.emissiveMap = textures.back
+    }, [textures.front, textures.back])
 
     useEffect(() => {
         const container = containerRef.current
         const textureFront = textures.front
         const textureBack = textures.back
-        if (!container || !textureFront || !textureBack) return
+        if (!container || !texturesReady || !textureFront || !textureBack)
+            return
 
         const scene = new Scene()
         sceneRef.current = scene
@@ -666,15 +968,20 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         const renderer = new WebGLRenderer({ antialias: true, alpha: true })
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
         renderer.setClearColor(0x000000, 0)
+        renderer.domElement.style.backgroundColor = "transparent"
         container.appendChild(renderer.domElement)
         rendererRef.current = renderer
 
         const halfH = PAPER_HEIGHT / 2
         const segH = SEGMENT_HEIGHT
-        
+
         // Create front-facing geometry and bones
-        const frontGeometry = createLetterGeometry(PAPER_WIDTH, PAPER_HEIGHT, false)
-        
+        const frontGeometry = createLetterGeometry(
+            PAPER_WIDTH,
+            PAPER_HEIGHT,
+            false
+        )
+
         const fb0 = new Bone()
         fb0.position.set(0, halfH, 0)
         const fb1 = new Bone()
@@ -685,10 +992,17 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         frontBonesRef.current = frontBones
 
         const frontSkeleton = new Skeleton(frontBones)
-        const frontMaterial = new MeshBasicMaterial({
+        const frontMaterial = new MeshStandardMaterial({
+            color: 0xffffff,
             map: textureFront,
+            emissive: 0xffffff,
+            emissiveMap: textureFront,
+            emissiveIntensity: EMISSIVE_INTENSITY,
             side: FrontSide,
+            roughness: ROUGHNESS,
+            metalness: 0,
         })
+        frontMaterialRef.current = frontMaterial
         const frontMesh = new SkinnedMesh(frontGeometry, frontMaterial)
         frontMesh.frustumCulled = false
         frontMesh.add(fb0)
@@ -698,8 +1012,12 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         frontMeshRef.current = frontMesh
 
         // Create back-facing geometry and bones (with flipped UVs)
-        const backGeometry = createLetterGeometry(PAPER_WIDTH, PAPER_HEIGHT, true)
-        
+        const backGeometry = createLetterGeometry(
+            PAPER_WIDTH,
+            PAPER_HEIGHT,
+            true
+        )
+
         const bb0 = new Bone()
         bb0.position.set(0, halfH, 0)
         const bb1 = new Bone()
@@ -710,10 +1028,17 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         backBonesRef.current = backBones
 
         const backSkeleton = new Skeleton(backBones)
-        const backMaterial = new MeshBasicMaterial({
+        const backMaterial = new MeshStandardMaterial({
+            color: 0xffffff,
             map: textureBack,
+            emissive: 0xffffff,
+            emissiveMap: textureBack,
+            emissiveIntensity: EMISSIVE_INTENSITY,
             side: BackSide,
+            roughness: ROUGHNESS,
+            metalness: 0,
         })
+        backMaterialRef.current = backMaterial
         const backMesh = new SkinnedMesh(backGeometry, backMaterial)
         backMesh.frustumCulled = false
         backMesh.add(bb0)
@@ -732,26 +1057,25 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         flipGroup.add(letterGroup)
         scene.add(flipGroup)
 
-        // DEBUG: Add colored lines at each edge to visualize fold structure
-        const halfW = PAPER_WIDTH / 2
-        const edgeLines: InstanceType<typeof Line>[] = []
-        
-        const createEdgeLine = (yLocal: number, color: number, bone: InstanceType<typeof Bone>) => {
-            const lineGeom = new BufferGeometry().setFromPoints([
-                new Vector3(-halfW, yLocal, 0.01),
-                new Vector3(halfW, yLocal, 0.01),
-            ])
-            const lineMat = new LineBasicMaterial({ color, linewidth: 3 })
-            const line = new Line(lineGeom, lineMat)
-            bone.add(line)
-            edgeLines.push(line)
-            return line
-        }
-        
-        createEdgeLine(0, 0xff0000, fb0)  // RED - 4th edge
-        createEdgeLine(0, 0x00ff00, fb1)  // GREEN - Second edge
-        createEdgeLine(0, 0x0000ff, fb2)  // BLUE - Third edge
-        createEdgeLine(-segH, 0xffff00, fb2)  // YELLOW - First edge
+        // Light for letter illumination only (shadow is CSS drop-shadow). Light color hardcoded to white.
+        const { ambient: ambientIntensity, directional: directionalIntensity } =
+            paperShadowToIntensities(paperShadow)
+        const ambientLight = new AmbientLight(0xffffff, ambientIntensity)
+        scene.add(ambientLight)
+        ambientLightRef.current = ambientLight
+        const directionalLight = new DirectionalLight(
+            0xffffff,
+            directionalIntensity
+        )
+        directionalLight.position.set(
+            LIGHT_POSITION_X,
+            LIGHT_POSITION_Y,
+            LIGHT_POSITION_Z
+        )
+        directionalLight.target.position.set(0, 0, 0)
+        scene.add(directionalLight.target)
+        scene.add(directionalLight)
+        directionalLightRef.current = directionalLight
 
         const resize = () => {
             if (!container || !camera || !renderer) return
@@ -766,12 +1090,13 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         window.addEventListener("resize", resize)
 
         const cameraDistance = 5
-        const visibleHeightAtOrigin = 2 * cameraDistance * Math.tan((45 / 2) * (Math.PI / 180))
+        const visibleHeightAtOrigin =
+            2 * cameraDistance * Math.tan((45 / 2) * (Math.PI / 180))
 
         const b0BindY = halfH
         const b1BindY = halfH - segH
         const b2BindY = halfH - 2 * segH
-        
+
         let lastTime = performance.now()
         let lastW = 0
         let lastH = 0
@@ -794,33 +1119,42 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             lastTime = now
 
             const theta = thetaRef.current
+            const theta2 = theta2Ref.current
 
             // Update front bones
+            // fb0: top panel - rotates by -theta (tilts forward)
             fb0.rotation.x = -theta
             fb0.position.set(0, b0BindY, 0)
-            
+
+            // Second edge position (hinge between top and middle)
             const secondEdgeY = b0BindY - segH * Math.cos(theta)
             const secondEdgeZ = segH * Math.sin(theta)
-            
+
+            // fb1: middle panel - rotates by theta (same angle magnitude at Second edge)
             fb1.rotation.x = theta
             fb1.position.set(0, secondEdgeY, secondEdgeZ)
-            
+
+            // Third edge position (hinge between middle and bottom)
+            // Use theta for the middle panel's contribution to keep Second/Third edge angles equal
             const thirdEdgeY = secondEdgeY - segH * Math.cos(theta)
             const thirdEdgeZ = secondEdgeZ - segH * Math.sin(theta)
-            
-            fb2.rotation.x = -theta
+
+            // fb2: bottom panel - rotates by -theta2 (smaller angle so it doesn't stick out)
+            fb2.rotation.x = -theta2
             fb2.position.set(0, thirdEdgeY, thirdEdgeZ)
-            
+
             // Update back bones identically
             bb0.rotation.x = -theta
             bb0.position.set(0, b0BindY, 0)
             bb1.rotation.x = theta
             bb1.position.set(0, secondEdgeY, secondEdgeZ)
-            bb2.rotation.x = -theta
+            bb2.rotation.x = -theta2
             bb2.position.set(0, thirdEdgeY, thirdEdgeZ)
-            
-            if (frontMeshRef.current?.skeleton) frontMeshRef.current.skeleton.update()
-            if (backMeshRef.current?.skeleton) backMeshRef.current.skeleton.update()
+
+            if (frontMeshRef.current?.skeleton)
+                frontMeshRef.current.skeleton.update()
+            if (backMeshRef.current?.skeleton)
+                backMeshRef.current.skeleton.update()
 
             // Flip around the true hinge center on the middle panel:
             // midpoint between the second and third fold edges.
@@ -828,10 +1162,10 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             const centerZ = (fb1.position.z + fb2.position.z) / 2
             letterGroup.position.set(0, -centerY, -centerZ)
 
-            const flipAngle = flipAngleRef.current
+            const flipAngle = flipAngleRef.current % (2 * Math.PI)
             const flipSign = flipDirection === "back" ? -1 : 1
-            flipGroup.rotation.x = flipAxis === "horizontal" ? flipAngle * flipSign : 0
-            flipGroup.rotation.y = flipAxis === "vertical" ? flipAngle * flipSign : 0
+            flipGroup.rotation.x = flipAngle * flipSign
+            flipGroup.rotation.y = 0
 
             const aspect = w > 0 && h > 0 ? w / h : 1
             const visibleWidthAtOrigin = aspect * visibleHeightAtOrigin
@@ -860,10 +1194,31 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
             rendererRef.current = null
             frontMeshRef.current = null
             backMeshRef.current = null
+            frontMaterialRef.current = null
+            backMaterialRef.current = null
             frontBonesRef.current = []
             backBonesRef.current = []
+            directionalLightRef.current = null
+            ambientLightRef.current = null
         }
-    }, [textures.front, textures.back, flipAxis, flipDirection])
+    }, [texturesReady, flipDirection])
+
+    // Update paper self-shadow intensity without recreating the scene
+    useEffect(() => {
+        const { ambient, directional } = paperShadowToIntensities(paperShadow)
+        if (ambientLightRef.current) {
+            ambientLightRef.current.intensity = ambient
+        }
+        if (directionalLightRef.current) {
+            directionalLightRef.current.intensity = directional
+        }
+    }, [paperShadow])
+
+    // Apply ControlType.BoxShadow as CSS drop-shadow on the canvas (like StickerDrag)
+    useEffect(() => {
+        const canvas = rendererRef.current?.domElement
+        if (canvas) canvas.style.filter = boxShadowToDropShadow(shadow)
+    }, [shadow, texturesReady])
 
     return (
         <>
@@ -876,80 +1231,11 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
                     background: "transparent",
                 }}
             />
-            <div
-                style={{
-                    position: "fixed",
-                    top: 12,
-                    left: 12,
-                    zIndex: 9999,
-                    padding: "10px 14px",
-                    background: "rgba(0,0,0,0.85)",
-                    color: "#e0e0e0",
-                    fontFamily: "ui-monospace, monospace",
-                    fontSize: 13,
-                    borderRadius: 8,
-                    lineHeight: 1.5,
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-                }}
-            >
-                <div style={{ fontWeight: 600, marginBottom: 6, color: "#fff" }}>
-                    Animation progress
-                </div>
-                <div>Fold progress: {debugProgress.fold}/100</div>
-                <div>Unfold progress: {debugProgress.unfold}/100</div>
-                <div>Flip progress: {debugProgress.flip}/100</div>
-                <div>Flip angle: {debugProgress.flipAngleDeg}°</div>
-            </div>
         </>
     )
 }
 
-LetterTestimonial.displayName = "Letter Testimonial"
-
 addPropertyControls(LetterTestimonial, {
-    currentEntry: {
-        type: ControlType.Number,
-        title: "Entry",
-        min: 1,
-        max: 10,
-        step: 1,
-        defaultValue: 1,
-        displayStepper: true,
-        description: "Which entry to show (1-based). Changing triggers fold-flip-unfold.",
-    },
-    flipAxis: {
-        type: ControlType.Enum,
-        title: "Flip axis",
-        options: ["horizontal", "vertical"],
-        optionTitles: ["Horizontal (up/down)", "Vertical (left/right)"],
-        defaultValue: "horizontal",
-    },
-    flipDirection: {
-        type: ControlType.Enum,
-        title: "Flip direction",
-        options: ["front", "back"],
-        optionTitles: ["Front flip", "Back flip"],
-        defaultValue: "front",
-    },
-    letterSize: {
-        type: ControlType.Number,
-        title: "Letter size",
-        defaultValue: 1,
-        min: 0.25,
-        max: 2,
-        step: 0.05,
-        displayStepper: true,
-        description: "Scale of the letter in the frame. 1 = fit container",
-    },
-    transition: {
-        type: ControlType.Transition,
-        title: "Fold transition",
-        defaultValue: {
-            type: "tween",
-            duration: 0.8,
-            ease: "easeOut",
-        },
-    },
     entries: {
         type: ControlType.Array,
         title: "Entries",
@@ -964,23 +1250,6 @@ addPropertyControls(LetterTestimonial, {
                             type: ControlType.String,
                             title: "Text",
                             defaultValue: DEFAULT_GREETING,
-                        },
-                        font: {
-                            type: ControlType.Font,
-                            title: "Font",
-                            controls: "extended",
-                            defaultFontType: "sans-serif",
-                            defaultValue: {
-                                fontSize: 18,
-                                // @ts-ignore — Framer font control accepts fontFamily at runtime
-                                fontFamily: "Inter, system-ui, sans-serif",
-                                fontWeight: "400",
-                            },
-                        },
-                        color: {
-                            type: ControlType.Color,
-                            title: "Color",
-                            defaultValue: DEFAULT_TEXT_COLOR,
                         },
                     },
                 },
@@ -999,23 +1268,6 @@ addPropertyControls(LetterTestimonial, {
                             title: "Closing",
                             defaultValue: DEFAULT_CLOSING,
                         },
-                        font: {
-                            type: ControlType.Font,
-                            title: "Font",
-                            controls: "extended",
-                            defaultFontType: "sans-serif",
-                            defaultValue: {
-                                fontSize: 14,
-                                // @ts-ignore — Framer font control accepts fontFamily at runtime
-                                fontFamily: "Inter, system-ui, sans-serif",
-                                fontWeight: "400",
-                            },
-                        },
-                        color: {
-                            type: ControlType.Color,
-                            title: "Color",
-                            defaultValue: DEFAULT_TEXT_COLOR,
-                        },
                     },
                 },
                 signature: {
@@ -1027,30 +1279,7 @@ addPropertyControls(LetterTestimonial, {
                             title: "Text",
                             defaultValue: DEFAULT_SIGNATURE,
                         },
-                        font: {
-                            type: ControlType.Font,
-                            title: "Font",
-                            controls: "extended",
-                            defaultFontType: "sans-serif",
-                            defaultValue: {
-                                fontSize: 26,
-                                // @ts-ignore — Framer font control accepts fontFamily at runtime
-                                fontFamily: "Georgia, \"Times New Roman\", serif",
-                                fontStyle: "italic",
-                                fontWeight: "500",
-                            },
-                        },
-                        color: {
-                            type: ControlType.Color,
-                            title: "Color",
-                            defaultValue: DEFAULT_SIGNATURE_COLOR,
-                        },
                     },
-                },
-                bgColor: {
-                    type: ControlType.Color,
-                    title: "Bg color",
-                    defaultValue: DEFAULT_BG_COLOR,
                 },
             },
         },
@@ -1059,17 +1288,119 @@ addPropertyControls(LetterTestimonial, {
                 greeting: { text: DEFAULT_GREETING },
                 body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
                 signature: { text: DEFAULT_SIGNATURE },
-                bgColor: DEFAULT_BG_COLOR,
             },
             {
-                greeting: { text: "Hi again," },
-                body: {
-                    text: "This is the second side of the letter.",
-                    closing: "Cheers,",
-                },
-                signature: { text: "The Team" },
-                bgColor: DEFAULT_BG_COLOR,
+                greeting: { text: DEFAULT_GREETING },
+                body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
+                signature: { text: DEFAULT_SIGNATURE },
+            },
+            {
+                greeting: { text: DEFAULT_GREETING },
+                body: { text: DEFAULT_BODY, closing: DEFAULT_CLOSING },
+                signature: { text: DEFAULT_SIGNATURE },
             },
         ],
     },
+    currentEntry: {
+        type: ControlType.Number,
+        title: "Entry",
+        min: 1,
+        max: 10,
+        step: 1,
+        defaultValue: 1,
+        displayStepper: true,
+    },
+    flipDirection: {
+        type: ControlType.Enum,
+        title: "Direction",
+        options: ["front", "back"],
+        optionTitles: ["Front Flip", "Back Flip"],
+        defaultValue: "back",
+        displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
+    },
+    letterSize: {
+        type: ControlType.Number,
+        title: "Size",
+        defaultValue: 0.75,
+        min: 0.25,
+        max: 1,
+        step: 0.05,
+        displayStepper: true,
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.8,
+            ease: "easeOut",
+        },
+    },
+    shadows: {
+        type: ControlType.Object,
+        title: "Shadows",
+        controls: {
+            boxShadow: {
+                // @ts-ignore — Framer BoxShadow control
+                type: ControlType.BoxShadow,
+                title: "Box shadow",
+                defaultValue: "0px 4px 24px 0px rgba(0, 0, 0, 0.35)",
+            },
+            paperShadow: {
+                type: ControlType.Number,
+                title: "Paper",
+                min: 0,
+                max: 1,
+                step: 0.05,
+                defaultValue: 0.6,
+                displayStepper: true,
+            },
+        },
+    },
+    letterPaperColor: {
+        type: ControlType.Color,
+        title: "Paper",
+        defaultValue: DEFAULT_BG_COLOR,
+    },
+    bodyFont: {
+        type: ControlType.Font,
+        title: "Body",
+        controls: "extended",
+        defaultFontType: "sans-serif",
+        defaultValue: {
+            fontSize: 17,
+            // @ts-ignore — Framer font control accepts fontFamily at runtime
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontWeight: "400",
+        },
+    },
+    bodyColor: {
+        type: ControlType.Color,
+        title: "ㅤ",
+        defaultValue: DEFAULT_TEXT_COLOR,
+    },
+    signatureFont: {
+        type: ControlType.Font,
+        title: "Signature",
+        controls: "extended",
+        // @ts-ignore — Framer accepts cursive at runtime
+        defaultFontType: "cursive",
+        defaultValue: {
+            fontSize: 32,
+            // @ts-ignore — Framer font control accepts fontFamily at runtime
+            fontFamily: "Caveat, cursive",
+            fontStyle: "italic",
+            fontWeight: "500",
+        },
+    },
+    signatureColor: {
+        type: ControlType.Color,
+        title: "ㅤ",
+        defaultValue: DEFAULT_SIGNATURE_COLOR,
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
+    },
 })
+
+LetterTestimonial.displayName = "Letter Testimonial"
