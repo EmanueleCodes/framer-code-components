@@ -1,7 +1,6 @@
 import React from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { useRef, useEffect, useState } from "react"
-import { animate } from "framer-motion"
 
 import {
     gsap,
@@ -95,13 +94,15 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
 
     const textRef = useRef<HTMLElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
-    const animationControlsRef = useRef<Array<ReturnType<typeof animate>>>([])
+    const gsapTimelineRef = useRef<ReturnType<typeof gsap.timeline> | null>(null)
     const hasAnimatedRef = useRef(false)
     const lineSplitRef = useRef<ReturnType<typeof SplitText.create> | null>(null)
     const blindElementsRef = useRef<HTMLElement[]>([])
     const lineElementsRef = useRef<HTMLElement[]>([])
     const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const isFirstResizeRef = useRef(true)
+    const propsRef = useRef({ direction, animationMode })
+    propsRef.current = { direction, animationMode }
 
     const [isInView, setIsInView] = useState(false)
     const [isOutOfView, setIsOutOfView] = useState(false)
@@ -226,24 +227,35 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         }
     }
 
-    const buildTransitionConfig = (
+    const buildGsapEase = (
         transitionValue: BlindsTextRevealProps["transition"] | BlindsTextRevealProps["transitionIn"]
-    ) => {
-        const config: Record<string, unknown> = {}
-        if (transitionValue?.type === "spring") {
-            config.type = "spring"
-            if (transitionValue.stiffness !== undefined) config.stiffness = transitionValue.stiffness
-            if (transitionValue.damping !== undefined) config.damping = transitionValue.damping
-            if (transitionValue.mass !== undefined) config.mass = transitionValue.mass
-            if (transitionValue.bounce !== undefined) config.bounce = transitionValue.bounce
-            if (transitionValue.restDelta !== undefined) config.restDelta = transitionValue.restDelta
-            if (transitionValue.restSpeed !== undefined) config.restSpeed = transitionValue.restSpeed
-        } else {
-            config.type = transitionValue?.type || "tween"
-            if (transitionValue?.duration !== undefined) config.duration = transitionValue.duration
-            if (transitionValue?.ease) config.ease = transitionValue.ease
+    ): string => {
+        if (!transitionValue) return "power2.out"
+        if (transitionValue.type === "spring") {
+            return "power2.out"
         }
-        return config
+        const ease = transitionValue.ease
+        if (!ease) return "power2.out"
+        if (typeof ease === "string") {
+            const easeMap: Record<string, string> = {
+                linear: "none",
+                easeIn: "power2.in",
+                easeOut: "power2.out",
+                easeInOut: "power2.inOut",
+                circIn: "circ.in",
+                circOut: "circ.out",
+                circInOut: "circ.inOut",
+                backIn: "back.in",
+                backOut: "back.out",
+                backInOut: "back.inOut",
+                anticipate: "back.inOut",
+            }
+            return easeMap[ease] || ease
+        }
+        if (Array.isArray(ease) && ease.length === 4) {
+            return `cubic-bezier(${ease.join(",")})`
+        }
+        return "power2.out"
     }
 
     const setupSplit = (shouldRevert = false) => {
@@ -268,7 +280,9 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
             wrapper.style.display = "inline-block"
             wrapper.style.position = "relative"
             wrapper.style.overflow = "hidden"
-            wrapper.style.width = "fit-content"
+            wrapper.style.width = "100%"
+            wrapper.style.verticalAlign = "top"
+            wrapper.style.lineHeight = "inherit"
             line.parentNode?.insertBefore(wrapper, line)
             wrapper.appendChild(line)
 
@@ -309,37 +323,67 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         })
     }
 
-    const animateBlinds = (blinds: HTMLElement[], forward: boolean) => {
-        animationControlsRef.current.forEach((control) => control.stop())
-        animationControlsRef.current = []
+    const killTimeline = () => {
+        if (gsapTimelineRef.current) {
+            gsapTimelineRef.current.kill()
+            gsapTimelineRef.current = null
+        }
+    }
 
-        const transitionConfig = buildTransitionConfig(transition)
+    const getBlindTransformProp = (dir: BlindsTextRevealProps["direction"]) => {
+        return dir === "top-to-bottom" || dir === "bottom-to-top" ? "yPercent" : "xPercent"
+    }
+
+    const getBlindTransformValue = (progress: number, dir: BlindsTextRevealProps["direction"]) => {
+        const end = 101
+        switch (dir) {
+            case "left-to-right":
+                return -end * progress
+            case "right-to-left":
+                return end * progress
+            case "top-to-bottom":
+                return -end * progress
+            case "bottom-to-top":
+                return end * progress
+            default:
+                return -end * progress
+        }
+    }
+
+    const getBlindInStartValue = (dir: BlindsTextRevealProps["direction"]) => {
+        switch (dir) {
+            case "left-to-right":
+                return 100
+            case "right-to-left":
+                return -100
+            case "top-to-bottom":
+                return 100
+            case "bottom-to-top":
+                return -100
+            default:
+                return 100
+        }
+    }
+
+    const animateBlinds = (blinds: HTMLElement[], forward: boolean) => {
+        killTimeline()
+
+        const duration = transition?.duration ?? 0.6
+        const ease = buildGsapEase(transition)
         const baseDelay = transition?.delay ?? 0
+        const prop = getBlindTransformProp(direction)
+
+        const tl = gsap.timeline()
+        gsapTimelineRef.current = tl
 
         blinds.forEach((blind, index) => {
             const orderIndex = getStaggerOrderIndex(index, blinds.length, staggerOrder)
             const elementDelay = baseDelay + orderIndex * staggerAmount
+            const startVal = forward ? 0 : getBlindTransformValue(1, direction)
+            const endVal = forward ? getBlindTransformValue(1, direction) : 0
 
-            if (forward) {
-                setBlindsInitial([blind])
-                const control = animate(0, 1, {
-                    ...transitionConfig,
-                    delay: elementDelay,
-                    onUpdate: (progress) => {
-                        blind.style.transform = getBlindTransform(progress, direction)
-                    },
-                })
-                animationControlsRef.current.push(control)
-            } else {
-                const control = animate(1, 0, {
-                    ...transitionConfig,
-                    delay: elementDelay,
-                    onUpdate: (progress) => {
-                        blind.style.transform = getBlindTransform(progress, direction)
-                    },
-                })
-                animationControlsRef.current.push(control)
-            }
+            gsap.set(blind, { [prop]: startVal })
+            tl.to(blind, { [prop]: endVal, duration, ease }, elementDelay)
         })
     }
 
@@ -348,13 +392,7 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         lines: HTMLElement[],
         forward: boolean
     ) => {
-        animationControlsRef.current.forEach((control) => control.stop())
-        animationControlsRef.current = []
-
-        const transitionInConfig = buildTransitionConfig(transitionIn ?? { type: "tween", duration: 0.5, ease: "easeIn" })
-        const transitionOutConfig = buildTransitionConfig(transition)
-        const baseDelayIn = transitionIn?.delay ?? 0
-        const baseDelayOut = transition?.delay ?? 0
+        killTimeline()
 
         if (!forward) {
             setBlindsInitial(blinds)
@@ -365,32 +403,41 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
             return
         }
 
+        const durationIn = transitionIn?.duration ?? 0.5
+        const durationOut = transition?.duration ?? 0.5
+        const easeIn = buildGsapEase(transitionIn)
+        const easeOut = buildGsapEase(transition)
+        const baseDelayIn = transitionIn?.delay ?? 0
+        const baseDelayOut = transition?.delay ?? 0
+        const prop = getBlindTransformProp(direction)
+
+        const tl = gsap.timeline()
+        gsapTimelineRef.current = tl
+
         blinds.forEach((blind, index) => {
-            blind.style.transform = getBlindInStartTransform(direction)
             const orderIndex = getStaggerOrderIndex(index, blinds.length, staggerOrder)
             const elementDelayIn = baseDelayIn + orderIndex * staggerAmount
+            const startIn = getBlindInStartValue(direction)
+            const line = lines[index]
 
-            const controlIn = animate(0, 1, {
-                ...transitionInConfig,
-                delay: elementDelayIn,
-                onUpdate: (progress) => {
-                    blind.style.transform = getBlindInPhaseTransform(progress, direction)
+            gsap.set(blind, { [prop]: startIn })
+
+            tl.to(
+                blind,
+                {
+                    [prop]: 0,
+                    duration: durationIn,
+                    ease: easeIn,
+                    onComplete: () => {
+                        if (line) line.style.opacity = "1"
+                    },
                 },
-                onComplete: () => {
-                    lines[index].style.opacity = "1"
-                    blind.style.transform = getBlindCoveringTransform(direction)
-                    const elementDelayOut = baseDelayOut + orderIndex * staggerAmount
-                    const controlOut = animate(0, 1, {
-                        ...transitionOutConfig,
-                        delay: elementDelayOut,
-                        onUpdate: (progress) => {
-                            blind.style.transform = getBlindTransform(progress, direction)
-                        },
-                    })
-                    animationControlsRef.current.push(controlOut)
-                },
-            })
-            animationControlsRef.current.push(controlIn)
+                elementDelayIn
+            )
+
+            const outStartTime = elementDelayIn + durationIn + baseDelayOut
+            const endVal = getBlindTransformValue(1, direction)
+            tl.to(blind, { [prop]: endVal, duration: durationOut, ease: easeOut }, outStartTime)
         })
     }
 
@@ -432,7 +479,7 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         }
 
         return () => {
-            animationControlsRef.current.forEach((control) => control.stop())
+            killTimeline()
             if (lineSplitRef.current) {
                 lineSplitRef.current.revert()
                 lineSplitRef.current = null
@@ -459,7 +506,7 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         }
 
         return () => {
-            animationControlsRef.current.forEach((control) => control.stop())
+            killTimeline()
             if (lineSplitRef.current) {
                 lineSplitRef.current.revert()
                 lineSplitRef.current = null
@@ -470,16 +517,15 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [trigger, text, blindsColor, direction, animationMode])
 
-    // Scroll alignment
+    // Scroll alignment: use Intersection Observer so we detect exit even when a scroll container (not window) scrolls
     useEffect(() => {
         if (trigger !== "Scroll" || RenderTarget.current() === RenderTarget.canvas) return
+        const container = containerRef.current
+        if (!container) return
 
-        let rafId: number | null = null
-        const checkAlignment = () => {
-            if (!containerRef.current) return
-            const rect = containerRef.current.getBoundingClientRect()
+        const getInViewFromEntry = (entry: IntersectionObserverEntry) => {
+            const rect = entry.boundingClientRect
             const viewportHeight = window.innerHeight || 0
-
             let elementPoint: number
             if (scrollTriggerPosition === "top") {
                 elementPoint = rect.top
@@ -488,28 +534,69 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
             } else {
                 elementPoint = rect.bottom
             }
-
             const isAligned = elementPoint <= viewportHeight && rect.bottom >= 0
-            setIsInView(isAligned)
             const completelyOutOfView = rect.top > viewportHeight
-            setIsOutOfView(completelyOutOfView)
+            return { isAligned, completelyOutOfView }
         }
 
-        const handleScroll = () => {
-            if (rafId) cancelAnimationFrame(rafId)
-            rafId = requestAnimationFrame(checkAlignment)
-        }
-        const handleResize = () => checkAlignment()
+        const observer = new IntersectionObserver(
+            (entries) => {
+                const entry = entries[0]
+                if (!entry) return
+                const { isAligned, completelyOutOfView } = getInViewFromEntry(entry)
 
-        checkAlignment()
-        window.addEventListener("scroll", handleScroll, { passive: true })
-        window.addEventListener("resize", handleResize)
+                if (completelyOutOfView) {
+                    // Synchronously stop and reset so we never freeze mid-animation
+                    const blinds = blindElementsRef.current
+                    killTimeline()
+                    if (blinds.length) {
+                        const { direction: dir, animationMode: mode } = propsRef.current
+                        const prop = dir === "top-to-bottom" || dir === "bottom-to-top" ? "yPercent" : "xPercent"
+                        if (mode === "in-out") {
+                            const lines = lineElementsRef.current
+                            const startVal = getBlindInStartValue(dir)
+                            blinds.forEach((b) => {
+                                gsap.set(b, { [prop]: startVal })
+                            })
+                            lines.forEach((line) => {
+                                line.style.opacity = "0"
+                            })
+                        } else {
+                            blinds.forEach((b) => {
+                                gsap.set(b, { [prop]: 0 })
+                            })
+                        }
+                    }
+                    hasAnimatedRef.current = false
+                    setIsInView(false)
+                    setIsOutOfView(true)
+                    return
+                }
 
-        return () => {
-            if (rafId) cancelAnimationFrame(rafId)
-            window.removeEventListener("scroll", handleScroll)
-            window.removeEventListener("resize", handleResize)
+                setIsInView(isAligned)
+                setIsOutOfView(false)
+            },
+            { threshold: [0, 0.25, 0.5, 0.75, 1], rootMargin: "0px" }
+        )
+
+        // Set initial state from current position
+        const rect = container.getBoundingClientRect()
+        const viewportHeight = window.innerHeight || 0
+        let elementPoint: number
+        if (scrollTriggerPosition === "top") {
+            elementPoint = rect.top
+        } else if (scrollTriggerPosition === "center") {
+            elementPoint = rect.top + rect.height / 2
+        } else {
+            elementPoint = rect.bottom
         }
+        const isAligned = elementPoint <= viewportHeight && rect.bottom >= 0
+        const completelyOutOfView = rect.top > viewportHeight
+        setIsInView(isAligned)
+        setIsOutOfView(completelyOutOfView)
+
+        observer.observe(container)
+        return () => observer.disconnect()
     }, [trigger, scrollTriggerPosition])
 
     // Scroll trigger animation
@@ -518,19 +605,8 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         const blinds = blindElementsRef.current
         if (!blinds.length) return
 
-        animationControlsRef.current.forEach((control) => control.stop())
-        animationControlsRef.current = []
-
         if (isOutOfView) {
-            if (reverse) {
-                if (animationMode === "in-out") {
-                    const lines = lineElementsRef.current
-                    if (lines.length) setBlindsInOutInitial(blinds, lines)
-                } else {
-                    setBlindsInitial(blinds)
-                }
-                hasAnimatedRef.current = false
-            }
+            // Reset is already handled synchronously in IntersectionObserver callback
             return
         }
 

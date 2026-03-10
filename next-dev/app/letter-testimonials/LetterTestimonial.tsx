@@ -87,6 +87,27 @@ function parseFontSize(
     return undefined
 }
 
+/** Parse letterSpacing from Framer font (e.g. "0em", "0.02em", "1px") to pixels. */
+function parseLetterSpacing(
+    letterSpacing: string | number | undefined,
+    fontSizePx: number
+): number {
+    if (letterSpacing === undefined || letterSpacing === null) return 0
+    if (typeof letterSpacing === "number") return letterSpacing
+    const s = String(letterSpacing).trim()
+    if (!s) return 0
+    if (s.endsWith("em")) {
+        const val = parseFloat(s)
+        return isNaN(val) ? 0 : val * fontSizePx
+    }
+    if (s.endsWith("px")) {
+        const val = parseFloat(s)
+        return isNaN(val) ? 0 : val
+    }
+    const val = parseFloat(s)
+    return isNaN(val) ? 0 : val
+}
+
 // Build a font descriptor for document.fonts.load() so the canvas uses the correct font
 function fontToLoadDescriptor(
     font: React.CSSProperties | undefined,
@@ -207,6 +228,8 @@ function cloneFont(
         fontStyle: font.fontStyle,
         fontSize: font.fontSize,
         lineHeight: font.lineHeight,
+        textAlign: font.textAlign,
+        letterSpacing: font.letterSpacing,
     }
 }
 
@@ -412,8 +435,61 @@ function createTextTexture(
         lineHeightRaw.endsWith("%")
     ) {
         lineHeight = (parseFloat(lineHeightRaw) / 100) * bodyFontSize * scale
+    } else if (
+        typeof lineHeightRaw === "string" &&
+        lineHeightRaw.endsWith("em")
+    ) {
+        const emVal = parseFloat(lineHeightRaw)
+        lineHeight = (isNaN(emVal) ? 1.6 : emVal) * bodyFontSize * scale
     } else {
         lineHeight = bodyFontSize * 1.6 * scale
+    }
+
+    // Text align and letter spacing from Framer font (body applies to greeting, body, closing)
+    const textAlign = (bodyFont?.textAlign as CanvasTextAlign) || "left"
+    const letterSpacingPx =
+        parseLetterSpacing(bodyFont?.letterSpacing, bodyFontSize) * scale
+
+    const bodySize = bodyFontSize * scale
+    const maxWidth = canvas.width - padding * 2
+
+    /** Draw a single line with textAlign and optional letterSpacing. */
+    const drawLine = (
+        line: string,
+        y: number,
+        fontSizePx: number,
+        align: CanvasTextAlign,
+        spacingPx: number
+    ) => {
+        if (!line.trim()) return
+        ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${fontSizePx}px ${bodyFontFamily}`
+        if (spacingPx === 0) {
+            ctx.textAlign = align
+            const x =
+                align === "center"
+                    ? padding + maxWidth / 2
+                    : align === "right"
+                      ? padding + maxWidth
+                      : padding
+            ctx.fillText(line, x, y)
+            return
+        }
+        const totalWidth =
+            ctx.measureText(line).width + spacingPx * Math.max(0, line.length - 1)
+        let x: number
+        if (align === "left" || align === "start") {
+            x = padding
+        } else if (align === "center") {
+            x = padding + (maxWidth - totalWidth) / 2
+        } else {
+            x = padding + maxWidth - totalWidth
+        }
+        ctx.textAlign = "left"
+        for (let i = 0; i < line.length; i++) {
+            const c = line[i]
+            ctx.fillText(c, x, y)
+            x += ctx.measureText(c).width + spacingPx
+        }
     }
 
     let y = padding + 32 * scale
@@ -421,14 +497,38 @@ function createTextTexture(
     // Greeting (uses greeting font or body font)
     ctx.fillStyle = resolveColor(greetingColor)
     ctx.font = `${greetingFontStyle} ${greetingFontWeight} ${greetingFontSize}px ${greetingFontFamily}`
-    ctx.fillText(greeting, padding, y)
+    if (letterSpacingPx === 0) {
+        ctx.textAlign = textAlign
+        const greetingX =
+            textAlign === "center"
+                ? padding + maxWidth / 2
+                : textAlign === "right"
+                  ? padding + maxWidth
+                  : padding
+        ctx.fillText(greeting, greetingX, y)
+    } else {
+        const totalGreetingWidth =
+            ctx.measureText(greeting).width +
+            letterSpacingPx * Math.max(0, greeting.length - 1)
+        let greetingX: number
+        if (textAlign === "left" || textAlign === "start") {
+            greetingX = padding
+        } else if (textAlign === "center") {
+            greetingX = padding + (maxWidth - totalGreetingWidth) / 2
+        } else {
+            greetingX = padding + maxWidth - totalGreetingWidth
+        }
+        ctx.textAlign = "left"
+        for (let i = 0; i < greeting.length; i++) {
+            const c = greeting[i]
+            ctx.fillText(c, greetingX, y)
+            greetingX += ctx.measureText(c).width + letterSpacingPx
+        }
+    }
     y += lineHeight * 1.8
 
     // Body text
-    const bodySize = bodyFontSize * scale
     ctx.fillStyle = resolveColor(bodyColor)
-    ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${bodySize}px ${bodyFontFamily}`
-    const maxWidth = canvas.width - padding * 2
     const words = body.split(" ")
     let line = ""
 
@@ -436,7 +536,7 @@ function createTextTexture(
         const testLine = line + word + " "
         const metrics = ctx.measureText(testLine)
         if (metrics.width > maxWidth && line !== "") {
-            ctx.fillText(line.trim(), padding, y)
+            drawLine(line.trim(), y, bodySize, textAlign, letterSpacingPx)
             line = word + " "
             y += lineHeight
         } else {
@@ -444,17 +544,16 @@ function createTextTexture(
         }
     }
     if (line.trim()) {
-        ctx.fillText(line.trim(), padding, y)
+        drawLine(line.trim(), y, bodySize, textAlign, letterSpacingPx)
         y += lineHeight
     }
 
     // Closing
     y += lineHeight * 0.8
     ctx.fillStyle = resolveColor(bodyColor)
-    ctx.font = `${bodyFontStyle} ${bodyFontWeight} ${bodySize}px ${bodyFontFamily}`
-    ctx.fillText(closing, padding, y)
+    drawLine(closing, y, bodySize, textAlign, letterSpacingPx)
 
-    // Signature
+    // Signature (uses signature font; align and letterSpacing from signature font or body)
     y += lineHeight * 2.2
     ctx.fillStyle = resolveColor(signatureColor)
     const sigFontFamily =
@@ -468,8 +567,40 @@ function createTextTexture(
         signatureFont?.fontSize as string | number | undefined
     )
     const sigFontSize = (sigFontSizeRaw ?? 26) * scale
+    const sigTextAlign =
+        (signatureFont?.textAlign as CanvasTextAlign) ?? textAlign
+    const sigLetterSpacingPx =
+        parseLetterSpacing(signatureFont?.letterSpacing, sigFontSizeRaw ?? 26) *
+        scale
     ctx.font = `${sigFontStyle} ${sigFontWeight} ${sigFontSize}px ${sigFontFamily}`
-    ctx.fillText(signature, padding, y)
+    if (sigLetterSpacingPx === 0) {
+        ctx.textAlign = sigTextAlign
+        const sigX =
+            sigTextAlign === "center"
+                ? padding + maxWidth / 2
+                : sigTextAlign === "right"
+                  ? padding + maxWidth
+                  : padding
+        ctx.fillText(signature, sigX, y)
+    } else {
+        const totalSigWidth =
+            ctx.measureText(signature).width +
+            sigLetterSpacingPx * Math.max(0, signature.length - 1)
+        let sigX: number
+        if (sigTextAlign === "left" || sigTextAlign === "start") {
+            sigX = padding
+        } else if (sigTextAlign === "center") {
+            sigX = padding + (maxWidth - totalSigWidth) / 2
+        } else {
+            sigX = padding + maxWidth - totalSigWidth
+        }
+        ctx.textAlign = "left"
+        for (let i = 0; i < signature.length; i++) {
+            const c = signature[i]
+            ctx.fillText(c, sigX, y)
+            sigX += ctx.measureText(c).width + sigLetterSpacingPx
+        }
+    }
 
     const texture = new CanvasTexture(canvas)
     texture.colorSpace = SRGBColorSpace
@@ -703,11 +834,12 @@ export default function LetterTestimonial(props: LetterTestimonialProps) {
         signatureFont,
     ]
         .filter(Boolean)
-        .map((f) =>
-            f
-                ? `${(f as React.CSSProperties).fontFamily ?? ""}-${(f as React.CSSProperties).fontWeight ?? ""}-${(f as React.CSSProperties).fontSize ?? ""}`
+        .map((f) => {
+            const p = f as React.CSSProperties
+            return p
+                ? `${p.fontFamily ?? ""}-${p.fontWeight ?? ""}-${p.fontSize ?? ""}-${p.lineHeight ?? ""}-${p.textAlign ?? ""}-${p.letterSpacing ?? ""}`
                 : ""
-        )
+        })
         .join("|")
 
     useEffect(() => {
