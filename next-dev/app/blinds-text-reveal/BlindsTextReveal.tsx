@@ -44,6 +44,12 @@ interface BlindsTextRevealProps {
         | "right-to-left"
         | "top-to-bottom"
         | "bottom-to-top"
+    lineOrder:
+        | "first-to-last"
+        | "last-to-first"
+        | "center-out"
+        | "out-to-center"
+    alternate: boolean
     animationMode: "out" | "in-out"
     transitionIn?: {
         type?: "tween" | "spring" | "keyframes" | "inertia"
@@ -86,6 +92,8 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         reverse = false,
         scrollTriggerPosition = "center",
         direction = "left-to-right",
+        lineOrder = "first-to-last",
+        alternate = false,
         animationMode = "out",
         transitionIn = {
             type: "tween" as const,
@@ -203,6 +211,52 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         }
     }
 
+    const getOppositeDirection = (
+        dir: BlindsTextRevealProps["direction"]
+    ): BlindsTextRevealProps["direction"] => {
+        switch (dir) {
+            case "left-to-right":
+                return "right-to-left"
+            case "right-to-left":
+                return "left-to-right"
+            case "top-to-bottom":
+                return "bottom-to-top"
+            case "bottom-to-top":
+                return "top-to-bottom"
+            default:
+                return dir
+        }
+    }
+
+    const getDirectionForIndex = (
+        index: number
+    ): BlindsTextRevealProps["direction"] => {
+        if (!alternate) return direction
+        return index % 2 === 0 ? direction : getOppositeDirection(direction)
+    }
+
+    const getStaggerDelayForIndex = (index: number, total: number): number => {
+        switch (lineOrder) {
+            case "first-to-last":
+                return index * staggerAmount
+            case "last-to-first":
+                return (total - 1 - index) * staggerAmount
+            case "center-out": {
+                const center = (total - 1) / 2
+                const distanceFromCenter = Math.abs(index - center)
+                return distanceFromCenter * staggerAmount
+            }
+            case "out-to-center": {
+                const center = (total - 1) / 2
+                const maxDistance = center
+                const distanceFromCenter = Math.abs(index - center)
+                return (maxDistance - distanceFromCenter) * staggerAmount
+            }
+            default:
+                return index * staggerAmount
+        }
+    }
+
     const buildTransitionConfig = (
         transitionValue:
             | BlindsTextRevealProps["transition"]
@@ -283,16 +337,16 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
     }
 
     const setBlindsInitial = (blinds: HTMLElement[]) => {
-        const t = getInitialTransform(direction)
-        blinds.forEach((blind) => {
-            blind.style.transform = t
+        blinds.forEach((blind, index) => {
+            const dir = getDirectionForIndex(index)
+            blind.style.transform = getInitialTransform(dir)
         })
     }
 
     const setBlindsRevealed = (blinds: HTMLElement[]) => {
-        const t = getRevealedTransform(direction)
-        blinds.forEach((blind) => {
-            blind.style.transform = t
+        blinds.forEach((blind, index) => {
+            const dir = getDirectionForIndex(index)
+            blind.style.transform = getRevealedTransform(dir)
         })
     }
 
@@ -302,20 +356,20 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
 
         const transitionConfig = buildTransitionConfig(transition)
         const baseDelay = transition?.delay ?? 0
+        const total = blinds.length
 
         blinds.forEach((blind, index) => {
-            const elementDelay = baseDelay + index * staggerAmount
+            const elementDelay =
+                baseDelay + getStaggerDelayForIndex(index, total)
+            const dir = getDirectionForIndex(index)
 
             if (forward) {
-                setBlindsInitial([blind])
+                blind.style.transform = getInitialTransform(dir)
                 const control = animate(0, 1, {
                     ...transitionConfig,
                     delay: elementDelay,
                     onUpdate: (progress) => {
-                        blind.style.transform = getBlindTransform(
-                            progress,
-                            direction
-                        )
+                        blind.style.transform = getBlindTransform(progress, dir)
                     },
                 })
                 animationControlsRef.current.push(control)
@@ -324,10 +378,7 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
                     ...transitionConfig,
                     delay: elementDelay,
                     onUpdate: (progress) => {
-                        blind.style.transform = getBlindTransform(
-                            progress,
-                            direction
-                        )
+                        blind.style.transform = getBlindTransform(progress, dir)
                     },
                 })
                 animationControlsRef.current.push(control)
@@ -349,9 +400,13 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         const transitionOutConfig = buildTransitionConfig(transition)
         const baseDelayIn = transitionIn?.delay ?? 0
         const baseDelayOut = transition?.delay ?? 0
+        const total = blinds.length
 
         if (!forward) {
-            setBlindsInitial(blinds)
+            blinds.forEach((blind, index) => {
+                const dir = getDirectionForIndex(index)
+                blind.style.transform = getBlindInStartTransform(dir)
+            })
             lines.forEach((line) => {
                 line.style.opacity = "0"
             })
@@ -360,8 +415,10 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         }
 
         blinds.forEach((blind, index) => {
-            blind.style.transform = getBlindInStartTransform(direction)
-            const elementDelayIn = baseDelayIn + index * staggerAmount
+            const dir = getDirectionForIndex(index)
+            blind.style.transform = getBlindInStartTransform(dir)
+            const elementDelayIn =
+                baseDelayIn + getStaggerDelayForIndex(index, total)
 
             const controlIn = animate(0, 1, {
                 ...transitionInConfig,
@@ -369,20 +426,21 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
                 onUpdate: (progress) => {
                     blind.style.transform = getBlindInPhaseTransform(
                         progress,
-                        direction
+                        dir
                     )
                 },
                 onComplete: () => {
                     lines[index].style.opacity = "1"
-                    blind.style.transform = getBlindCoveringTransform(direction)
-                    const elementDelayOut = baseDelayOut + index * staggerAmount
+                    blind.style.transform = getBlindCoveringTransform(dir)
+                    const elementDelayOut =
+                        baseDelayOut + getStaggerDelayForIndex(index, total)
                     const controlOut = animate(0, 1, {
                         ...transitionOutConfig,
                         delay: elementDelayOut,
                         onUpdate: (progress) => {
                             blind.style.transform = getBlindTransform(
                                 progress,
-                                direction
+                                dir
                             )
                         },
                     })
@@ -409,8 +467,9 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         blinds: HTMLElement[],
         lines: HTMLElement[]
     ) => {
-        blinds.forEach((blind) => {
-            blind.style.transform = getBlindInStartTransform(direction)
+        blinds.forEach((blind, index) => {
+            const dir = getDirectionForIndex(index)
+            blind.style.transform = getBlindInStartTransform(dir)
         })
         lines.forEach((line) => {
             line.style.opacity = "0"
@@ -528,11 +587,13 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
         const blinds = blindElementsRef.current
         if (!blinds.length) return
 
-        animationControlsRef.current.forEach((control) => control.stop())
-        animationControlsRef.current = []
-
         if (isOutOfView) {
             if (reverse) {
+                // Only stop and reset when reverse is enabled
+                animationControlsRef.current.forEach((control) =>
+                    control.stop()
+                )
+                animationControlsRef.current = []
                 if (animationMode === "in-out") {
                     const lines = lineElementsRef.current
                     if (lines.length) setBlindsInOutInitial(blinds, lines)
@@ -541,6 +602,7 @@ export default function BlindsTextReveal(props: BlindsTextRevealProps) {
                 }
                 hasAnimatedRef.current = false
             }
+            // Otherwise let running animations continue off-screen
             return
         }
 
@@ -669,7 +731,7 @@ addPropertyControls(BlindsTextReveal, {
     reverse: {
         type: ControlType.Boolean,
         title: "Replay",
-        defaultValue: false,
+        defaultValue: true,
         hidden: (props: BlindsTextRevealProps) => props.trigger !== "Scroll",
     },
     animationMode: {
@@ -699,7 +761,29 @@ addPropertyControls(BlindsTextReveal, {
         ],
         displaySegmentedControl: true,
         segmentedControlDirection: "horizontal",
-        defaultValue: "left-to-right",
+        defaultValue: "right-to-left",
+    },
+    alternate: {
+        type: ControlType.Boolean,
+        title: "Alternate",
+        defaultValue: false,
+    },
+    lineOrder: {
+        type: ControlType.Enum,
+        title: "Order",
+        options: [
+            "first-to-last",
+            "last-to-first",
+            "center-out",
+            "out-to-center",
+        ],
+        optionTitles: [
+            "First → Last",
+            "Last → First",
+            "Center → Out",
+            "Out → Center",
+        ],
+        defaultValue: "first-to-last",
     },
     staggerAmount: {
         type: ControlType.Number,
@@ -708,7 +792,7 @@ addPropertyControls(BlindsTextReveal, {
         min: 0,
         max: 1,
         step: 0.01,
-        defaultValue: 0.1,
+        defaultValue: 0.06,
     },
     transitionIn: {
         type: ControlType.Transition,
@@ -750,6 +834,7 @@ addPropertyControls(BlindsTextReveal, {
             fontSize: 48,
             // @ts-ignore
             fontWeight: "600",
+            textAlign: "center",
             lineHeight: "130%",
             fontFamily: "system-ui, -apple-system, sans-serif",
         },

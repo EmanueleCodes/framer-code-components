@@ -1,5 +1,8 @@
 Blinds Text Reveal - Property Controls
 
+Text
+The content to split into lines and reveal. Multi-line supported.
+
 Trigger
 When the animation runs. "Appear" runs on load. "Layer in View" runs when the component enters the viewport.
 
@@ -10,13 +13,16 @@ Replay
 When on, blinds close again when scrolled out of view and reveal again when back in view. Shown only when Trigger is "Layer in View".
 
 Mode
-"Out": blinds start covering each line, then animate out to reveal. "In–Out": blinds animate in from the opposite side (text invisible), then animate out to reveal. Shown for both trigger types.
+"Out": blinds start covering each line, then animate out to reveal. "In–Out": blinds animate in from the opposite side (text invisible), then animate out to reveal.
 
 Direction
 Reveal direction: Left to right, Right to left, Up–down, or Down–up.
 
+Alternate
+When on, odd lines (1st, 3rd, 5th…) use the selected direction; even lines use the opposite (e.g. left-to-right then right-to-left).
+
 Order
-Which line animates first: First to last, Last to first, Center out (middle line then outward), or Outer–inner (edges then toward center).
+Which line animates first: First → Last, Last → First, Center → Out (middle then outward), or Out → Center (edges then toward center).
 
 Stagger
 Delay in seconds between each line's blind reveal. Higher values create a stronger cascade.
@@ -26,9 +32,6 @@ Transition for the "in" phase when Mode is In–Out (blind sweeping in to cover 
 
 Out
 Transition for the "out" phase: how each blind moves away to reveal the text.
-
-Text
-The content to split into lines and reveal. Multi-line supported.
 
 Color
 Text color.

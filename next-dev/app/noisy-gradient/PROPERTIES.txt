@@ -1,16 +1,23 @@
-Noisy Gradient - Property Controls
+Noisy Ripple Reveal - Property Controls
 
 Preview
-When On, the gradient animation runs in the Framer canvas. When Off, a static frame is shown to improve editor performance. On / Off.
+Whether the effect runs in the Framer canvas. On / Off.
 
-Speed
-Animation speed of the gradient wave. Range: 0–3. Default: 1.
+Masked
+Whether the image starts masked (reveal on uncheck). When Off, only the image is visible with a transparent background.
 
-Top
-Color at the top of the gradient (peach in the original shader). Default: #e6664d.
+Duration
+Animation duration in seconds. Range: 0.3–4. Unit: s.
 
-Left
-Color at the bottom-left (purple in the original). Default: #331a99.
+Image
+Source image to reveal.
 
-Right
-Color at the bottom-right (teal in the original). Default: #00cccc. More components at [Framer University](https://frameruni.link/cc).
+Shader
+Fine-tune shader parameters. Sub-controls:
+  Octaves – Noise cart octaves (1–4).
+  Warp – Warped distance noise cart (0–2).
+  Freq – Wave frequency (4–60).
+  Displace – How much the image is distorted by the wave (0–1).
+  Chromatic – Chromatic aberration strength (0–0.2).
+  Intensity – Glow intensity (color dodge at wavefront). 0–1.
+  Edge – Additive white at the wave edge. 0–0.5. More components at [Framer University](https://frameruni.link/cc).

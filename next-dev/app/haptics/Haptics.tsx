@@ -1,203 +1,166 @@
-/**
- * Haptics – invisible Framer component for haptic feedback on mobile (iOS & Android).
- * Place inside a frame; when the frame's parent (grandparent of this component) is
- * clicked, the configured haptic pattern runs. Uses web-haptics (https://haptics.lochie.me/).
- * Uses the React hook useWebHaptics so first-tap works; bundle must export it (see web-haptics-bundle).
- */
-import React, { useEffect, useRef, useState, useCallback } from "react"
+import { useWebHaptics } from "./Sub/Bundle.tsx"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
-import { useWebHaptics } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/haptics2.js"
+import { useEffect, useRef, useCallback } from "react"
+import { HapticsPreset, PRESET_TRIGGERS } from "./Sub/Presets.tsx"
 
-type PresetName =
-    | "success"
-    | "nudge"
-    | "error"
-    | "buzz"
-    | "selection"
-    | "light"
-    | "medium"
-    | "heavy"
+export interface CustomHapticStep {
+    duration: number
+    intensity: number
+    delay: number
+}
 
-type PatternMode = "preset" | "custom"
-type DebugMode = "off" | "canvas" | "always"
+interface HapticsFramerProps {
+    patternMode: "preset" | "custom"
+    preset: HapticsPreset
+    customPattern: string
+    debug?: boolean
+}
+
+interface HapticsPropertyControlsProps {
+    patternMode: "preset" | "custom"
+}
 
 const DEFAULT_CUSTOM_PATTERN = `trigger([
-  { "duration": 30 },
-  { "delay": 40, "duration": 150 },
-  { "delay": 30, "duration": 60, "intensity": 1 },
-])`
-
-interface HapticsProps {
-    width?: number
-    height?: number
-    patternMode?: PatternMode
-    preset?: PresetName
-    customPattern?: string
-    onDesktop?: "sound" | "silent"
-    debug?: DebugMode | boolean
-}
-
-function parseCustomPattern(value: string): number[] | Array<{ duration: number; delay?: number; intensity?: number }> | null {
-    if (!value || typeof value !== "string") return null
-    const t = value.trim()
-    if (!t) return null
-    let toParse = t
-    if (t.startsWith("trigger(")) {
-        const inner = t.slice(8).trim()
-        if (!inner.endsWith(")")) return null
-        toParse = inner.slice(0, -1).trim()
-    }
-    try {
-        const jsonLike = toParse.replace(/\b(duration|delay|intensity)\s*:/g, '"$1":')
-        const parsed = JSON.parse(jsonLike)
-        if (!Array.isArray(parsed)) return null
-        if (parsed.length === 0) return null
-        if (typeof parsed[0] === "number") {
-            const numbers = parsed.filter((x): x is number => typeof x === "number")
-            return numbers.length === parsed.length ? numbers : null
-        }
-        const objects = parsed.filter(
-            (x): x is { duration: number; delay?: number; intensity?: number } =>
-                x != null && typeof x === "object" && typeof (x as { duration?: number }).duration === "number"
-        )
-        return objects.length === parsed.length ? objects : null
-    } catch {
-        return null
-    }
-}
-
-function resolveDebugMode(value: HapticsProps["debug"]): DebugMode {
-    if (value === true) return "always"
-    if (value === false || value == null) return "off"
-    if (value === "off" || value === "canvas" || value === "always") return value
-    return "off"
-}
+  { duration: 40 },
+  { delay: 40, duration: 40 },
+], { intensity: 0.9 })`
 
 /**
- * @framerSupportedLayoutWidth any-prefer-fixed
- * @framerSupportedLayoutHeight any-prefer-fixed
- * @framerIntrinsicWidth 1
- * @framerIntrinsicHeight 1
+ * @framerSupportedLayoutWidth auto
+ * @framerSupportedLayoutHeight auto
  * @framerDisableUnlink
  */
-export default function Haptics(props: HapticsProps) {
-    const {
-        patternMode = "preset",
-        preset = "success",
-        customPattern: customPatternStr = DEFAULT_CUSTOM_PATTERN,
-        onDesktop = "silent",
-        debug = "off",
-    } = props
-    const debugMode = resolveDebugMode(debug)
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    const showDebug = debugMode === "always" || (debugMode === "canvas" && isCanvas)
-    const isOnFramerCanvas = RenderTarget.hasRestrictions?.() ?? isCanvas
-
-    const { trigger } = useWebHaptics({ debug: onDesktop === "sound" })
-
-    const rootRef = useRef<HTMLDivElement>(null)
-    const [debugLines, setDebugLines] = useState<string[]>([])
-    const settingsRef = useRef({ showDebug })
-    settingsRef.current = { showDebug }
-
-    const pushDebug = (message: string) => {
-        if (!settingsRef.current.showDebug) return
-        const stamp = new Date().toISOString().slice(11, 23)
-        setDebugLines((prev) => [`${stamp} ${message}`, ...prev].slice(0, 14))
-    }
-
-    useEffect(() => {
-        if (!showDebug) return
-        const support = typeof navigator !== "undefined" && typeof navigator.vibrate === "function" ? "yes" : "no"
-        const secure = typeof window !== "undefined" && window.isSecureContext ? "yes" : "no"
-        const ua = typeof navigator !== "undefined" ? navigator.userAgent : "unknown"
-        pushDebug(`debug:on support:${support} secure:${secure}`)
-        pushDebug(`ua:${ua}`)
-    }, [showDebug])
+export default function Haptics(props: HapticsFramerProps) {
+    const { trigger } = useWebHaptics({ debug: props.debug ?? false })
+    const mainRef = useRef<HTMLDivElement>(null)
+    const isOnFramerCanvas = RenderTarget.hasRestrictions()
 
     const initializeParent = useCallback(() => {
-        if (!rootRef.current || isOnFramerCanvas) return
+        if (!mainRef.current || isOnFramerCanvas) return
 
-        const subparent = rootRef.current.parentElement
+        const subparent = mainRef.current.parentElement
         if (!subparent) return
 
         const parent = subparent.parentElement
         if (!parent) return
 
-        const handleClick = () => {
-            if (patternMode === "custom") {
-                const custom = parseCustomPattern(customPatternStr)
-                if (custom !== null) trigger(custom)
-                else trigger(preset)
-            } else {
-                trigger(preset)
+        const handleTouchStart = () => {
+            if (props.patternMode === "preset") {
+                const { pattern, options } = PRESET_TRIGGERS[props.preset]
+                trigger(pattern, options)
+                return
+            }
+
+            // Custom mode - parse customPattern string
+            if (props.customPattern?.trim()) {
+                const parsed = parseCustomPatternCode(props.customPattern)
+                if (parsed?.pattern?.length) {
+                    const pattern = parsed.pattern.map((step) => ({
+                        duration: step.duration,
+                        intensity: step.intensity,
+                        delay: step.delay,
+                    }))
+                    trigger(pattern, parsed.options)
+                }
             }
         }
 
-        parent.addEventListener("click", handleClick, { capture: true })
-        pushDebug("listeners:attached(click,capture)")
-
+        parent.addEventListener("click", handleTouchStart, { capture: true })
         return () => {
-            parent.removeEventListener("click", handleClick, { capture: true })
-            pushDebug("listeners:removed")
+            parent.removeEventListener("click", handleTouchStart, {
+                capture: true,
+            })
         }
-    }, [trigger, patternMode, preset, customPatternStr, isOnFramerCanvas])
+    }, [
+        trigger,
+        props.patternMode,
+        props.preset,
+        props.customPattern,
+        isOnFramerCanvas,
+    ])
 
     useEffect(() => {
         const cleanup = initializeParent()
-        return () => {
-            if (cleanup) cleanup()
-        }
+        return cleanup
     }, [initializeParent])
 
     return (
-        <>
-            <div
-                ref={rootRef}
-                style={{
-                    width: "100%",
-                    height: "100%",
-                    position: "relative",
-                    pointerEvents: "none",
-                    background: "transparent",
-                }}
-                aria-hidden
-            />
-            {showDebug && (
-                <div
-                    style={{
-                        position: "fixed",
-                        left: 12,
-                        bottom: 12,
-                        width: "min(92vw, 420px)",
-                        maxHeight: "40vh",
-                        overflow: "auto",
-                        zIndex: 999999,
-                        padding: "10px 12px",
-                        borderRadius: 8,
-                        border: "1px solid rgba(255,255,255,0.25)",
-                        background: "rgba(10, 10, 10, 0.84)",
-                        color: "#fff",
-                        fontFamily: "ui-monospace, Menlo, Monaco, Consolas, monospace",
-                        fontSize: 11,
-                        lineHeight: 1.35,
-                        pointerEvents: "none",
-                        whiteSpace: "pre-wrap",
-                    }}
-                >
-                    {debugLines.length > 0 ? debugLines.join("\n") : "debug:on waiting for events..."}
-                </div>
-            )}
-        </>
+        <div
+            ref={mainRef}
+            style={{
+                width: "0px",
+                height: "0px",
+            }}
+            aria-hidden
+        />
     )
 }
 
-Haptics.defaultProps = {
-    patternMode: "preset" as PatternMode,
-    preset: "success" as PresetName,
-    customPattern: DEFAULT_CUSTOM_PATTERN,
-    onDesktop: "silent" as const,
-    debug: "off" as DebugMode,
+interface ParsedCustomPattern {
+    pattern: CustomHapticStep[]
+    options?: { intensity?: number }
+}
+
+/**
+ * Parses customPatternCode string (e.g. from Web Haptics) and extracts the
+ * array from trigger([...]) and optional options trigger([...], { intensity }).
+ * Returns null if parsing fails.
+ */
+function parseCustomPatternCode(code: string): ParsedCustomPattern | null {
+    if (!code?.trim()) return null
+
+    // Match trigger([...]) or trigger([...], { ... }) - use non-greedy to stop at first ]
+    const match = code.match(
+        /trigger\s*\(\s*\[([\s\S]*?)\]\s*(?:,\s*(\{[^}]*\}))?\s*\)/
+    )
+    if (!match) return null
+
+    const arrayContent = match[1].trim()
+    if (!arrayContent) return null
+
+    const steps: CustomHapticStep[] = []
+    const objectRegex = /\{\s*([^}]*)\s*\}/g
+    let objectMatch
+
+    while ((objectMatch = objectRegex.exec(arrayContent)) !== null) {
+        const innerContent = objectMatch[1]
+        const step: CustomHapticStep = {
+            duration: 30,
+            intensity: 0.7,
+            delay: 0,
+        }
+
+        const pairs = innerContent.split(",")
+        for (const pair of pairs) {
+            const colonIndex = pair.indexOf(":")
+            if (colonIndex === -1) continue
+            const key = pair.slice(0, colonIndex).trim()
+            const valueStr = pair.slice(colonIndex + 1).trim()
+            const value = parseFloat(valueStr)
+            if (key === "duration" && !isNaN(value)) step.duration = value
+            else if (key === "intensity" && !isNaN(value))
+                step.intensity = value
+            else if (key === "delay" && !isNaN(value)) step.delay = value
+        }
+
+        steps.push(step)
+    }
+
+    if (steps.length === 0) return null
+
+    const result: ParsedCustomPattern = { pattern: steps }
+
+    // Parse optional second argument: { intensity: 0.9 }
+    const optionsStr = match[2]
+    if (optionsStr) {
+        const optionsMatch = optionsStr.match(/intensity\s*:\s*([\d.]+)/)
+        if (optionsMatch) {
+            const intensity = parseFloat(optionsMatch[1])
+            if (!isNaN(intensity)) result.options = { intensity }
+        }
+    }
+
+    return result
 }
 
 addPropertyControls(Haptics, {
@@ -213,35 +176,46 @@ addPropertyControls(Haptics, {
     preset: {
         type: ControlType.Enum,
         title: "Preset",
-        options: ["success", "nudge", "error", "buzz", "selection", "light", "medium", "heavy"],
-        optionTitles: ["Success", "Nudge", "Error", "Buzz", "Selection", "Light", "Medium", "Heavy"],
+        options: [
+            "success",
+            "nudge",
+            "error",
+            "buzz",
+            "selection",
+            "light",
+            "medium",
+            "heavy",
+        ],
+        optionTitles: [
+            "Success",
+            "Nudge",
+            "Error",
+            "Buzz",
+            "Selection",
+            "Light",
+            "Medium",
+            "Heavy",
+        ],
         defaultValue: "success",
-        hidden: (props) => props.patternMode === "custom",
+        hidden: (props: HapticsPropertyControlsProps) =>
+            props.patternMode === "custom",
     },
     customPattern: {
         type: ControlType.String,
         title: "Value",
-        defaultValue: DEFAULT_CUSTOM_PATTERN,
-        displayTextArea: true,
-        description: "Create your custom haptic feedback [here](https://haptics.lochie.me/).",
-        hidden: (props) => props.patternMode === "preset",
-    },
-    onDesktop: {
-        type: ControlType.Enum,
-        title: "Desktop",
-        options: ["silent", "sound"],
-        optionTitles: ["Silent", "Play Sound"],
-        defaultValue: "silent",
-        displaySegmentedControl: true,
-        segmentedControlDirection: "vertical",
+        placeholder: DEFAULT_CUSTOM_PATTERN,
+        description: "Create your pattern [here](https://haptics.lochie.me/).",
+        hidden: (props: HapticsPropertyControlsProps) =>
+            props.patternMode === "preset",
     },
     debug: {
-        type: ControlType.Enum,
+        type: ControlType.Boolean,
         title: "Debug",
-        options: ["off", "canvas", "always"],
-        optionTitles: ["Off", "Canvas", "Always"],
-        defaultValue: "off",
-        description: "More components at [Framer University](https://frameruni.link/cc).",
+        enabledTitle: "Sound",
+        disabledTitle: "Off",
+        defaultValue: true,
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 

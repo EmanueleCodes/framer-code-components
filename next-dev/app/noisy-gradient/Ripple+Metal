@@ -1,0 +1,85 @@
+#include <metal_stdlib>
+#include <SwiftUI/SwiftUI.h>
+using namespace metal;
+
+float sdBox(float2 p, float2 b) {
+    float2 q = abs(p) - b;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0));
+}
+
+float sdRoundBox(float2 p, float2 b, float radius) {
+    float2 q = abs(p) - b + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+}
+
+float3 spectrum(float h) {
+    float3 blue = float3(0.2, 0.5, 1.0);
+    float3 purple = float3(0.7, 0.3, 1.0);
+    float3 yellow = float3(1.0, 0.9, 0.3);
+  
+    //Color cycle
+    float phase = fmod(h, 6.283185);
+  
+    float3 color;
+    if (phase < 2.094) {
+        color = mix(blue, purple, smoothstep(0.0, 2.094, phase));
+    } else if (phase < 4.188) {
+        color = mix(purple, yellow, smoothstep(2.094, 4.188, phase));
+    } else {
+        color = mix(yellow, blue, smoothstep(4.188, 6.283, phase));
+    }
+    
+    return mix(color, float3(1.0), 0.6);
+}
+
+[[ stitchable ]] half4 sdfdistort(float2 pos, SwiftUI::Layer l, float4 boundingRect, float progress, float strength, float time) {
+    float2 size = boundingRect.zw;
+    float2 uv = pos / size;
+    float2 center = float2(0.5, 0.5);
+    
+    float2 p = uv - center;
+    float aspect = size.x / size.y;
+    p.x *= aspect;
+        
+    float2 growthOrigin = float2(strength, 0.0);
+    float distFromOrigin = distance(p, growthOrigin);
+    
+    //Subtle Ripple from Origin
+    float rippleFreq = 15.0;
+    float rippleSpeed = 10.0;
+    float rippleAmp = 0.035;
+    
+    float rippleValue = distFromOrigin * rippleFreq - progress * rippleSpeed;
+    float ripple = sin(rippleValue) * rippleAmp;
+    
+    float falloff = exp(-distFromOrigin * 3.0);
+    ripple *= falloff;
+    float dampening = sin(progress * 3.14159265);
+    ripple *= dampening;
+    float brightness = cos(rippleValue) * 0.22 * falloff * dampening;
+
+    float2 rippleOffset = normalize(p - growthOrigin) * ripple;
+    
+    //Distortion + Ripple + SDF
+    float2 distortedP = p - rippleOffset;
+    float angle = atan2(distortedP.y, distortedP.x);
+    float wobble = sin(angle * 4.0 + time * 3.0) * 0.0052;
+    float d = sdRoundBox(distortedP, float2(0.5), 0.04) + wobble;
+    
+    float2 uvRipple = rippleOffset;
+    uvRipple.x /= aspect;
+    half4 color = l.sample((uv - uvRipple) * size);
+    
+    float maxDist = distance(float2(-aspect * 0.5, 0.5), growthOrigin);
+    float revealRadius = maxDist * clamp(progress, 0.0, 1.0);
+    float revealFeather = 0.15;
+    float reveal = 1.0 - smoothstep(revealRadius, revealRadius + revealFeather, distFromOrigin);
+    
+    float border = 1.0 - smoothstep(0.0, 0.04, abs(d));
+    float borderReveal = border * reveal;
+    
+    float3 borderColor = spectrum(rippleValue * 0.4 + time * 0.5);
+    
+    color.rgb += half3(brightness);
+    color.rgb = mix(color.rgb, half3(borderColor), half(borderReveal * progress));
+    return color;

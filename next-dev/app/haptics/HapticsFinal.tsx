@@ -1,11 +1,7 @@
-/**
- * Haptics – invisible Framer component for haptic feedback on mobile (iOS & Android).
- * Place inside a frame; when the frame’s parent (grandparent of this component) is
- * clicked, the configured haptic pattern runs. Uses web-haptics (https://haptics.lochie.me/).
- */
-import React, { useEffect, useRef, useState } from "react"
-import { addPropertyControls, ControlType } from "framer"
-import { WebHaptics } from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/haptics.js"
+import { useWebHaptics } from "./Sub/Bundle.tsx";
+import { addPropertyControls, ControlType, RenderTarget } from "framer";
+import { useEffect, useRef, useCallback } from "react";
+import { HapticsPreset, PRESET_TRIGGERS } from "./Sub/Presets";
 
 type PresetName =
     | "success"
@@ -214,4 +210,4 @@ addPropertyControls(Haptics, {
     },
 })
 
-Haptics.displayName = "Haptics"
+Haptics.displayName = "Mobile Haptics"

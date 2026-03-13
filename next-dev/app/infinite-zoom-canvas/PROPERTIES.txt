@@ -1,0 +1,37 @@
+Infinite Zoom Canvas - Property Controls
+
+Preview
+Whether the scroll-driven zoom runs in the Framer canvas. On / Off.
+
+Items
+Component instances (e.g. 2 frames). Each is repeated by Duplication.
+
+Duplication
+How many copies of the set of Items. Total cards = Items × Duplication (e.g. 2 × 2 = 4 cards), distributed evenly along the scroll.
+
+Seed
+0–20. Same seed always gives the same random positions for x and y.
+
+Placement (Placement Zone)
+Min / Max: radii as % of half-diagonal. Images are placed in the ring between these radii (center excluded inside Min).
+
+Start At
+Where scroll animation starts: Top, Center, or Bottom.
+
+Distance
+Scroll distance in pixels over which the camera moves through the tunnel.
+
+Depth
+Total depth range (Z) of the tunnel. Cards are spread evenly from 0 to Depth.
+
+Smoothing
+0 = super reactive, 1 = nicely smoothed (camera follow).
+
+Fade At
+Depth at which cards start fading in (far away).
+
+Fade In
+How many pixels the fade-in lasts.
+
+Debug
+More components at [Framer University](https://frameruni.link/cc).
