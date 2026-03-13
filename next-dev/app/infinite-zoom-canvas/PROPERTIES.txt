@@ -33,5 +33,8 @@ Depth at which cards start fading in (far away).
 Fade In
 How many pixels the fade-in lasts.
 
+Hit
+Which layer receives pointer events when several overlap. Back = rearmost (visible cards behind others get hover/click). Front = topmost only (default browser behavior).
+
 Debug
 More components at [Framer University](https://frameruni.link/cc).

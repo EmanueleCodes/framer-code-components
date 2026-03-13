@@ -58,6 +58,8 @@ function initCards(
     })
 }
 
+const CARD_DATA_ATTR = "data-card-index"
+
 interface InfiniteZoomCanvasProps {
     preview: boolean
     content: React.ReactNode[]
@@ -94,6 +96,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         fadeStart = 800,
         fadeEnd = 100,
         smoothing = 1,
+        debug = false,
         style,
     } = props
 
@@ -142,6 +145,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     const cameraZRef = useRef(0)
     const rafRef = useRef<number>(0)
     const [cameraZ, setCameraZ] = useState(0)
+    const [hoveredCardIndex, setHoveredCardIndex] = useState<number | null>(null)
 
     const findStickyParent = useCallback(
         (el: HTMLElement): HTMLElement | null => {
@@ -170,6 +174,105 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         },
         [findStickyParent]
     )
+
+    useEffect(() => {
+        if (!debug || !containerRef.current) return
+        let lastLog = 0
+        const LOG_THROTTLE_MS = 150
+
+        function findCardWrapper(el: Element | null): HTMLElement | null {
+            const container = containerRef.current
+            let current: Element | null = el
+            while (current && current !== container) {
+                if (current.getAttribute(CARD_DATA_ATTR) != null)
+                    return current as HTMLElement
+                current = current.parentElement
+            }
+            return null
+        }
+
+        function logCursorHitTest(e: PointerEvent) {
+            const container = containerRef.current
+            if (!container) return
+            const rect = container.getBoundingClientRect()
+            const x = e.clientX
+            const y = e.clientY
+            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                setHoveredCardIndex(null)
+                return
+            }
+
+            const now = Date.now()
+            if (now - lastLog < LOG_THROTTLE_MS) return
+            lastLog = now
+
+            const depths = depthByCardRef.current
+            const wrappers = cardWrapperRefs.current
+
+            const topEl = document.elementFromPoint(x, y)
+            const topWrapper = findCardWrapper(topEl)
+            const topCardIdx = topWrapper?.getAttribute?.(CARD_DATA_ATTR)
+            const topIndex = topCardIdx != null ? parseInt(topCardIdx, 10) : null
+
+            const stack: { index: number; depth: number; opacity: number }[] = []
+            let el: Element | null = topEl
+            const restored: { el: HTMLElement; value: string }[] = []
+            while (el) {
+                const wrapper = findCardWrapper(el)
+                if (!wrapper) break
+                const idx = wrapper.getAttribute(CARD_DATA_ATTR)
+                if (idx === null) break
+                const i = parseInt(idx, 10)
+                if (Number.isNaN(i)) break
+                const depth = depths[i] ?? 0
+                const opacity = parseFloat(getComputedStyle(wrapper).opacity)
+                stack.push({
+                    index: i,
+                    depth,
+                    opacity,
+                })
+                restored.push({ el: wrapper, value: wrapper.style.pointerEvents || "" })
+                wrapper.style.pointerEvents = "none"
+                el = document.elementFromPoint(x, y)
+            }
+            for (const { el: w, value } of restored) {
+                w.style.pointerEvents = value
+            }
+
+            const receiverIndex = stack[0]?.index ?? null
+            const receiverZ = stack[0]
+            setHoveredCardIndex(receiverIndex)
+
+            const depthInfo =
+                receiverZ != null
+                    ? ` | depth ${Math.round(receiverZ.depth)}`
+                    : ""
+            console.log(
+                `[InfiniteZoomCanvas] Cursor (${Math.round(x)}, ${Math.round(y)}): card index ${receiverIndex ?? "none"} receives hover${depthInfo}${stack.length > 1 ? ` (${stack.length - 1} layer(s) behind)` : ""}`
+            )
+            console.groupCollapsed("  → stack details")
+            console.log(
+                "Element under cursor:",
+                topEl?.tagName,
+                topEl?.className || "(no class)",
+                topWrapper ? `→ inside card ${topIndex}` : "(not inside a card)"
+            )
+            if (stack.length > 0) {
+                stack.forEach((s, i) => {
+                    console.log(
+                        `  ${i + 1}. Card ${s.index} | depth ${Math.round(s.depth)} | opacity ${s.opacity.toFixed(2)}${i === 0 ? " ← RECEIVES EVENTS" : " (blocked)"}`
+                    )
+                })
+            }
+            console.groupEnd()
+        }
+
+        window.addEventListener("pointermove", logCursorHitTest, { passive: true })
+        return () => {
+            window.removeEventListener("pointermove", logCursorHitTest)
+            setHoveredCardIndex(null)
+        }
+    }, [debug])
 
     useEffect(() => {
         if (!containerRef.current) return
@@ -261,6 +364,10 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     })
     depthByCardRef.current = cardState.map((s) => s.depth)
 
+    // Offset to keep all cards at Z >= 1 for hit-testing (browsers ignore Z <= 0)
+    // We add this offset to depth, then subtract it via the container's translateZ
+    const zOffset = Math.max(...cardState.map((s) => s.depth), 0) + 1
+
     return (
         <div
             ref={containerRef}
@@ -279,28 +386,35 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
                     position: "absolute",
                     inset: 0,
                     transformStyle: "preserve-3d",
+                    transform: `translateZ(${-zOffset}px)`,
                 }}
             >
                 {cardState.map(({ card, depth, opacity }, i) => {
                     const instance = content[card.contentIndex]
                     if (!instance) return null
+                    // Card Z in container space: zOffset - depth (always >= 1)
+                    // Container is moved back by -zOffset, so net visual Z = -depth (same as before)
+                    const zPos = zOffset - depth
                     return (
                         <div
                             key={i}
                             ref={(el) => {
                                 if (el) cardWrapperRefs.current[i] = el
                             }}
+                            {...{ [CARD_DATA_ATTR]: i }}
                             style={{
                                 position: "absolute",
                                 left: `${card.x}%`,
                                 top: `${card.y}%`,
-                                transform: `translate(-50%, -50%) translateZ(${-depth}px)`,
+                                transform: `translate(-50%, -50%) translateZ(${zPos}px)`,
                                 transformOrigin: "center center",
                                 opacity,
-                                zIndex: Math.round(-depth),
-                                pointerEvents: opacity > 0.1 ? "auto" : "none",
+                                pointerEvents: opacity > 0 ? "auto" : "none",
                                 willChange: "transform, opacity",
                                 backfaceVisibility: "hidden",
+                                ...(debug && hoveredCardIndex === i
+                                    ? { outline: "4px solid red", outlineOffset: 2 }
+                                    : {}),
                             }}
                         >
                             {instance}
