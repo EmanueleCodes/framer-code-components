@@ -12,23 +12,23 @@ Paste SVG code directly (when Type is Code).
 Color
 Stroke color.
 
+Stroke
+Group: Start and End trim the visible segment along the path (0–100). Width is stroke thickness. The component eases these toward new values over Duration when they change (canvas preview snaps).
+
 Start
-Trim along the path: start of the visible segment (0–100). Bind to variants; the component eases toward new values over Duration (Framer often snaps stroke props).
+Start of the visible segment (0 = path start).
 
 End
-Trim along the path: end of the visible segment (0–100).
+End of the visible segment (100 = path end).
 
 Width
-Stroke width in pixels (single value). Eased with Start/End when it changes.
+Stroke width in user units.
 
-Duration
-Seconds to ease Start, End, and Width when they change (0 = instant). Ease-out cubic. On the Framer canvas, values snap so the editor stays light.
+Transition
+Tween or spring when Stroke changes (duration, ease, delay; or spring physics when type is Spring with no duration). Framer canvas snaps to targets.
 
 Cap
 Line cap. Round, Butt, or Square.
 
 Join
-Line join. Round, Bevel, or Miter.
-
-Debug
-When On, logs draw snapshots to the console. If two different instance IDs alternate or values flicker A/B, check for duplicate layers or two components on the same frame. More components at [Framer University](https://frameruni.link/cc).
+Line join. Round, Bevel, or Miter. More components at [Framer University](https://frameruni.link/cc).

@@ -6,15 +6,13 @@ import {
     RenderTarget,
 } from "framer"
 
-/** Set to `false` when you are done debugging. Or in the browser console: `window.__SVG_TRANSITION_DEBUG__ = false` */
-const SVG_TRANSITION_DEBUG = true
-
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
-/** Path trim along length, 0–100 (variant-interpolatable in Framer). */
-export interface StrokeTrim {
+/** Trim (0–100) and stroke width; eased internally when props change. */
+export interface SvgStroke {
     start?: number
     end?: number
+    width?: number
 }
 
 function clampPct(n: number): number {
@@ -22,16 +20,107 @@ function clampPct(n: number): number {
     return Math.max(0, Math.min(100, n))
 }
 
-function normalizeStroke(s?: StrokeTrim): { start: number; end: number } {
+function normalizeTrim(s?: Pick<SvgStroke, "start" | "end">): {
+    start: number
+    end: number
+} {
     return {
         start: clampPct(s?.start ?? 0),
         end: clampPct(s?.end ?? 100),
     }
 }
 
-function easeOutCubic(t: number): number {
+function normalizeStrokeWidth(w?: number): number {
+    if (typeof w !== "number" || Number.isNaN(w)) return 2
+    return Math.max(0, w)
+}
+
+/** Framer `ControlType.Transition` value. */
+export interface SvgStrokeTransition {
+    type?: "tween" | "spring" | "keyframes" | "inertia"
+    duration?: number
+    ease?: string | number[]
+    delay?: number
+    stiffness?: number
+    damping?: number
+    mass?: number
+    bounce?: number
+    restDelta?: number
+    restSpeed?: number
+}
+
+const DEFAULT_TRANSITION: SvgStrokeTransition = {
+    type: "tween",
+    duration: 0.5,
+    ease: "easeOut",
+}
+
+function cubicBezierAt(
+    t: number,
+    a: number,
+    b: number,
+    c: number,
+    d: number
+): number {
+    const u = 1 - t
+    const t2 = t * t
+    const t3 = t2 * t
+    const u2 = u * u
+    const u3 = u2 * u
+    return 3 * u2 * t * b + 3 * u * t2 * c + t3 * d
+}
+
+/** Map linear t in [0,1] to eased progress (Framer ease name or cubic-bezier). */
+function applyEase(t: number, ease: string | number[] | undefined): number {
     const x = clamp01(t)
-    return 1 - (1 - x) ** 3
+    if (ease == null) return x
+    if (typeof ease === "string") {
+        switch (ease) {
+            case "linear":
+                return x
+            case "easeIn":
+                return x * x
+            case "easeOut":
+                return x * (2 - x)
+            case "easeInOut":
+                return x < 0.5 ? 2 * x * x : -1 + (4 - 2 * x) * x
+            default:
+                return x
+        }
+    }
+    if (Array.isArray(ease) && ease.length >= 4) {
+        const [x1, y1, x2, y2] = ease
+        let lo = 0
+        let hi = 1
+        for (let i = 0; i < 12; i++) {
+            const mid = (lo + hi) / 2
+            const bx = cubicBezierAt(mid, 0, x1, x2, 1)
+            if (bx < x) lo = mid
+            else hi = mid
+        }
+        const u = (lo + hi) / 2
+        return cubicBezierAt(u, 0, y1, y2, 1)
+    }
+    return x
+}
+
+const SPRING_POS_THRESHOLD = 0.0005
+const SPRING_VEL_THRESHOLD = 0.0005
+
+function springStep(
+    position: number,
+    velocity: number,
+    target: number,
+    stiffness: number,
+    damping: number,
+    mass: number,
+    dtSec: number
+): [number, number] {
+    const f = -stiffness * (position - target) - damping * velocity
+    const a = f / mass
+    const v = velocity + a * dtSec
+    const p = position + v * dtSec
+    return [p, v]
 }
 
 function isFramerCanvas(): boolean {
@@ -43,18 +132,22 @@ function isFramerCanvas(): boolean {
 }
 
 /** Dash pattern: visible only from start%→end% of path length (in path direction). */
-function segmentDash(L: number, startPct: number, endPct: number): { dasharray: string; dashoffset: number } {
-    if (L <= 0) return { dasharray: "1", dashoffset: 0 }
+function segmentDash(L: number, startPct: number, endPct: number): { dasharray: string; dashoffset: number; hide: boolean } {
+    if (L <= 0) return { dasharray: "none", dashoffset: 0, hide: true }
     const s = clamp01(startPct / 100)
     const e = clamp01(endPct / 100)
     const lo = Math.min(s, e)
     const hi = Math.max(s, e)
+    const dashLen = (hi - lo) * L
+    if (dashLen < 0.001) {
+        return { dasharray: "none", dashoffset: 0, hide: true }
+    }
     const gapBefore = lo * L
-    const dashLen = Math.max(0, (hi - lo) * L)
-    const gapAfter = (1 - hi) * L
+    const gapAfter = Math.max(0, (1 - hi) * L)
     return {
-        dasharray: `0 ${gapBefore} ${dashLen} ${gapAfter}`,
-        dashoffset: 0,
+        dasharray: `${dashLen} ${gapAfter + gapBefore}`,
+        dashoffset: -gapBefore,
+        hide: false,
     }
 }
 
@@ -164,9 +257,10 @@ const FALLBACK_SVG = `
 </svg>
 `
 
-const DEFAULT_STROKE_TRIM: StrokeTrim = {
+const DEFAULT_STROKE: SvgStroke = {
     start: 0,
     end: 100,
+    width: 2,
 }
 
 interface SvgTransitionProps {
@@ -174,19 +268,11 @@ interface SvgTransitionProps {
     svgCode?: string
     inputType?: "file" | "code"
     strokeColor?: string
-    strokeWidth?: number
-    /** Path trim start 0–100. Top-level numbers tween between variants; prefer over nested `stroke`. */
-    trimStart?: number
-    /** Path trim end 0–100. */
-    trimEnd?: number
-    /** Legacy: Framer often does not interpolate nested objects between variants — use Trim Start/End. */
-    stroke?: StrokeTrim
+    stroke?: SvgStroke
     lineCap?: "round" | "butt" | "square"
     lineJoin?: "round" | "bevel" | "miter"
-    /** Seconds to ease trim + width when props change (0 = snap). */
-    drawDuration?: number
-    /** Log prop / layout changes to the console (same as SVG_TRANSITION_DEBUG in code). */
-    debug?: boolean
+    /** Tween or spring when Stroke targets change. */
+    transition?: SvgStrokeTransition
     style?: React.CSSProperties
 }
 
@@ -203,45 +289,35 @@ export default function SvgTransition(props: SvgTransitionProps) {
         svgCode,
         inputType = "file",
         strokeColor = "#fc5025",
-        strokeWidth = 2,
-        trimStart,
-        trimEnd,
         stroke: strokeProp,
         lineCap = "round",
         lineJoin = "round",
-        drawDuration = 0.5,
-        debug: debugProp,
+        transition: transitionProp,
         style,
     } = props
 
-    const debugOn =
-        SVG_TRANSITION_DEBUG &&
-        debugProp !== false &&
-        (typeof window === "undefined" ||
-            (window as unknown as { __SVG_TRANSITION_DEBUG__?: boolean })
-                .__SVG_TRANSITION_DEBUG__ !== false)
-
-    const instanceIdRef = useRef(
-        `i-${Math.random().toString(36).slice(2, 9)}`
-    )
-    const debugOnRef = useRef(debugOn)
-    debugOnRef.current = debugOn
-
-    const log = (...args: unknown[]) => {
-        if (!debugOnRef.current) return
-        // eslint-disable-next-line no-console
-        console.log("[SvgTransition]", instanceIdRef.current, ...args)
+    const transition: SvgStrokeTransition = {
+        ...DEFAULT_TRANSITION,
+        ...transitionProp,
     }
 
-    // Prop targets (Framer may jump these; we ease in draw state below).
-    const strokeTarget = normalizeStroke({
-        start: trimStart ?? strokeProp?.start ?? DEFAULT_STROKE_TRIM.start,
-        end: trimEnd ?? strokeProp?.end ?? DEFAULT_STROKE_TRIM.end,
+    const transitionKey = useMemo(
+        () =>
+            JSON.stringify({
+                ...DEFAULT_TRANSITION,
+                ...(transitionProp ?? {}),
+            }),
+        [transitionProp]
+    )
+
+    const mergedStroke = { ...DEFAULT_STROKE, ...strokeProp }
+
+    // Prop targets (Framer may jump the object; we ease in draw state below).
+    const strokeTarget = normalizeTrim({
+        start: mergedStroke.start,
+        end: mergedStroke.end,
     })
-    const widthTarget =
-        typeof strokeWidth === "number" && !Number.isNaN(strokeWidth)
-            ? Math.max(0, strokeWidth)
-            : 2
+    const widthTarget = normalizeStrokeWidth(mergedStroke.width)
 
     const [draw, setDraw] = useState({
         start: strokeTarget.start,
@@ -273,14 +349,6 @@ export default function SvgTransition(props: SvgTransitionProps) {
             return
         }
 
-        const durationSec = Math.max(0, drawDuration)
-        const durationMs = durationSec * 1000
-        if (durationMs <= 0) {
-            cancelRaf()
-            setDraw(to)
-            return
-        }
-
         const from = drawRef.current
         if (
             Math.abs(from.start - to.start) < 1e-9 &&
@@ -291,17 +359,78 @@ export default function SvgTransition(props: SvgTransitionProps) {
         }
 
         cancelRaf()
+
+        const tr = transition
+        const usePhysicsSpring =
+            tr.type === "spring" && tr.duration === undefined
+
+        if (usePhysicsSpring) {
+            const stiffness = tr.stiffness ?? 300
+            const damping = tr.damping ?? 30
+            const mass = tr.mass ?? 1
+            let s0 = from.start
+            let s1 = from.end
+            let sw = from.width
+            let v0 = 0
+            let v1 = 0
+            let vw = 0
+            let last = performance.now()
+
+            const step = (now: number) => {
+                const dt = Math.min(0.064, Math.max(0.001, (now - last) / 1000))
+                last = now
+                ;[s0, v0] = springStep(s0, v0, to.start, stiffness, damping, mass, dt)
+                ;[s1, v1] = springStep(s1, v1, to.end, stiffness, damping, mass, dt)
+                ;[sw, vw] = springStep(sw, vw, to.width, stiffness, damping, mass, dt)
+                setDraw({ start: s0, end: s1, width: sw })
+
+                const restD = tr.restDelta ?? SPRING_POS_THRESHOLD
+                const restS = tr.restSpeed ?? SPRING_VEL_THRESHOLD
+                const settled =
+                    Math.abs(s0 - to.start) < restD &&
+                    Math.abs(v0) < restS &&
+                    Math.abs(s1 - to.end) < restD &&
+                    Math.abs(v1) < restS &&
+                    Math.abs(sw - to.width) < restD &&
+                    Math.abs(vw) < restS
+
+                if (settled) {
+                    setDraw(to)
+                    animRafRef.current = 0
+                } else {
+                    animRafRef.current = requestAnimationFrame(step)
+                }
+            }
+            animRafRef.current = requestAnimationFrame(step)
+            return cancelRaf
+        }
+
+        const durationSec = Math.max(0, tr.duration ?? DEFAULT_TRANSITION.duration ?? 0.5)
+        const durationMs = durationSec * 1000
+        const delayMs = Math.max(0, (tr.delay ?? 0) * 1000)
+
+        if (durationMs <= 0) {
+            setDraw(to)
+            return
+        }
+
         const t0 = performance.now()
 
         const step = (now: number) => {
-            const t = Math.min(1, (now - t0) / durationMs)
-            const e = easeOutCubic(t)
+            const elapsed = now - t0 - delayMs
+            if (elapsed < 0) {
+                setDraw(from)
+                animRafRef.current = requestAnimationFrame(step)
+                return
+            }
+            const u = Math.min(1, elapsed / durationMs)
+            const e = applyEase(u, tr.ease)
             setDraw({
                 start: from.start + (to.start - from.start) * e,
                 end: from.end + (to.end - from.end) * e,
                 width: from.width + (to.width - from.width) * e,
             })
-            if (t < 1) {
+            if (u < 1) {
                 animRafRef.current = requestAnimationFrame(step)
             } else {
                 animRafRef.current = 0
@@ -314,43 +443,14 @@ export default function SvgTransition(props: SvgTransitionProps) {
         strokeTarget.start,
         strokeTarget.end,
         widthTarget,
-        drawDuration,
+        transitionKey,
     ])
-
-    const lastSnapshotRef = useRef<string>("")
-    const renderCountRef = useRef(0)
-    renderCountRef.current += 1
 
     const [svgPaths, setSvgPaths] = useState<string[]>([])
     const [pathLengths, setPathLengths] = useState<number[]>([])
     const [pathBounds, setPathBounds] = useState<PathBounds | null>(null)
 
     const viewBox = useMemo(() => viewBoxFromPathBounds(pathBounds), [pathBounds])
-
-    // Log whenever the *effective* draw inputs change (catches missing Framer interpolation).
-    if (debugOn) {
-        const snapshot = JSON.stringify({
-            r: renderCountRef.current,
-            trimStart: trimStart ?? null,
-            trimEnd: trimEnd ?? null,
-            strokeRaw: strokeProp ?? null,
-            targetStart: strokeTarget.start,
-            targetEnd: strokeTarget.end,
-            targetWidth: widthTarget,
-            drawStart: draw.start,
-            drawEnd: draw.end,
-            drawWidth: draw.width,
-            viewBox,
-            pathBounds,
-            pathCount: svgPaths.length,
-            firstLen: pathLengths[0] ?? 0,
-        })
-        if (snapshot !== lastSnapshotRef.current) {
-            lastSnapshotRef.current = snapshot
-            // eslint-disable-next-line no-console
-            console.log("[SvgTransition]", instanceIdRef.current, "draw snapshot", JSON.parse(snapshot))
-        }
-    }
 
     useEffect(() => {
         let cancelled = false
@@ -404,32 +504,15 @@ export default function SvgTransition(props: SvgTransitionProps) {
         }
     }, [inputType, svgFile, svgCode])
 
-    useEffect(() => {
-        if (!debugOn) return
-        log("mounted")
-        return () => log("unmounted")
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- log is stable; only re-run when debug toggles
-    }, [debugOn])
-
-    useEffect(() => {
-        if (!debugOn) return
-        log("paths updated", {
-            count: svgPaths.length,
-            lengths: pathLengths.slice(0, 3),
-            lengthsSum: pathLengths.reduce((a, b) => a + b, 0),
-            pathBounds,
-            viewBox,
-        })
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [svgPaths, pathLengths, debugOn])
-
     const pathElements = svgPaths.map((pathData, pathIndex) => {
         const pathLength = pathLengths[pathIndex] ?? 0
-        const { dasharray, dashoffset } = segmentDash(
+        const { dasharray, dashoffset, hide } = segmentDash(
             pathLength,
             draw.start,
             draw.end
         )
+
+        if (hide) return null
 
         return (
             <path
@@ -474,13 +557,14 @@ const svgTransitionDefaultProps: Partial<SvgTransitionProps> = {
     svgCode: "",
     inputType: "file",
     strokeColor: "#fc5025",
-    strokeWidth: 2,
-    trimStart: 0,
-    trimEnd: 100,
+    stroke: { start: 0, end: 100, width: 2 },
     lineCap: "round",
     lineJoin: "round",
-    drawDuration: 0.5,
-    debug: false,
+    transition: {
+        type: "tween",
+        duration: 0.5,
+        ease: "easeOut",
+    },
 }
 SvgTransition.defaultProps = svgTransitionDefaultProps
 
@@ -510,38 +594,44 @@ addPropertyControls(SvgTransition, {
         title: "Color",
         defaultValue: "#fc5025",
     },
-    trimStart: {
-        type: ControlType.Number,
-        title: "Start",
-        min: 0,
-        max: 100,
-        step: 1,
-        defaultValue: 0,
+    stroke: {
+        type: ControlType.Object,
+        title: "Stroke",
+        controls: {
+            start: {
+                type: ControlType.Number,
+                title: "Start",
+                min: 0,
+                max: 100,
+                step: 1,
+                defaultValue: 0,
+            },
+            end: {
+                type: ControlType.Number,
+                title: "End",
+                min: 0,
+                max: 100,
+                step: 1,
+                defaultValue: 100,
+            },
+            width: {
+                type: ControlType.Number,
+                title: "Width",
+                min: 0,
+                max: 1000,
+                step: 0.5,
+                defaultValue: 2,
+            },
+        },
     },
-    trimEnd: {
-        type: ControlType.Number,
-        title: "End",
-        min: 0,
-        max: 100,
-        step: 1,
-        defaultValue: 100,
-    },
-    strokeWidth: {
-        type: ControlType.Number,
-        title: "Width",
-        min: 0,
-        max: 1000,
-        step: 0.5,
-        defaultValue: 2,
-    },
-    drawDuration: {
-        type: ControlType.Number,
-        title: "Duration",
-        min: 0,
-        max: 5,
-        step: 0.05,
-        defaultValue: 0.5,
-        displayStepper: true,
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: {
+            type: "tween",
+            duration: 0.5,
+            ease: "easeOut",
+        },
     },
     lineCap: {
         type: ControlType.Enum,
@@ -556,15 +646,8 @@ addPropertyControls(SvgTransition, {
         options: ["round", "bevel", "miter"],
         optionTitles: ["Round", "Bevel", "Miter"],
         defaultValue: "round",
-    },
-    debug: {
-        type: ControlType.Boolean,
-        title: "Debug",
-        defaultValue: false,
-        enabledTitle: "On",
-        disabledTitle: "Off",
         description:
-            "Console logs for trim/viewBox. More components at [Framer University](https://frameruni.link/cc).",
+            "More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 
