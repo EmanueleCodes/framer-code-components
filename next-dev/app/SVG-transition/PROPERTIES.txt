@@ -10,28 +10,25 @@ Code
 Paste SVG code directly (when Type is Code).
 
 Color
-Stroke color for the path animation.
+Stroke color.
 
 Start
-Starting stroke width in pixels.
+Trim along the path: start of the visible segment (0–100). Bind to variants; the component eases toward new values over Duration (Framer often snaps stroke props).
 
 End
-Ending stroke width in pixels. Animates from Start to End during the transition on the published site.
+Trim along the path: end of the visible segment (0–100).
+
+Width
+Stroke width in pixels (single value). Eased with Start/End when it changes.
+
+Duration
+Seconds to ease Start, End, and Width when they change (0 = instant). Ease-out cubic. On the Framer canvas, values snap so the editor stays light.
 
 Cap
-Line cap style. Round, Butt, or Square.
+Line cap. Round, Butt, or Square.
 
 Join
-Line join style. Round, Bevel, or Miter.
+Line join. Round, Bevel, or Miter.
 
-Preview
-Static preview in the canvas (50% trim). Dynamic runs the transition.
-
-Mode
-Animation style. Forward draws the path (visible grows from path end). Backward erases the path (visible shrinks toward path end). Forward from start draws from the path's start point. Backward from start erases toward the path's start point. Hidden when Preview is Static.
-
-Transition
-Timing configuration for the animation. More components at [Framer University](https://frameruni.link/cc).
-
-Canvas
-In the Framer canvas, stroke thickness uses Start or End depending on which control you edited most recently (not a blend between them).
+Debug
+When On, logs draw snapshots to the console. If two different instance IDs alternate or values flicker A/B, check for duplicate layers or two components on the same frame. More components at [Framer University](https://frameruni.link/cc).

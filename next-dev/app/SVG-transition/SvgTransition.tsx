@@ -1,7 +1,75 @@
-import React, { useEffect, useLayoutEffect, useState, useRef } from "react"
-import { addPropertyControls, ControlType, FileControlDescription, RenderTarget } from "framer"
+import React, { useEffect, useMemo, useState, useRef } from "react"
+import {
+    addPropertyControls,
+    ControlType,
+    FileControlDescription,
+    RenderTarget,
+} from "framer"
+
+/** Set to `false` when you are done debugging. Or in the browser console: `window.__SVG_TRANSITION_DEBUG__ = false` */
+const SVG_TRANSITION_DEBUG = true
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
+
+/** Path trim along length, 0–100 (variant-interpolatable in Framer). */
+export interface StrokeTrim {
+    start?: number
+    end?: number
+}
+
+function clampPct(n: number): number {
+    if (typeof n !== "number" || Number.isNaN(n)) return 0
+    return Math.max(0, Math.min(100, n))
+}
+
+function normalizeStroke(s?: StrokeTrim): { start: number; end: number } {
+    return {
+        start: clampPct(s?.start ?? 0),
+        end: clampPct(s?.end ?? 100),
+    }
+}
+
+function easeOutCubic(t: number): number {
+    const x = clamp01(t)
+    return 1 - (1 - x) ** 3
+}
+
+function isFramerCanvas(): boolean {
+    try {
+        return RenderTarget.current() === RenderTarget.canvas
+    } catch {
+        return false
+    }
+}
+
+/** Dash pattern: visible only from start%→end% of path length (in path direction). */
+function segmentDash(L: number, startPct: number, endPct: number): { dasharray: string; dashoffset: number } {
+    if (L <= 0) return { dasharray: "1", dashoffset: 0 }
+    const s = clamp01(startPct / 100)
+    const e = clamp01(endPct / 100)
+    const lo = Math.min(s, e)
+    const hi = Math.max(s, e)
+    const gapBefore = lo * L
+    const dashLen = Math.max(0, (hi - lo) * L)
+    const gapAfter = (1 - hi) * L
+    return {
+        dasharray: `0 ${gapBefore} ${dashLen} ${gapAfter}`,
+        dashoffset: 0,
+    }
+}
+
+/** Union of all path outlines in SVG user space (ignores trim — stable framing). */
+export type PathBounds = { x: number; y: number; width: number; height: number }
+
+/** Padding from geometry only — do not pass animated strokeWidth or the frame “breathes” during transitions. */
+function viewBoxFromPathBounds(bounds: PathBounds | null): string {
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return "0 0 100 100"
+    const m = Math.max(bounds.width, bounds.height)
+    const basePad = Math.max(2, Math.min(64, m * 0.1))
+    const slack = Math.max(6, Math.min(120, m * 0.18))
+    const pad = basePad + slack
+    return `${bounds.x - pad} ${bounds.y - pad} ${bounds.width + pad * 2} ${bounds.height + pad * 2}`
+}
 
 const extractPathsFromSVG = (
     svgContent: string
@@ -11,6 +79,7 @@ const extractPathsFromSVG = (
     longestPathLength: number
     maxPathWidth: number
     maxPathHeight: number
+    pathBounds: PathBounds | null
 } => {
     const parser = new DOMParser()
     const svgDoc = parser.parseFromString(svgContent, "image/svg+xml")
@@ -24,6 +93,7 @@ const extractPathsFromSVG = (
     let longestPathLength = 0
     let maxPathWidth = 0
     let maxPathHeight = 0
+    let pathBounds: PathBounds | null = null
 
     if (pathElements.length > 0) {
         const tempSvg = document.createElementNS(
@@ -49,12 +119,43 @@ const extractPathsFromSVG = (
             const boundingBox = tempPath.getBBox()
             maxPathWidth = Math.max(maxPathWidth, boundingBox.width)
             maxPathHeight = Math.max(maxPathHeight, boundingBox.height)
+
+            const minX = boundingBox.x
+            const minY = boundingBox.y
+            const maxX = boundingBox.x + boundingBox.width
+            const maxY = boundingBox.y + boundingBox.height
+            if (!pathBounds) {
+                pathBounds = {
+                    x: minX,
+                    y: minY,
+                    width: maxX - minX,
+                    height: maxY - minY,
+                }
+            } else {
+                const uMinX = Math.min(pathBounds.x, minX)
+                const uMinY = Math.min(pathBounds.y, minY)
+                const uMaxX = Math.max(pathBounds.x + pathBounds.width, maxX)
+                const uMaxY = Math.max(pathBounds.y + pathBounds.height, maxY)
+                pathBounds = {
+                    x: uMinX,
+                    y: uMinY,
+                    width: uMaxX - uMinX,
+                    height: uMaxY - uMinY,
+                }
+            }
         })
 
         document.body.removeChild(tempSvg)
     }
 
-    return { paths, lengths, longestPathLength, maxPathWidth, maxPathHeight }
+    return {
+        paths,
+        lengths,
+        longestPathLength,
+        maxPathWidth,
+        maxPathHeight,
+        pathBounds,
+    }
 }
 
 const FALLBACK_SVG = `
@@ -63,113 +164,9 @@ const FALLBACK_SVG = `
 </svg>
 `
 
-interface TransitionConfig {
-    type?: "tween" | "spring" | "keyframes" | "inertia"
-    duration?: number
-    ease?: string | number[]
-    delay?: number
-    stiffness?: number
-    damping?: number
-    mass?: number
-    bounce?: number
-}
-
-function cubicBezierAt(t: number, a: number, b: number, c: number, d: number): number {
-    const u = 1 - t
-    const t2 = t * t
-    const t3 = t2 * t
-    const u2 = u * u
-    return 3 * u2 * t * b + 3 * u * t2 * c + t3 * d
-}
-
-const SPRING_POS_THRESHOLD = 0.0005
-const SPRING_VEL_THRESHOLD = 0.0005
-
-function springStep(
-    position: number,
-    velocity: number,
-    target: number,
-    stiffness: number,
-    damping: number,
-    mass: number,
-    dtSec: number
-): [number, number] {
-    const f = -stiffness * (position - target) - damping * velocity
-    const a = f / mass
-    const v = velocity + a * dtSec
-    const p = position + v * dtSec
-    return [p, v]
-}
-
-function applyEase(t: number, ease: string | number[] | undefined): number {
-    if (ease == null) return t
-    if (typeof ease === "string") {
-        switch (ease) {
-            case "linear":
-                return t
-            case "easeIn":
-                return t * t
-            case "easeOut":
-                return t * (2 - t)
-            case "easeInOut":
-                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
-            default:
-                return t
-        }
-    }
-    if (Array.isArray(ease) && ease.length >= 4) {
-        const [x1, y1, x2, y2] = ease
-        let lo = 0
-        let hi = 1
-        for (let i = 0; i < 12; i++) {
-            const mid = (lo + hi) / 2
-            const x = cubicBezierAt(mid, 0, x1, x2, 1)
-            if (x < t) lo = mid
-            else hi = mid
-        }
-        const u = (lo + hi) / 2
-        return cubicBezierAt(u, 0, y1, y2, 1)
-    }
-    return t
-}
-
-const DEFAULT_TRANSITION: TransitionConfig = {
-    type: "tween",
-    duration: 1,
-    ease: "easeOut",
-    delay: 0,
-}
-
-/**
- * Animation modes:
- * - forward:          Draw path from end → start (visible portion grows from path end)
- * - backward:         Erase path toward end (visible portion shrinks toward path end)
- * - forwardFromStart: Draw path from start → end (visible portion grows from path start)
- * - backwardFromStart: Erase path toward start (visible portion shrinks toward path start)
- */
-export type SvgTransitionMode =
-    | "forward"
-    | "backward"
-    | "forwardFromStart"
-    | "backwardFromStart"
-
-/** Returns true if this mode draws (reveals) the path, false if it erases (hides). */
-function isDrawMode(mode: SvgTransitionMode): boolean {
-    return mode === "forward" || mode === "forwardFromStart"
-}
-
-/** Returns true if the trim anchor is at the path start (negative offset direction). */
-function trimFromStart(mode: SvgTransitionMode): boolean {
-    return mode === "forwardFromStart" || mode === "backwardFromStart"
-}
-
-function resolveMode(props: {
-    mode?: SvgTransitionMode
-    animate?: "in" | "out"
-}): SvgTransitionMode {
-    if (props.mode) return props.mode
-    if (props.animate === "out") return "backward"
-    return "forward"
+const DEFAULT_STROKE_TRIM: StrokeTrim = {
+    start: 0,
+    end: 100,
 }
 
 interface SvgTransitionProps {
@@ -178,15 +175,18 @@ interface SvgTransitionProps {
     inputType?: "file" | "code"
     strokeColor?: string
     strokeWidth?: number
-    strokeWidthEnd?: number
+    /** Path trim start 0–100. Top-level numbers tween between variants; prefer over nested `stroke`. */
+    trimStart?: number
+    /** Path trim end 0–100. */
+    trimEnd?: number
+    /** Legacy: Framer often does not interpolate nested objects between variants — use Trim Start/End. */
+    stroke?: StrokeTrim
     lineCap?: "round" | "butt" | "square"
     lineJoin?: "round" | "bevel" | "miter"
-    /** Prefer this over legacy `animate`. */
-    mode?: SvgTransitionMode
-    /** @deprecated Use `mode` (forward / backward / …). */
-    animate?: "in" | "out"
-    transition?: TransitionConfig
-    preview?: boolean
+    /** Seconds to ease trim + width when props change (0 = snap). */
+    drawDuration?: number
+    /** Log prop / layout changes to the console (same as SVG_TRANSITION_DEBUG in code). */
+    debug?: boolean
     style?: React.CSSProperties
 }
 
@@ -204,70 +204,153 @@ export default function SvgTransition(props: SvgTransitionProps) {
         inputType = "file",
         strokeColor = "#fc5025",
         strokeWidth = 2,
-        strokeWidthEnd = 2,
+        trimStart,
+        trimEnd,
+        stroke: strokeProp,
         lineCap = "round",
         lineJoin = "round",
-        mode: modeProp,
-        animate: animateLegacy,
-        transition: transitionProp,
-        preview = false,
+        drawDuration = 0.5,
+        debug: debugProp,
         style,
     } = props
 
-    const mode = resolveMode({ mode: modeProp, animate: animateLegacy })
+    const debugOn =
+        SVG_TRANSITION_DEBUG &&
+        debugProp !== false &&
+        (typeof window === "undefined" ||
+            (window as unknown as { __SVG_TRANSITION_DEBUG__?: boolean })
+                .__SVG_TRANSITION_DEBUG__ !== false)
 
-    const transition: TransitionConfig = {
-        ...DEFAULT_TRANSITION,
-        ...transitionProp,
+    const instanceIdRef = useRef(
+        `i-${Math.random().toString(36).slice(2, 9)}`
+    )
+    const debugOnRef = useRef(debugOn)
+    debugOnRef.current = debugOn
+
+    const log = (...args: unknown[]) => {
+        if (!debugOnRef.current) return
+        // eslint-disable-next-line no-console
+        console.log("[SvgTransition]", instanceIdRef.current, ...args)
     }
 
-    const groupRef = useRef<SVGGElement>(null)
-    const svgRef = useRef<SVGSVGElement>(null)
-    const containerRef = useRef<HTMLDivElement>(null)
-    const zoomProbeRef = useRef<HTMLDivElement>(null)
+    // Prop targets (Framer may jump these; we ease in draw state below).
+    const strokeTarget = normalizeStroke({
+        start: trimStart ?? strokeProp?.start ?? DEFAULT_STROKE_TRIM.start,
+        end: trimEnd ?? strokeProp?.end ?? DEFAULT_STROKE_TRIM.end,
+    })
+    const widthTarget =
+        typeof strokeWidth === "number" && !Number.isNaN(strokeWidth)
+            ? Math.max(0, strokeWidth)
+            : 2
+
+    const [draw, setDraw] = useState({
+        start: strokeTarget.start,
+        end: strokeTarget.end,
+        width: widthTarget,
+    })
+    const drawRef = useRef(draw)
+    drawRef.current = draw
+
+    const animRafRef = useRef<number>(0)
+
+    useEffect(() => {
+        const to = {
+            start: strokeTarget.start,
+            end: strokeTarget.end,
+            width: widthTarget,
+        }
+
+        const cancelRaf = () => {
+            if (animRafRef.current) {
+                cancelAnimationFrame(animRafRef.current)
+                animRafRef.current = 0
+            }
+        }
+
+        if (isFramerCanvas()) {
+            cancelRaf()
+            setDraw(to)
+            return
+        }
+
+        const durationSec = Math.max(0, drawDuration)
+        const durationMs = durationSec * 1000
+        if (durationMs <= 0) {
+            cancelRaf()
+            setDraw(to)
+            return
+        }
+
+        const from = drawRef.current
+        if (
+            Math.abs(from.start - to.start) < 1e-9 &&
+            Math.abs(from.end - to.end) < 1e-9 &&
+            Math.abs(from.width - to.width) < 1e-9
+        ) {
+            return
+        }
+
+        cancelRaf()
+        const t0 = performance.now()
+
+        const step = (now: number) => {
+            const t = Math.min(1, (now - t0) / durationMs)
+            const e = easeOutCubic(t)
+            setDraw({
+                start: from.start + (to.start - from.start) * e,
+                end: from.end + (to.end - from.end) * e,
+                width: from.width + (to.width - from.width) * e,
+            })
+            if (t < 1) {
+                animRafRef.current = requestAnimationFrame(step)
+            } else {
+                animRafRef.current = 0
+            }
+        }
+
+        animRafRef.current = requestAnimationFrame(step)
+        return cancelRaf
+    }, [
+        strokeTarget.start,
+        strokeTarget.end,
+        widthTarget,
+        drawDuration,
+    ])
+
+    const lastSnapshotRef = useRef<string>("")
+    const renderCountRef = useRef(0)
+    renderCountRef.current += 1
 
     const [svgPaths, setSvgPaths] = useState<string[]>([])
     const [pathLengths, setPathLengths] = useState<number[]>([])
-    const [viewBox, setViewBox] = useState<string | undefined>(undefined)
-    const [computedStrokeWidth, setComputedStrokeWidth] = useState<number>(strokeWidth)
-    const [layoutScale, setLayoutScale] = useState(1)
-    const [maxPathWidth, setMaxPathWidth] = useState<number>(0)
-    const [maxPathHeight, setMaxPathHeight] = useState<number>(0)
+    const [pathBounds, setPathBounds] = useState<PathBounds | null>(null)
 
-    const [lastStrokeEdit, setLastStrokeEdit] = useState<"start" | "end">(
-        "start"
-    )
-    const prevStrokeWidthRef = useRef(strokeWidth)
-    const prevStrokeWidthEndRef = useRef(strokeWidthEnd)
+    const viewBox = useMemo(() => viewBoxFromPathBounds(pathBounds), [pathBounds])
 
-    useEffect(() => {
-        const wCh = strokeWidth !== prevStrokeWidthRef.current
-        const eCh = strokeWidthEnd !== prevStrokeWidthEndRef.current
-        if (wCh && eCh) {
-            setLastStrokeEdit("start")
-        } else if (wCh) {
-            setLastStrokeEdit("start")
-        } else if (eCh) {
-            setLastStrokeEdit("end")
+    // Log whenever the *effective* draw inputs change (catches missing Framer interpolation).
+    if (debugOn) {
+        const snapshot = JSON.stringify({
+            r: renderCountRef.current,
+            trimStart: trimStart ?? null,
+            trimEnd: trimEnd ?? null,
+            strokeRaw: strokeProp ?? null,
+            targetStart: strokeTarget.start,
+            targetEnd: strokeTarget.end,
+            targetWidth: widthTarget,
+            drawStart: draw.start,
+            drawEnd: draw.end,
+            drawWidth: draw.width,
+            viewBox,
+            pathBounds,
+            pathCount: svgPaths.length,
+            firstLen: pathLengths[0] ?? 0,
+        })
+        if (snapshot !== lastSnapshotRef.current) {
+            lastSnapshotRef.current = snapshot
+            // eslint-disable-next-line no-console
+            console.log("[SvgTransition]", instanceIdRef.current, "draw snapshot", JSON.parse(snapshot))
         }
-        prevStrokeWidthRef.current = strokeWidth
-        prevStrokeWidthEndRef.current = strokeWidthEnd
-    }, [strokeWidth, strokeWidthEnd])
-
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    const previewMatters = isCanvas
-
-    const initialProgress =
-        previewMatters && preview ? 0.5 : isDrawMode(mode) ? 0 : 1
-    const [progress, setProgress] = useState(initialProgress)
-    const prevPreviewRef = useRef(preview)
-    const progressRef = useRef(initialProgress)
-    progressRef.current = progress
-
-    const rafRef = useRef<number>(0)
-    const startTimeRef = useRef<number>(0)
-    const springVelocityRef = useRef(0)
-    const springPositionRef = useRef(0)
+    }
 
     useEffect(() => {
         let cancelled = false
@@ -275,11 +358,13 @@ export default function SvgTransition(props: SvgTransitionProps) {
         const setPathsAndLength = (
             paths: string[],
             lengths: number[],
-            _longest: number
+            _longest: number,
+            bounds: PathBounds | null
         ) => {
             if (!cancelled) {
                 setSvgPaths(paths)
                 setPathLengths(lengths)
+                setPathBounds(bounds)
             }
         }
 
@@ -291,23 +376,26 @@ export default function SvgTransition(props: SvgTransitionProps) {
                     setPathsAndLength(
                         result.paths,
                         result.lengths,
-                        result.longestPathLength
+                        result.longestPathLength,
+                        result.pathBounds
                     )
                 })
-                .catch(() => setPathsAndLength([], [], 0))
+                .catch(() => setPathsAndLength([], [], 0, null))
         } else if (inputType === "code" && svgCode) {
             const result = extractPathsFromSVG(svgCode)
             setPathsAndLength(
                 result.paths,
                 result.lengths,
-                result.longestPathLength
+                result.longestPathLength,
+                result.pathBounds
             )
         } else {
             const result = extractPathsFromSVG(FALLBACK_SVG)
             setPathsAndLength(
                 result.paths,
                 result.lengths,
-                result.longestPathLength
+                result.longestPathLength,
+                result.pathBounds
             )
         }
 
@@ -317,273 +405,38 @@ export default function SvgTransition(props: SvgTransitionProps) {
     }, [inputType, svgFile, svgCode])
 
     useEffect(() => {
-        if (previewMatters && preview) {
-            prevPreviewRef.current = true
-            setProgress(0.5)
-            return
-        }
-        if (previewMatters && prevPreviewRef.current) {
-            prevPreviewRef.current = false
-            setProgress(isDrawMode(mode) ? 0 : 1)
-            return
-        }
-
-        const durationSec = transition.duration ?? 1
-        const delaySec = transition.delay ?? 0
-        const ease = transition.ease
-        const isSpring = transition.type === "spring"
-        const stiffness = transition.stiffness ?? 100
-        const mass = transition.mass ?? 1
-        const bounce = transition.bounce ?? 0
-        const baseDamping = transition.damping ?? 10
-        const damping = baseDamping * (1 - bounce * 0.9)
-
-        const target = isDrawMode(mode) ? 1 : 0
-        const startProgress = progressRef.current
-
-        if (Math.abs(startProgress - target) < 0.001) {
-            setProgress(target)
-            return
-        }
-
-        startTimeRef.current = performance.now()
-        springPositionRef.current = startProgress
-        springVelocityRef.current = 0
-
-        let cancelled = false
-        let lastSpringTime = performance.now() / 1000
-
-        const animateFrame = (now: number) => {
-            if (cancelled) return
-            const elapsed = (now - startTimeRef.current) / 1000
-
-            if (elapsed < delaySec) {
-                lastSpringTime = now / 1000
-                rafRef.current = requestAnimationFrame(animateFrame)
-                return
-            }
-
-            if (isSpring) {
-                const nowSec = now / 1000
-                const dt = Math.min(nowSec - lastSpringTime, 1 / 30)
-                lastSpringTime = nowSec
-                const [p, v] = springStep(
-                    springPositionRef.current,
-                    springVelocityRef.current,
-                    target,
-                    stiffness,
-                    damping,
-                    mass,
-                    dt
-                )
-                springPositionRef.current = p
-                springVelocityRef.current = v
-                setProgress(p)
-                const settled =
-                    Math.abs(p - target) < SPRING_POS_THRESHOLD &&
-                    Math.abs(v) < SPRING_VEL_THRESHOLD
-                if (!settled && elapsed < 10) rafRef.current = requestAnimationFrame(animateFrame)
-            } else {
-                const rawT = Math.min(1, (elapsed - delaySec) / durationSec)
-                const t = applyEase(rawT, ease)
-                const newProgress = startProgress + (target - startProgress) * t
-                setProgress(newProgress)
-                if (rawT < 1) rafRef.current = requestAnimationFrame(animateFrame)
-            }
-        }
-
-        rafRef.current = requestAnimationFrame(animateFrame)
-        return () => {
-            cancelled = true
-            if (rafRef.current) cancelAnimationFrame(rafRef.current)
-        }
-    }, [
-        mode,
-        preview,
-        transition?.type,
-        transition?.duration,
-        transition?.delay,
-        transition?.stiffness,
-        transition?.damping,
-        transition?.mass,
-        transition?.bounce,
-        typeof transition?.ease === "string"
-            ? transition.ease
-            : JSON.stringify(transition?.ease ?? []),
-    ])
-
-    useLayoutEffect(() => {
-        if (!svgPaths || svgPaths.length === 0 || !groupRef.current) return
-
-        const bbox = groupRef.current.getBBox()
-
-        if (bbox && bbox.width > 0 && bbox.height > 0) {
-            // Padding only in SVG user units (same as path-reveal). Do not mix in raw
-            // strokeWidth/strokeWidthEnd props — they are display px and inflate the
-            // viewBox when End is large, which shrinks the path under meet scaling.
-            const strokePadding = Math.max(0, computedStrokeWidth / 2)
-            setViewBox(
-                `${bbox.x - strokePadding} ${bbox.y - strokePadding} ${bbox.width + strokePadding * 2} ${bbox.height + strokePadding * 2}`
-            )
-        } else {
-            setViewBox("0 0 100 100")
-        }
-    }, [svgPaths, computedStrokeWidth])
-
-    useLayoutEffect(() => {
-        if (!svgPaths || svgPaths.length === 0 || !groupRef.current) return
-
-        const paths = Array.from(groupRef.current.querySelectorAll("path"))
-        if (paths.length === 0) return
-
-        let widest = 0
-        let tallest = 0
-        for (const path of paths) {
-            const boundingBox = path.getBBox()
-            widest = Math.max(widest, boundingBox.width)
-            tallest = Math.max(tallest, boundingBox.height)
-        }
-
-        const strokePadding = Math.max(0, computedStrokeWidth / 2)
-        setMaxPathWidth(Math.ceil(widest + strokePadding * 2))
-        setMaxPathHeight(Math.ceil(tallest + strokePadding * 2))
-    }, [svgPaths, computedStrokeWidth])
+        if (!debugOn) return
+        log("mounted")
+        return () => log("unmounted")
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- log is stable; only re-run when debug toggles
+    }, [debugOn])
 
     useEffect(() => {
-        const compute = () => {
-            const containerEl = containerRef.current
-            const svgEl = svgRef.current
-            if (!containerEl || !svgEl) {
-                setLayoutScale(1)
-                setComputedStrokeWidth(strokeWidth)
-                return
-            }
-
-            const probe = zoomProbeRef.current
-            const editorZoom = probe
-                ? probe.getBoundingClientRect().width / 20
-                : 1
-
-            const rect = svgEl.getBoundingClientRect()
-            const parts = (viewBox || "0 0 100 100").split(" ").map(Number)
-            const vbWidth = parts[2] || 100
-            const vbHeight = parts[3] || 100
-
-            const safeZoom = Math.max(editorZoom, 0.0001)
-            const scaleX = rect.width / safeZoom / vbWidth
-            const scaleY = rect.height / safeZoom / vbHeight
-            const scale = Math.min(scaleX, scaleY) || 1
-            setLayoutScale((prev) =>
-                Math.abs(prev - scale) > 1e-4 ? scale : prev
-            )
-
-            const adjustedStrokeWidth = strokeWidth / scale
-            setComputedStrokeWidth((prev) =>
-                Math.abs(prev - adjustedStrokeWidth) > 0.05
-                    ? adjustedStrokeWidth
-                    : prev
-            )
-        }
-
-        if (RenderTarget.current() === RenderTarget.canvas) {
-            let rafId = 0
-            const last = { ts: 0, zoom: 0, w: 0, h: 0 }
-            const TICK_MS = 250
-            const EPS_ZOOM = 0.001
-            const EPS_SIZE = 0.5
-
-            const tick = (now?: number) => {
-                const probe = zoomProbeRef.current
-                const svgEl = svgRef.current
-                if (probe && svgEl) {
-                    const currentZoom = probe.getBoundingClientRect().width / 20
-                    const r = svgEl.getBoundingClientRect()
-
-                    const timeOk =
-                        !last.ts ||
-                        (now || performance.now()) - last.ts >= TICK_MS
-                    const zoomChanged =
-                        Math.abs(currentZoom - last.zoom) > EPS_ZOOM
-                    const sizeChanged =
-                        Math.abs(r.width - last.w) > EPS_SIZE ||
-                        Math.abs(r.height - last.h) > EPS_SIZE
-
-                    if (timeOk && (zoomChanged || sizeChanged)) {
-                        last.ts = now || performance.now()
-                        last.zoom = currentZoom
-                        last.w = r.width
-                        last.h = r.height
-                        compute()
-                    }
-                }
-                rafId = requestAnimationFrame(tick)
-            }
-            rafId = requestAnimationFrame(tick)
-            return () => cancelAnimationFrame(rafId)
-        }
-
-        compute()
-        const ro = new ResizeObserver(() => compute())
-        if (containerRef.current) ro.observe(containerRef.current)
-        window.addEventListener("resize", compute)
-        return () => {
-            ro.disconnect()
-            window.removeEventListener("resize", compute)
-        }
-    }, [strokeWidth, viewBox])
-
-    const effectiveProgress = isCanvas && preview ? 0.5 : clamp01(progress)
-
-    const liveStrokeUser =
-        computedStrokeWidth +
-        ((strokeWidthEnd - strokeWidth) * effectiveProgress) /
-            (strokeWidth / computedStrokeWidth || 1)
-
-    const canvasStrokeUser =
-        lastStrokeEdit === "end"
-            ? Math.abs(strokeWidth) > 1e-6
-                ? computedStrokeWidth * (strokeWidthEnd / strokeWidth)
-                : strokeWidthEnd / Math.max(layoutScale, 1e-6)
-            : computedStrokeWidth
-
-    const strokeWidthUser = isCanvas ? canvasStrokeUser : liveStrokeUser
-
-    /**
-     * Dash offset math (effectiveProgress = how much of the path is visible, 0-1):
-     * 
-     * Default anchor (path end visible first):
-     * - offset = (1 - progress) * pathLength
-     * - progress 0 → offset = pathLength (nothing visible)
-     * - progress 1 → offset = 0 (fully visible)
-     * 
-     * FromStart anchor (path start visible first, uses negative offset):
-     * - offset = -progress * pathLength  
-     * - progress 0 → offset = 0 (nothing visible)
-     * - progress 1 → offset = -pathLength (fully visible)
-     */
-    const fromStart = trimFromStart(mode)
+        if (!debugOn) return
+        log("paths updated", {
+            count: svgPaths.length,
+            lengths: pathLengths.slice(0, 3),
+            lengthsSum: pathLengths.reduce((a, b) => a + b, 0),
+            pathBounds,
+            viewBox,
+        })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [svgPaths, pathLengths, debugOn])
 
     const pathElements = svgPaths.map((pathData, pathIndex) => {
         const pathLength = pathLengths[pathIndex] ?? 0
-        const dasharray = pathLength > 0 ? `${pathLength}` : "1"
-
-        let dashoffset = 0
-        if (pathLength > 0) {
-            if (fromStart) {
-                // Negative offset: visible portion anchored at path start
-                dashoffset = -effectiveProgress * pathLength
-            } else {
-                // Positive offset: visible portion anchored at path end
-                dashoffset = (1 - effectiveProgress) * pathLength
-            }
-        }
+        const { dasharray, dashoffset } = segmentDash(
+            pathLength,
+            draw.start,
+            draw.end
+        )
 
         return (
             <path
                 key={pathIndex}
                 d={pathData}
                 stroke={strokeColor}
-                strokeWidth={strokeWidthUser}
+                strokeWidth={draw.width}
                 strokeLinecap={lineCap}
                 strokeLinejoin={lineJoin}
                 fill="none"
@@ -595,39 +448,23 @@ export default function SvgTransition(props: SvgTransitionProps) {
 
     return (
         <div
-            ref={containerRef}
             style={{
                 ...style,
                 position: "relative",
                 width: "100%",
                 height: "100%",
-                display: "flex",
-                minWidth: maxPathWidth || undefined,
-                minHeight: maxPathHeight || undefined,
+                overflow: "hidden",
             }}
         >
-            <div style={{ position: "absolute", inset: 0 }}>
-                <div
-                    ref={zoomProbeRef}
-                    style={{
-                        position: "absolute",
-                        width: 20,
-                        height: 20,
-                        opacity: 0,
-                        pointerEvents: "none",
-                    }}
-                />
-                <svg
-                    ref={svgRef}
-                    width="100%"
-                    height="100%"
-                    viewBox={viewBox}
-                    preserveAspectRatio="xMidYMid meet"
-                    overflow="visible"
-                >
-                    <g ref={groupRef}>{pathElements}</g>
-                </svg>
-            </div>
+            <svg
+                width="100%"
+                height="100%"
+                viewBox={viewBox}
+                preserveAspectRatio="xMidYMid meet"
+                style={{ display: "block", overflow: "hidden" }}
+            >
+                <g>{pathElements}</g>
+            </svg>
         </div>
     )
 }
@@ -638,11 +475,12 @@ const svgTransitionDefaultProps: Partial<SvgTransitionProps> = {
     inputType: "file",
     strokeColor: "#fc5025",
     strokeWidth: 2,
-    strokeWidthEnd: 2,
+    trimStart: 0,
+    trimEnd: 100,
     lineCap: "round",
     lineJoin: "round",
-    mode: "forward",
-    preview: false,
+    drawDuration: 0.5,
+    debug: false,
 }
 SvgTransition.defaultProps = svgTransitionDefaultProps
 
@@ -672,21 +510,38 @@ addPropertyControls(SvgTransition, {
         title: "Color",
         defaultValue: "#fc5025",
     },
-    strokeWidth: {
+    trimStart: {
         type: ControlType.Number,
         title: "Start",
+        min: 0,
+        max: 100,
+        step: 1,
+        defaultValue: 0,
+    },
+    trimEnd: {
+        type: ControlType.Number,
+        title: "End",
+        min: 0,
+        max: 100,
+        step: 1,
+        defaultValue: 100,
+    },
+    strokeWidth: {
+        type: ControlType.Number,
+        title: "Width",
         min: 0,
         max: 1000,
         step: 0.5,
         defaultValue: 2,
     },
-    strokeWidthEnd: {
+    drawDuration: {
         type: ControlType.Number,
-        title: "End",
+        title: "Duration",
         min: 0,
-        max: 1000,
-        step: 0.5,
-        defaultValue: 2,
+        max: 5,
+        step: 0.05,
+        defaultValue: 0.5,
+        displayStepper: true,
     },
     lineCap: {
         type: ControlType.Enum,
@@ -702,36 +557,14 @@ addPropertyControls(SvgTransition, {
         optionTitles: ["Round", "Bevel", "Miter"],
         defaultValue: "round",
     },
-    preview: {
+    debug: {
         type: ControlType.Boolean,
-        title: "Preview",
+        title: "Debug",
         defaultValue: false,
-        enabledTitle: "Static",
-        disabledTitle: "Dynamic",
-    },
-    mode: {
-        type: ControlType.Enum,
-        title: "Mode",
-        options: [
-            "forward",
-            "backward",
-            "forwardFromStart",
-            "backwardFromStart",
-        ],
-        optionTitles: [
-            "Forward",
-            "Backward",
-            "Forward from Start",
-            "Backward from End",
-        ],
-        defaultValue: "forward",
-        hidden: (props) => props.preview === true,
-    },
-    transition: {
-        type: ControlType.Transition,
-        title: "Transition",
-        defaultValue: DEFAULT_TRANSITION,
-        description: "More components at [Framer University](https://frameruni.link/cc).",
+        enabledTitle: "On",
+        disabledTitle: "Off",
+        description:
+            "Console logs for trim/viewBox. More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 
