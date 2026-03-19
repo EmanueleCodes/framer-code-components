@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState, useRef } from "react"
 import {
     addPropertyControls,
     ControlType,
-    FileControlDescription,
     RenderTarget,
 } from "framer"
 
@@ -131,6 +130,209 @@ function isFramerCanvas(): boolean {
     }
 }
 
+/** sRGB channels 0–1; alpha 0–1. */
+export interface Rgba {
+    r: number
+    g: number
+    b: number
+    a: number
+}
+
+function clamp01Channel(n: number): number {
+    return Math.max(0, Math.min(1, n))
+}
+
+/** Parse hex / rgb() / rgba() for interpolation. Returns null for hsl(), var(), named colors, etc. */
+export function parseColorToRgba(input: string | undefined): Rgba | null {
+    if (input == null) return null
+    const s = String(input).trim()
+    if (!s) return null
+
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+        const r = parseInt(s[1] + s[1], 16) / 255
+        const g = parseInt(s[2] + s[2], 16) / 255
+        const b = parseInt(s[3] + s[3], 16) / 255
+        return { r, g, b, a: 1 }
+    }
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) {
+        return {
+            r: parseInt(s.slice(1, 3), 16) / 255,
+            g: parseInt(s.slice(3, 5), 16) / 255,
+            b: parseInt(s.slice(5, 7), 16) / 255,
+            a: 1,
+        }
+    }
+    if (/^#[0-9a-fA-F]{8}$/.test(s)) {
+        return {
+            r: parseInt(s.slice(1, 3), 16) / 255,
+            g: parseInt(s.slice(3, 5), 16) / 255,
+            b: parseInt(s.slice(5, 7), 16) / 255,
+            a: parseInt(s.slice(7, 9), 16) / 255,
+        }
+    }
+
+    const m = s.match(/^rgba?\(\s*([^)]+)\s*\)$/i)
+    if (m) {
+        const parts = m[1].split(",").map((p) => p.trim())
+        if (parts.length < 3) return null
+        const chan = (p: string): number => {
+            if (p.endsWith("%")) {
+                return clamp01Channel(parseFloat(p) / 100)
+            }
+            const v = parseFloat(p)
+            if (Number.isNaN(v)) return 0
+            return clamp01Channel(v / 255)
+        }
+        const alpha = (p: string): number => {
+            if (p.endsWith("%")) {
+                return clamp01Channel(parseFloat(p) / 100)
+            }
+            const v = parseFloat(p)
+            if (Number.isNaN(v)) return 1
+            return clamp01Channel(v)
+        }
+        const r = chan(parts[0])
+        const g = chan(parts[1])
+        const b = chan(parts[2])
+        const a = parts.length >= 4 ? alpha(parts[3]) : 1
+        return { r, g, b, a }
+    }
+
+    return null
+}
+
+function formatRgba(c: Rgba): string {
+    const r = Math.round(clamp01Channel(c.r) * 255)
+    const g = Math.round(clamp01Channel(c.g) * 255)
+    const b = Math.round(clamp01Channel(c.b) * 255)
+    const a = clamp01Channel(c.a)
+    return `rgba(${r},${g},${b},${a})`
+}
+
+function colorsNearlyEqual(a: Rgba, b: Rgba, eps: number): boolean {
+    return (
+        Math.abs(a.r - b.r) < eps &&
+        Math.abs(a.g - b.g) < eps &&
+        Math.abs(a.b - b.b) < eps &&
+        Math.abs(a.a - b.a) < eps
+    )
+}
+
+function lerpColor(from: Rgba, to: Rgba, t: number): Rgba {
+    const e = clamp01(t)
+    return {
+        r: from.r + (to.r - from.r) * e,
+        g: from.g + (to.g - from.g) * e,
+        b: from.b + (to.b - from.b) * e,
+        a: from.a + (to.a - from.a) * e,
+    }
+}
+
+function colorMotionSettled(
+    current: Rgba | undefined,
+    target: Rgba | null
+): boolean {
+    if (target == null) return current === undefined
+    if (current == null) return false
+    return colorsNearlyEqual(current, target, 1 / 255)
+}
+
+/** Parsed CSS padding for interpolation (Framer ControlType.Padding strings). */
+export interface ParsedPadding {
+    top: number
+    right: number
+    bottom: number
+    left: number
+    unit: string
+}
+
+function parsePadding(input: string | undefined): ParsedPadding {
+    const raw = (input ?? "0px").trim()
+    if (!raw) return { top: 0, right: 0, bottom: 0, left: 0, unit: "px" }
+    const tokens = raw.split(/\s+/).filter(Boolean)
+    const parseToken = (t: string): { n: number; unit: string } => {
+        const m = t.match(/^(-?[\d.]+)\s*(px|rem|em|%)?$/i)
+        if (!m) return { n: 0, unit: "px" }
+        return {
+            n: parseFloat(m[1]),
+            unit: (m[2] || "px").toLowerCase(),
+        }
+    }
+    const parts = tokens.map(parseToken)
+    const u0 = parts[0]?.unit ?? "px"
+    const n = (i: number) => parts[Math.min(i, parts.length - 1)]?.n ?? 0
+    const u = (i: number) => parts[Math.min(i, parts.length - 1)]?.unit ?? u0
+    let top: number
+    let right: number
+    let bottom: number
+    let left: number
+    let unit: string
+    if (tokens.length === 1) {
+        top = right = bottom = left = n(0)
+        unit = u(0)
+    } else if (tokens.length === 2) {
+        top = bottom = n(0)
+        right = left = n(1)
+        unit = u(0) === u(1) ? u(0) : u0
+    } else if (tokens.length === 3) {
+        top = n(0)
+        right = left = n(1)
+        bottom = n(2)
+        unit = u(0)
+        if (u(1) !== unit || u(2) !== unit) unit = u0
+    } else {
+        top = n(0)
+        right = n(1)
+        bottom = n(2)
+        left = n(3)
+        unit = u(0)
+        if (u(1) !== unit || u(2) !== unit || u(3) !== unit) unit = u0
+    }
+    return { top, right, bottom, left, unit }
+}
+
+function formatPadding(p: ParsedPadding): string {
+    const { top, right, bottom, left, unit } = p
+    const a = (n: number) => `${n}${unit}`
+    if (top === right && right === bottom && bottom === left) return a(top)
+    if (top === bottom && left === right) return `${a(top)} ${a(right)}`
+    if (left === right) return `${a(top)} ${a(right)} ${a(bottom)}`
+    return `${a(top)} ${a(right)} ${a(bottom)} ${a(left)}`
+}
+
+function paddingAnimatable(a: ParsedPadding, b: ParsedPadding): boolean {
+    return a.unit === b.unit
+}
+
+function padsNearlyEqual(
+    a: ParsedPadding,
+    b: ParsedPadding,
+    eps: number
+): boolean {
+    return (
+        a.unit === b.unit &&
+        Math.abs(a.top - b.top) < eps &&
+        Math.abs(a.right - b.right) < eps &&
+        Math.abs(a.bottom - b.bottom) < eps &&
+        Math.abs(a.left - b.left) < eps
+    )
+}
+
+function lerpPad(
+    from: ParsedPadding,
+    to: ParsedPadding,
+    t: number
+): ParsedPadding {
+    const e = clamp01(t)
+    return {
+        top: from.top + (to.top - from.top) * e,
+        right: from.right + (to.right - from.right) * e,
+        bottom: from.bottom + (to.bottom - from.bottom) * e,
+        left: from.left + (to.left - from.left) * e,
+        unit: to.unit,
+    }
+}
+
 /** Dash pattern: visible only from start%→end% of path length (in path direction). */
 function segmentDash(L: number, startPct: number, endPct: number): { dasharray: string; dashoffset: number; hide: boolean } {
     if (L <= 0) return { dasharray: "none", dashoffset: 0, hide: true }
@@ -157,11 +359,7 @@ export type PathBounds = { x: number; y: number; width: number; height: number }
 /** Padding from geometry only — do not pass animated strokeWidth or the frame “breathes” during transitions. */
 function viewBoxFromPathBounds(bounds: PathBounds | null): string {
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) return "0 0 100 100"
-    const m = Math.max(bounds.width, bounds.height)
-    const basePad = Math.max(2, Math.min(64, m * 0.1))
-    const slack = Math.max(6, Math.min(120, m * 0.18))
-    const pad = basePad + slack
-    return `${bounds.x - pad} ${bounds.y - pad} ${bounds.width + pad * 2} ${bounds.height + pad * 2}`
+    return `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`
 }
 
 const extractPathsFromSVG = (
@@ -251,11 +449,8 @@ const extractPathsFromSVG = (
     }
 }
 
-const FALLBACK_SVG = `
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M12.4952 18.5868L16.5874 20.7373C16.7603 20.8282 16.9552 20.8688 17.15 20.8544C17.3448 20.84 17.5316 20.7713 17.6893 20.656C17.847 20.5408 17.9692 20.3836 18.042 20.2023C18.1148 20.0211 18.1352 19.823 18.1011 19.6307L17.3181 15.0792C17.289 14.9114 17.3013 14.739 17.3541 14.577C17.4069 14.4151 17.4984 14.2685 17.6209 14.1501L20.9301 10.9243C21.0709 10.7888 21.1707 10.6166 21.2184 10.4271C21.2661 10.2377 21.2597 10.0387 21.1999 9.8527C21.14 9.66672 21.0292 9.50127 20.8801 9.37514C20.7309 9.24902 20.5493 9.16728 20.356 9.13923L15.7836 8.48155C15.6163 8.45643 15.4577 8.39105 15.3213 8.29103C15.1849 8.19102 15.0749 8.05936 15.0006 7.90739L12.9128 3.73168C12.8273 3.55518 12.6938 3.40633 12.5276 3.30218C12.3615 3.19803 12.1693 3.14279 11.9732 3.14279C11.7771 3.14279 11.585 3.19803 11.4188 3.30218C11.2526 3.40633 11.1192 3.55518 11.0337 3.73168L8.94584 7.90739C8.87161 8.05936 8.76156 8.19102 8.62518 8.29103C8.48879 8.39105 8.33015 8.45643 8.16289 8.48155L3.65312 9.13923C3.45894 9.16566 3.27611 9.24622 3.12556 9.37169C2.97502 9.49716 2.86283 9.66248 2.80183 9.84872C2.74084 10.035 2.73351 10.2346 2.78067 10.4248C2.82783 10.6151 2.92759 10.7882 3.06853 10.9243L6.37778 14.1501C6.5002 14.2685 6.5918 14.4151 6.64457 14.577C6.69734 14.739 6.70968 14.9114 6.68052 15.0792L5.89757 19.6307C5.86341 19.823 5.88388 20.0211 5.95667 20.2023C6.02946 20.3836 6.15164 20.5408 6.30932 20.656C6.46701 20.7713 6.65387 20.84 6.84867 20.8544C7.04347 20.8688 7.23838 20.8282 7.41126 20.7373L11.5035 18.5868C11.6558 18.5045 11.8262 18.4615 11.9993 18.4615C12.1724 18.4615 12.3428 18.5045 12.4952 18.5868Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-`
+/** Default SVG when the SVG field is empty (also default in props / panel). */
+const DEFAULT_SVG_CODE = `<svg xmlns="http://www.w3.org/2000/svg" width="605.749" height="776" fill="none" overflow="visible"><path d="M 4.165 134.385 C 4.165 134.385 306.801 -53.203 315.665 14.885 C 324.53 82.972 -42.896 288.549 4.165 367 C 51.226 445.451 546.714 8.369 602.5 96.5 C 658.286 184.631 -23.924 627.076 55.5 706.5 C 134.924 785.924 545.448 441.948 593 489.5 C 640.552 537.052 465.839 731.988 526.5 776" fill="transparent" stroke="#AAA"></path></svg>`
 
 const DEFAULT_STROKE: SvgStroke = {
     start: 0,
@@ -264,15 +459,15 @@ const DEFAULT_STROKE: SvgStroke = {
 }
 
 interface SvgTransitionProps {
-    svgFile?: string
     svgCode?: string
-    inputType?: "file" | "code"
     strokeColor?: string
     stroke?: SvgStroke
     lineCap?: "round" | "butt" | "square"
     lineJoin?: "round" | "bevel" | "miter"
     /** Tween or spring when Stroke targets change. */
     transition?: SvgStrokeTransition
+    /** CSS padding around the SVG (uniform or TRBL). */
+    padding?: string
     style?: React.CSSProperties
 }
 
@@ -280,19 +475,18 @@ interface SvgTransitionProps {
  * @framerIntrinsicWidth 400
  * @framerIntrinsicHeight 320
  * @framerDisableUnlink
- * @framerSupportedLayoutWidth any
- * @framerSupportedLayoutHeight any
+ * @framerSupportedLayoutWidth any-prefer-fixed
+ * @framerSupportedLayoutHeight any-prefer-fixed
  */
 export default function SvgTransition(props: SvgTransitionProps) {
     const {
-        svgFile,
         svgCode,
-        inputType = "file",
         strokeColor = "#fc5025",
         stroke: strokeProp,
         lineCap = "round",
         lineJoin = "round",
         transition: transitionProp,
+        padding = "0px",
         style,
     } = props
 
@@ -318,11 +512,14 @@ export default function SvgTransition(props: SvgTransitionProps) {
         end: mergedStroke.end,
     })
     const widthTarget = normalizeStrokeWidth(mergedStroke.width)
+    const paddingTarget = useMemo(() => parsePadding(padding), [padding])
 
     const [draw, setDraw] = useState({
         start: strokeTarget.start,
         end: strokeTarget.end,
         width: widthTarget,
+        pad: paddingTarget,
+        strokeRgba: parseColorToRgba(strokeColor) ?? undefined,
     })
     const drawRef = useRef(draw)
     drawRef.current = draw
@@ -330,10 +527,13 @@ export default function SvgTransition(props: SvgTransitionProps) {
     const animRafRef = useRef<number>(0)
 
     useEffect(() => {
+        const toRgba = parseColorToRgba(strokeColor)
         const to = {
             start: strokeTarget.start,
             end: strokeTarget.end,
             width: widthTarget,
+            pad: paddingTarget,
+            strokeRgba: toRgba ?? undefined,
         }
 
         const cancelRaf = () => {
@@ -353,7 +553,9 @@ export default function SvgTransition(props: SvgTransitionProps) {
         if (
             Math.abs(from.start - to.start) < 1e-9 &&
             Math.abs(from.end - to.end) < 1e-9 &&
-            Math.abs(from.width - to.width) < 1e-9
+            Math.abs(from.width - to.width) < 1e-9 &&
+            padsNearlyEqual(from.pad, to.pad, 1e-6) &&
+            colorMotionSettled(from.strokeRgba, toRgba)
         ) {
             return
         }
@@ -363,6 +565,10 @@ export default function SvgTransition(props: SvgTransitionProps) {
         const tr = transition
         const usePhysicsSpring =
             tr.type === "spring" && tr.duration === undefined
+        const padOK = paddingAnimatable(from.pad, to.pad)
+        const colorOK =
+            toRgba != null &&
+            from.strokeRgba != null
 
         if (usePhysicsSpring) {
             const stiffness = tr.stiffness ?? 300
@@ -374,6 +580,22 @@ export default function SvgTransition(props: SvgTransitionProps) {
             let v0 = 0
             let v1 = 0
             let vw = 0
+            let pt = from.pad.top
+            let pr = from.pad.right
+            let pb = from.pad.bottom
+            let pl = from.pad.left
+            let vpt = 0
+            let vpr = 0
+            let vpb = 0
+            let vpl = 0
+            let cr = from.strokeRgba?.r ?? 0
+            let cg = from.strokeRgba?.g ?? 0
+            let cb = from.strokeRgba?.b ?? 0
+            let ca = from.strokeRgba?.a ?? 1
+            let vcr = 0
+            let vcg = 0
+            let vcb = 0
+            let vca = 0
             let last = performance.now()
 
             const step = (now: number) => {
@@ -382,17 +604,108 @@ export default function SvgTransition(props: SvgTransitionProps) {
                 ;[s0, v0] = springStep(s0, v0, to.start, stiffness, damping, mass, dt)
                 ;[s1, v1] = springStep(s1, v1, to.end, stiffness, damping, mass, dt)
                 ;[sw, vw] = springStep(sw, vw, to.width, stiffness, damping, mass, dt)
-                setDraw({ start: s0, end: s1, width: sw })
+                if (padOK) {
+                    ;[pt, vpt] = springStep(
+                        pt,
+                        vpt,
+                        to.pad.top,
+                        stiffness,
+                        damping,
+                        mass,
+                        dt
+                    )
+                    ;[pr, vpr] = springStep(
+                        pr,
+                        vpr,
+                        to.pad.right,
+                        stiffness,
+                        damping,
+                        mass,
+                        dt
+                    )
+                    ;[pb, vpb] = springStep(
+                        pb,
+                        vpb,
+                        to.pad.bottom,
+                        stiffness,
+                        damping,
+                        mass,
+                        dt
+                    )
+                    ;[pl, vpl] = springStep(
+                        pl,
+                        vpl,
+                        to.pad.left,
+                        stiffness,
+                        damping,
+                        mass,
+                        dt
+                    )
+                } else {
+                    pt = to.pad.top
+                    pr = to.pad.right
+                    pb = to.pad.bottom
+                    pl = to.pad.left
+                }
+                let strokeRgbaOut: Rgba | undefined
+                if (toRgba == null) {
+                    strokeRgbaOut = undefined
+                } else if (colorOK) {
+                    ;[cr, vcr] = springStep(cr, vcr, toRgba.r, stiffness, damping, mass, dt)
+                    ;[cg, vcg] = springStep(cg, vcg, toRgba.g, stiffness, damping, mass, dt)
+                    ;[cb, vcb] = springStep(cb, vcb, toRgba.b, stiffness, damping, mass, dt)
+                    ;[ca, vca] = springStep(ca, vca, toRgba.a, stiffness, damping, mass, dt)
+                    strokeRgbaOut = { r: cr, g: cg, b: cb, a: ca }
+                } else {
+                    strokeRgbaOut = toRgba
+                }
+                setDraw({
+                    start: s0,
+                    end: s1,
+                    width: sw,
+                    pad: {
+                        top: pt,
+                        right: pr,
+                        bottom: pb,
+                        left: pl,
+                        unit: to.pad.unit,
+                    },
+                    strokeRgba: strokeRgbaOut,
+                })
 
                 const restD = tr.restDelta ?? SPRING_POS_THRESHOLD
                 const restS = tr.restSpeed ?? SPRING_VEL_THRESHOLD
-                const settled =
+                let settled =
                     Math.abs(s0 - to.start) < restD &&
                     Math.abs(v0) < restS &&
                     Math.abs(s1 - to.end) < restD &&
                     Math.abs(v1) < restS &&
                     Math.abs(sw - to.width) < restD &&
                     Math.abs(vw) < restS
+                if (padOK) {
+                    settled =
+                        settled &&
+                        Math.abs(pt - to.pad.top) < restD &&
+                        Math.abs(vpt) < restS &&
+                        Math.abs(pr - to.pad.right) < restD &&
+                        Math.abs(vpr) < restS &&
+                        Math.abs(pb - to.pad.bottom) < restD &&
+                        Math.abs(vpb) < restS &&
+                        Math.abs(pl - to.pad.left) < restD &&
+                        Math.abs(vpl) < restS
+                }
+                if (colorOK && toRgba) {
+                    settled =
+                        settled &&
+                        Math.abs(cr - toRgba.r) < restD &&
+                        Math.abs(vcr) < restS &&
+                        Math.abs(cg - toRgba.g) < restD &&
+                        Math.abs(vcg) < restS &&
+                        Math.abs(cb - toRgba.b) < restD &&
+                        Math.abs(vcb) < restS &&
+                        Math.abs(ca - toRgba.a) < restD &&
+                        Math.abs(vca) < restS
+                }
 
                 if (settled) {
                     setDraw(to)
@@ -425,10 +738,19 @@ export default function SvgTransition(props: SvgTransitionProps) {
             }
             const u = Math.min(1, elapsed / durationMs)
             const e = applyEase(u, tr.ease)
+            const nextPad = padOK ? lerpPad(from.pad, to.pad, e) : to.pad
+            const nextStrokeRgba: Rgba | undefined =
+                toRgba == null
+                    ? undefined
+                    : colorOK && from.strokeRgba
+                      ? lerpColor(from.strokeRgba, toRgba, e)
+                      : toRgba
             setDraw({
                 start: from.start + (to.start - from.start) * e,
                 end: from.end + (to.end - from.end) * e,
                 width: from.width + (to.width - from.width) * e,
+                pad: nextPad,
+                strokeRgba: nextStrokeRgba,
             })
             if (u < 1) {
                 animRafRef.current = requestAnimationFrame(step)
@@ -443,6 +765,8 @@ export default function SvgTransition(props: SvgTransitionProps) {
         strokeTarget.start,
         strokeTarget.end,
         widthTarget,
+        paddingTarget,
+        strokeColor,
         transitionKey,
     ])
 
@@ -468,41 +792,22 @@ export default function SvgTransition(props: SvgTransitionProps) {
             }
         }
 
-        if (inputType === "file" && svgFile) {
-            fetch(svgFile)
-                .then((response) => response.text())
-                .then((svgContent) => {
-                    const result = extractPathsFromSVG(svgContent)
-                    setPathsAndLength(
-                        result.paths,
-                        result.lengths,
-                        result.longestPathLength,
-                        result.pathBounds
-                    )
-                })
-                .catch(() => setPathsAndLength([], [], 0, null))
-        } else if (inputType === "code" && svgCode) {
-            const result = extractPathsFromSVG(svgCode)
-            setPathsAndLength(
-                result.paths,
-                result.lengths,
-                result.longestPathLength,
-                result.pathBounds
-            )
-        } else {
-            const result = extractPathsFromSVG(FALLBACK_SVG)
-            setPathsAndLength(
-                result.paths,
-                result.lengths,
-                result.longestPathLength,
-                result.pathBounds
-            )
-        }
+        const code =
+            typeof svgCode === "string" && svgCode.trim()
+                ? svgCode
+                : DEFAULT_SVG_CODE
+        const result = extractPathsFromSVG(code)
+        setPathsAndLength(
+            result.paths,
+            result.lengths,
+            result.longestPathLength,
+            result.pathBounds
+        )
 
         return () => {
             cancelled = true
         }
-    }, [inputType, svgFile, svgCode])
+    }, [svgCode])
 
     const pathElements = svgPaths.map((pathData, pathIndex) => {
         const pathLength = pathLengths[pathIndex] ?? 0
@@ -518,7 +823,11 @@ export default function SvgTransition(props: SvgTransitionProps) {
             <path
                 key={pathIndex}
                 d={pathData}
-                stroke={strokeColor}
+                stroke={
+                    draw.strokeRgba != null
+                        ? formatRgba(draw.strokeRgba)
+                        : strokeColor
+                }
                 strokeWidth={draw.width}
                 strokeLinecap={lineCap}
                 strokeLinejoin={lineJoin}
@@ -536,7 +845,7 @@ export default function SvgTransition(props: SvgTransitionProps) {
                 position: "relative",
                 width: "100%",
                 height: "100%",
-                overflow: "hidden",
+                padding: formatPadding(draw.pad),
             }}
         >
             <svg
@@ -544,7 +853,7 @@ export default function SvgTransition(props: SvgTransitionProps) {
                 height="100%"
                 viewBox={viewBox}
                 preserveAspectRatio="xMidYMid meet"
-                style={{ display: "block", overflow: "hidden" }}
+                style={{ display: "block", overflow: "visible" }}
             >
                 <g>{pathElements}</g>
             </svg>
@@ -553,11 +862,9 @@ export default function SvgTransition(props: SvgTransitionProps) {
 }
 
 const svgTransitionDefaultProps: Partial<SvgTransitionProps> = {
-    svgFile: "",
-    svgCode: "",
-    inputType: "file",
+    svgCode: DEFAULT_SVG_CODE,
     strokeColor: "#fc5025",
-    stroke: { start: 0, end: 100, width: 2 },
+    stroke: { start: 0, end: 100, width: 50 },
     lineCap: "round",
     lineJoin: "round",
     transition: {
@@ -565,34 +872,16 @@ const svgTransitionDefaultProps: Partial<SvgTransitionProps> = {
         duration: 0.5,
         ease: "easeOut",
     },
+    padding: "0px",
 }
 SvgTransition.defaultProps = svgTransitionDefaultProps
 
 addPropertyControls(SvgTransition, {
-    inputType: {
-        type: ControlType.Enum,
-        title: "Type",
-        options: ["file", "code"],
-        optionTitles: ["File", "Code"],
-        displaySegmentedControl: true,
-        defaultValue: "file",
-    },
-    svgFile: {
-        type: ControlType.File,
-        title: "SVG",
-        allowedFileTypes: ["svg"],
-        hidden: (props) => props.inputType !== "file",
-    } as FileControlDescription,
     svgCode: {
         type: ControlType.String,
-        title: " ",
+        title: "SVG",
         displayTextArea: true,
-        hidden: (props) => props.inputType !== "code",
-    },
-    strokeColor: {
-        type: ControlType.Color,
-        title: "Color",
-        defaultValue: "#fc5025",
+        defaultValue: DEFAULT_SVG_CODE,
     },
     stroke: {
         type: ControlType.Object,
@@ -619,8 +908,8 @@ addPropertyControls(SvgTransition, {
                 title: "Width",
                 min: 0,
                 max: 1000,
-                step: 0.5,
-                defaultValue: 2,
+                step: 1,
+                defaultValue: 50,
             },
         },
     },
@@ -632,6 +921,12 @@ addPropertyControls(SvgTransition, {
             duration: 0.5,
             ease: "easeOut",
         },
+    },
+    padding: {
+        // @ts-ignore ControlType.Padding — supported in Framer; types may lag
+        type: ControlType.Padding,
+        title: "Padding",
+        defaultValue: "0px",
     },
     lineCap: {
         type: ControlType.Enum,
@@ -646,8 +941,13 @@ addPropertyControls(SvgTransition, {
         options: ["round", "bevel", "miter"],
         optionTitles: ["Round", "Bevel", "Miter"],
         defaultValue: "round",
+    },
+    strokeColor: {
+        type: ControlType.Color,
+        title: "Color",
+        defaultValue: "#008CFF",
         description:
-            "More components at [Framer University](https://frameruni.link/cc).",
+        "More components at [Framer University](https://frameruni.link/cc).",
     },
 })
 

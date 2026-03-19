@@ -1,16 +1,9 @@
 SVG Transition - Property Controls
 
-Type
-Input method for the SVG. File or Code.
-
 SVG
-Upload an SVG file (when Type is File).
+Paste SVG markup. Only `<path>` elements are used (`d` attribute). Empty field uses the built-in default sample until you paste your own.
 
-Code
-Paste SVG code directly (when Type is Code).
-
-Color
-Stroke color.
+Layout: With Fit (hug), Framer measures intrinsic size from the path bounds in the viewBox — a tall, narrow stroke reads as a small width (e.g. ~40px). The number you type next to Width is ignored for hug; use Fixed on this layer (or size the parent) when you want an explicit width like 340px. New instances default to Fixed via component layout hints.
 
 Stroke
 Group: Start and End trim the visible segment along the path (0–100). Width is stroke thickness. The component eases these toward new values over Duration when they change (canvas preview snaps).
@@ -27,8 +20,14 @@ Stroke width in user units.
 Transition
 Tween or spring when Stroke changes (duration, ease, delay; or spring physics when type is Spring with no duration). Framer canvas snaps to targets.
 
+Padding
+Inset around the SVG inside the component (uniform or per-side TRBL). Default 0. Animates with the same Transition as Stroke (tween or spring). If units differ between variants (e.g. px to rem), padding snaps. Stroke can still overflow past the padded box.
+
 Cap
 Line cap. Round, Butt, or Square.
 
 Join
-Line join. Round, Bevel, or Miter. More components at [Framer University](https://frameruni.link/cc).
+Line join. Round, Bevel, or Miter.
+
+Color
+Stroke color. When the value is hex (#rgb / #rrggbb / #rrggbbaa) or rgb()/rgba(), it eases with the same Transition as Stroke. var(), hsl(), and named colors update instantly. More components at [Framer University](https://frameruni.link/cc).
