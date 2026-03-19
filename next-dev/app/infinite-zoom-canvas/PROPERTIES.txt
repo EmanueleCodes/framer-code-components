@@ -1,8 +1,5 @@
 Infinite Zoom Canvas - Property Controls
 
-Preview
-Whether the scroll-driven zoom runs in the Framer canvas. On / Off.
-
 Items
 Component instances (e.g. 2 frames). Each is repeated by Duplication.
 
@@ -27,14 +24,14 @@ Total depth range (Z) of the tunnel. Cards are spread evenly from 0 to Depth.
 Smoothing
 0 = super reactive, 1 = nicely smoothed (camera follow).
 
+Background
+Canvas background color. Transparent by default.
+
+Fade Depth
+Depth at which cards start fading in (far away).
+
 Fade At
 Depth at which cards start fading in (far away).
 
-Fade In
-How many pixels the fade-in lasts.
-
-Hit
-Which layer receives pointer events when several overlap. Back = rearmost (visible cards behind others get hover/click). Front = topmost only (default browser behavior).
-
-Debug
-More components at [Framer University](https://frameruni.link/cc).
+Fade Range
+How many pixels the fade-in lasts. More components at [Framer University](https://frameruni.link/cc).

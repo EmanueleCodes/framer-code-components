@@ -1,46 +1,48 @@
 Blinds Text Reveal - Property Controls
 
 Text
-The content to split into lines and reveal. Multi-line supported.
+The words or paragraph that will be revealed. Each line gets its own blind; line breaks in this field define the lines.
 
 Trigger
-When the animation runs. "Appear" runs on load. "Layer in View" runs when the component enters the viewport.
+When the animation runs: as soon as the component appears (Appear), or when it enters the viewport while scrolling (Layer in View). Use scroll for sections that should animate as the user scrolls.
 
 Start
-Which part of the component triggers the animation in "Layer in View" mode. Top / Center / Bottom of component relative to viewport. Shown only when Trigger is "Layer in View".
+For scroll trigger: where the component must be in the viewport to start—Top (enters from top), Center (middle), or Bottom (enters from bottom). Lets you time the reveal with scroll position.
 
 Replay
-When on, blinds close again when scrolled out of view and reveal again when back in view. Shown only when Trigger is "Layer in View".
+When using scroll trigger: if On, the animation runs again when the user scrolls back so the text is revealed each time. If Off, it only runs once.
 
 Mode
-"Out": blinds start covering each line, then animate out to reveal. "In–Out": blinds animate in from the opposite side (text invisible), then animate out to reveal.
+Out: blinds move away to reveal the text. In–Out: blinds close over the text first, then open to reveal it (two-phase effect). Pick the style that fits your design.
 
 Direction
-Reveal direction: Left to right, Right to left, Up–down, or Down–up.
+Which way the blinds move: left-to-right, right-to-left, top-to-bottom, or bottom-to-top. Affects the feel of the reveal.
 
 Alternate
-When on, odd lines (1st, 3rd, 5th…) use the selected direction; even lines use the opposite (e.g. left-to-right then right-to-left).
+If On, odd and even lines animate in opposite directions (e.g. odd left-to-right, even right-to-left). Gives a more dynamic, alternating reveal.
 
 Order
-Which line animates first: First → Last, Last → First, Center → Out (middle then outward), or Out → Center (edges then toward center).
+Which line animates first: from first line to last, last to first, from center outward, or from edges toward center. Controls the sequence of the reveal.
 
 Stagger
-Delay in seconds between each line's blind reveal. Higher values create a stronger cascade.
+Time in seconds between each line starting. Higher values make the reveal feel slower and more deliberate; lower values make it snappier.
 
 In
-Transition for the "in" phase when Mode is In–Out (blind sweeping in to cover the line). Shown only when Mode is "In–Out".
+For In–Out mode only: how the “close” phase is animated (duration, easing). The blinds use this when they cover the text before revealing.
 
 Out
-Transition for the "out" phase: how each blind moves away to reveal the text.
+How the “reveal” phase is animated (duration, easing). The blinds use this when they open to show the text. In Out-only mode this is the only phase.
 
 Color
-Text color.
+The color of the revealed text.
 
 Blinds
-Fill color of the covering blinds over each line.
+The color of the blind strips that cover and reveal the text. Often matches or contrasts with the background.
 
 Font
-Typography: family, size, weight, style, letter spacing, line height.
+Typeface, size, weight, alignment, line height, and other text styling. What the revealed text looks like.
 
 Tag
-HTML element for the text (h1–h6, p, div, span). More components at [Framer University](https://frameruni.link/cc).
+The HTML element used for the text (h1, h2, h3, h4, h5, h6, p, div, span). Use for semantics and accessibility—e.g. h1 for a main heading, p for a paragraph.
+
+More components at [Framer University](https://frameruni.link/cc).

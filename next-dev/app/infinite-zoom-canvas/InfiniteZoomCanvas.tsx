@@ -5,7 +5,8 @@ import React, {
     useState,
     useCallback,
 } from "react"
-import { addPropertyControls, ControlType, RenderTarget } from "framer"
+import { addPropertyControls, ControlType } from "framer"
+import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
@@ -58,10 +59,7 @@ function initCards(
     })
 }
 
-const CARD_DATA_ATTR = "data-card-index"
-
 interface InfiniteZoomCanvasProps {
-    preview: boolean
     content: React.ReactNode[]
     duplication: number
     seed: number
@@ -72,20 +70,19 @@ interface InfiniteZoomCanvasProps {
     fadeStart: number
     fadeEnd: number
     smoothing: number
-    debug: boolean
+    backgroundColor: string
     style?: React.CSSProperties
 }
 
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
- * @framerIntrinsicWidth 400
- * @framerIntrinsicHeight 400
+ * @framerIntrinsicWidth 800
+ * @framerIntrinsicHeight 600
  * @framerDisableUnlink
  */
 export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     const {
-        preview = true,
         content = [],
         duplication = 2,
         seed = 0,
@@ -96,7 +93,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         fadeStart = 800,
         fadeEnd = 100,
         smoothing = 1,
-        debug = false,
+        backgroundColor = "transparent",
         style,
     } = props
 
@@ -104,10 +101,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     const startPositionRef = useRef<number>(0)
     const cardWrapperRefs = useRef<(HTMLDivElement | null)[]>([])
     const depthByCardRef = useRef<number[]>([])
-    const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    const previewRef = useRef(preview)
-    previewRef.current = preview
-    const shouldAnimate = !(isCanvas && !previewRef.current)
 
     const contentCount = Array.isArray(content) ? content.length : 0
     const [cards, setCards] = useState<Card[]>(() =>
@@ -145,7 +138,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     const cameraZRef = useRef(0)
     const rafRef = useRef<number>(0)
     const [cameraZ, setCameraZ] = useState(0)
-    const [hoveredCardIndex, setHoveredCardIndex] = useState<number | null>(null)
 
     const findStickyParent = useCallback(
         (el: HTMLElement): HTMLElement | null => {
@@ -174,105 +166,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         },
         [findStickyParent]
     )
-
-    useEffect(() => {
-        if (!debug || !containerRef.current) return
-        let lastLog = 0
-        const LOG_THROTTLE_MS = 150
-
-        function findCardWrapper(el: Element | null): HTMLElement | null {
-            const container = containerRef.current
-            let current: Element | null = el
-            while (current && current !== container) {
-                if (current.getAttribute(CARD_DATA_ATTR) != null)
-                    return current as HTMLElement
-                current = current.parentElement
-            }
-            return null
-        }
-
-        function logCursorHitTest(e: PointerEvent) {
-            const container = containerRef.current
-            if (!container) return
-            const rect = container.getBoundingClientRect()
-            const x = e.clientX
-            const y = e.clientY
-            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-                setHoveredCardIndex(null)
-                return
-            }
-
-            const now = Date.now()
-            if (now - lastLog < LOG_THROTTLE_MS) return
-            lastLog = now
-
-            const depths = depthByCardRef.current
-            const wrappers = cardWrapperRefs.current
-
-            const topEl = document.elementFromPoint(x, y)
-            const topWrapper = findCardWrapper(topEl)
-            const topCardIdx = topWrapper?.getAttribute?.(CARD_DATA_ATTR)
-            const topIndex = topCardIdx != null ? parseInt(topCardIdx, 10) : null
-
-            const stack: { index: number; depth: number; opacity: number }[] = []
-            let el: Element | null = topEl
-            const restored: { el: HTMLElement; value: string }[] = []
-            while (el) {
-                const wrapper = findCardWrapper(el)
-                if (!wrapper) break
-                const idx = wrapper.getAttribute(CARD_DATA_ATTR)
-                if (idx === null) break
-                const i = parseInt(idx, 10)
-                if (Number.isNaN(i)) break
-                const depth = depths[i] ?? 0
-                const opacity = parseFloat(getComputedStyle(wrapper).opacity)
-                stack.push({
-                    index: i,
-                    depth,
-                    opacity,
-                })
-                restored.push({ el: wrapper, value: wrapper.style.pointerEvents || "" })
-                wrapper.style.pointerEvents = "none"
-                el = document.elementFromPoint(x, y)
-            }
-            for (const { el: w, value } of restored) {
-                w.style.pointerEvents = value
-            }
-
-            const receiverIndex = stack[0]?.index ?? null
-            const receiverZ = stack[0]
-            setHoveredCardIndex(receiverIndex)
-
-            const depthInfo =
-                receiverZ != null
-                    ? ` | depth ${Math.round(receiverZ.depth)}`
-                    : ""
-            console.log(
-                `[InfiniteZoomCanvas] Cursor (${Math.round(x)}, ${Math.round(y)}): card index ${receiverIndex ?? "none"} receives hover${depthInfo}${stack.length > 1 ? ` (${stack.length - 1} layer(s) behind)` : ""}`
-            )
-            console.groupCollapsed("  → stack details")
-            console.log(
-                "Element under cursor:",
-                topEl?.tagName,
-                topEl?.className || "(no class)",
-                topWrapper ? `→ inside card ${topIndex}` : "(not inside a card)"
-            )
-            if (stack.length > 0) {
-                stack.forEach((s, i) => {
-                    console.log(
-                        `  ${i + 1}. Card ${s.index} | depth ${Math.round(s.depth)} | opacity ${s.opacity.toFixed(2)}${i === 0 ? " ← RECEIVES EVENTS" : " (blocked)"}`
-                    )
-                })
-            }
-            console.groupEnd()
-        }
-
-        window.addEventListener("pointermove", logCursorHitTest, { passive: true })
-        return () => {
-            window.removeEventListener("pointermove", logCursorHitTest)
-            setHoveredCardIndex(null)
-        }
-    }, [debug])
 
     useEffect(() => {
         if (!containerRef.current) return
@@ -312,8 +205,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     }, [length, startAlign, depthRange, getOriginalPosition])
 
     useEffect(() => {
-        if (!shouldAnimate) return
-
         const internalSmoothing = 0.05 + (1 - smoothing) * 0.95
         const animate = () => {
             scrollCurrentRef.current = lerp(
@@ -330,27 +221,15 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         }
         rafRef.current = requestAnimationFrame(animate)
         return () => cancelAnimationFrame(rafRef.current)
-    }, [shouldAnimate, smoothing])
+    }, [smoothing])
 
     if (contentCount === 0) {
         return (
-            <div
-                ref={containerRef}
-                style={{
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "rgba(0,0,0,0.03)",
-                    borderRadius: 8,
-                    ...style,
-                }}
-            >
-                <span style={{ color: "#999", fontSize: 14 }}>
-                    Connect components to Items
-                </span>
-            </div>
+            <ComponentMessage
+                title="Connect components"
+                subtitle="Add components to fill this gallery. The component preserves each item's interactivity"
+                style={{ width: "100%", height: "100%", backgroundColor, ...style }}
+            />
         )
     }
 
@@ -378,6 +257,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
                 overflow: "hidden",
                 perspective: 800,
                 perspectiveOrigin: "50% 50%",
+                backgroundColor,
                 ...style,
             }}
         >
@@ -401,7 +281,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
                             ref={(el) => {
                                 if (el) cardWrapperRefs.current[i] = el
                             }}
-                            {...{ [CARD_DATA_ATTR]: i }}
                             style={{
                                 position: "absolute",
                                 left: `${card.x}%`,
@@ -412,9 +291,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
                                 pointerEvents: opacity > 0 ? "auto" : "none",
                                 willChange: "transform, opacity",
                                 backfaceVisibility: "hidden",
-                                ...(debug && hoveredCardIndex === i
-                                    ? { outline: "4px solid red", outlineOffset: 2 }
-                                    : {}),
                             }}
                         >
                             {instance}
@@ -427,7 +303,6 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
 }
 
 InfiniteZoomCanvas.defaultProps = {
-    preview: true,
     content: [],
     duplication: 2,
     seed: 0,
@@ -438,16 +313,10 @@ InfiniteZoomCanvas.defaultProps = {
     fadeStart: 800,
     fadeEnd: 100,
     smoothing: 1,
+    backgroundColor: "transparent",
 }
 
 addPropertyControls(InfiniteZoomCanvas, {
-    preview: {
-        type: ControlType.Boolean,
-        title: "Preview",
-        defaultValue: true,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
     content: {
         type: ControlType.Array,
         title: "Items",
@@ -456,7 +325,7 @@ addPropertyControls(InfiniteZoomCanvas, {
     },
     duplication: {
         type: ControlType.Number,
-        title: "Duplication",
+        title: "Duplicates",
         min: 1,
         max: 20,
         step: 1,
@@ -508,11 +377,12 @@ addPropertyControls(InfiniteZoomCanvas, {
     length: {
         type: ControlType.Number,
         title: "Scroll For",
-        min: 1,
-        max: 200000,
-        step: 50,
+        min: 10,
+        max: 30000,
+        step: 100,
         defaultValue: 2000,
         unit: "px",
+        displayStepper: false,
     },
     depthRange: {
         type: ControlType.Number,
@@ -530,6 +400,11 @@ addPropertyControls(InfiniteZoomCanvas, {
         step: 0.01,
         defaultValue: 1,
     },
+    backgroundColor: {
+        type: ControlType.Color,
+        title: "Background",
+        defaultValue: "transparent",
+    },
     fadeStart: {
         type: ControlType.Number,
         title: "Fade Depth",
@@ -545,11 +420,6 @@ addPropertyControls(InfiniteZoomCanvas, {
         max: 5000,
         step: 100,
         defaultValue: 400,
-    },
-    debug: {
-        type: ControlType.Boolean,
-        title: "Debug",
-        defaultValue: false,
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },

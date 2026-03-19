@@ -1,0 +1,15 @@
+Haptics - Property Controls
+
+Mode
+Choose a ready-made pattern (Preset) or define your own (Custom). The component triggers haptic feedback when the parent is tapped or clicked—on supported devices it vibrates; on desktop you can hear it as sound when Debug is set to Sound.
+
+Preset
+Which built-in pattern to play: Success, Nudge, Error, Buzz, Selection, Light, Medium, or Heavy. Use this when Mode is Preset.
+
+Value
+Your custom haptic pattern. Write the trigger code here (e.g. duration, intensity, delay per step). Build and copy patterns from haptics.lochie.me. Used when Mode is Custom.
+
+Debug
+On desktop there’s no vibration. Sound plays the pattern as audio so you can preview it; Silent runs with no feedback. On real devices this doesn’t change behavior—haptics still trigger as normal.
+
+More components at [Framer University](https://frameruni.link/cc).

@@ -6,8 +6,8 @@ Whether the effect runs in the Framer canvas. On / Off.
 Masked
 Whether the image starts masked (reveal on uncheck). When Off, only the image is visible with a transparent background.
 
-Duration
-Animation duration in seconds. Range: 0.3–4. Unit: s.
+Transition
+Duration, easing, and delay for the reveal animation (same as other Framer transition controls).
 
 Image
 Source image to reveal.

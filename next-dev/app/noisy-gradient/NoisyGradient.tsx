@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useLayoutEffect } from "react"
+import React, { useRef, useEffect, useState, useLayoutEffect, memo } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
@@ -33,6 +33,8 @@ uniform float u_displacement;
 uniform float u_caStrength;
 uniform float u_glow;
 uniform float u_edgeGlow;
+uniform float u_backgroundOpacity;
+uniform float u_imageAspect;
 
 varying vec2 v_uv;
 
@@ -40,6 +42,12 @@ float hash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash22(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
 }
 
 float vnoise(vec2 p) {
@@ -53,14 +61,39 @@ float vnoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+vec2 vnoise2(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 a = hash22(i);
+    vec2 b = hash22(i + vec2(1.0, 0.0));
+    vec2 c = hash22(i + vec2(0.0, 1.0));
+    vec2 d = hash22(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 float fbm(vec2 p, float octaves) {
     float val = 0.0;
     float amp = 0.5;
     float freq = 1.0;
     int n = int(floor(octaves + 0.5));
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         if (i >= n) break;
         val += amp * vnoise(p * freq);
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    return val;
+}
+
+vec2 fbm2(vec2 p, float octaves) {
+    vec2 val = vec2(0.0);
+    float amp = 0.5;
+    float freq = 1.0;
+    int n = int(floor(octaves + 0.5));
+    for (int i = 0; i < 8; i++) {
+        if (i >= n) break;
+        val += amp * vnoise2(p * freq);
         freq *= 2.0;
         amp *= 0.5;
     }
@@ -72,9 +105,19 @@ void main() {
     vec2 size = u_resolution;
     float progress = u_progress;
     
+    float viewAspect = size.x / size.y;
+    float imageAspect = max(0.001, u_imageAspect);
+    // Object-fit cover: sample image so it fills the view without stretching
+    vec2 imageUV;
+    if (viewAspect > imageAspect) {
+        imageUV = vec2(uv.x, (uv.y - 0.5) * (imageAspect / viewAspect) + 0.5);
+    } else {
+        imageUV = vec2((uv.x - 0.5) * (viewAspect / imageAspect) + 0.5, uv.y);
+    }
+    
     vec2 center = vec2(0.5, 0.5);
     vec2 p = uv - center;
-    float aspect = size.x / size.y;
+    float aspect = viewAspect;
     p.x *= aspect;
     
     float dist = length(p);
@@ -82,36 +125,40 @@ void main() {
     float normDist = clamp(dist / maxDist, 0.0, 1.0);
     float angle = atan(p.y, p.x);
     
+    // Scale down noise influence as progress approaches 0 so the blob fully closes
+    float noiseScale = smoothstep(0.0, 0.15, progress);
     float noiseWarp = fbm(vec2(angle * 2.0 + 10.0, normDist * 4.0 + progress * 1.5), u_noiseWarpOctaves);
     float noiseCart = fbm(p * 8.0 + vec2(progress * 1.5, -progress * 1.0), u_noiseCartOctaves);
-    float warpedDist = normDist + (noiseWarp - 0.5) * u_warpedDistNoiseWarp + (noiseCart - 0.5) * u_warpedDistNoiseCart;
+    float warpedDist = normDist + noiseScale * ((noiseWarp - 0.5) * u_warpedDistNoiseWarp + (noiseCart - 0.5) * u_warpedDistNoiseCart);
     
-    float waveFront = progress * 1.15;
+    float waveFront = progress * 1.28;
     float sigma = u_sigma;
     float delta = warpedDist - waveFront;
     float baseEnvelope = exp(-delta * delta / (2.0 * sigma * sigma));
     
     float waveFreq = u_waveFreq;
     float ripples = 0.5 + 0.5 * cos(delta * waveFreq);
-    float envelope = baseEnvelope * ripples;
+    // Scale envelope by noiseScale so all effects (displacement, CA, glow) fade out as progress -> 0
+    float envelope = baseEnvelope * ripples * noiseScale;
     
-    float feather = 0.15;
+    // Shrink the transition band with progress so the hole can fully close (no stuck blob)
+    float feather = 0.15 * max(progress, 0.004);
     float behindWave = smoothstep(waveFront + feather, waveFront - feather, warpedDist);
     
-    float gate = smoothstep(0.0, 0.03, progress);
-    envelope *= gate;
-    behindWave *= gate;
+    // Noise-based displacement (also scaled by noiseScale)
+    vec2 noiseDisplace = fbm2(p * 6.0 + vec2(progress * 2.0, -progress * 1.5), 3.0);
+    noiseDisplace += 0.5 * fbm2(p * 12.0 - vec2(progress * 1.0, progress * 2.0), 2.0);
+    noiseDisplace *= noiseScale;
     
-    vec2 dir = (dist > 0.001) ? normalize(p) : vec2(0.0);
-    float pushAmt = envelope * u_displacement * 1.5;
-    vec2 uvOffset = dir * pushAmt;
+    float displaceStrength = envelope * u_displacement * 0.15;
+    vec2 uvOffset = noiseDisplace * displaceStrength;
     uvOffset.x /= aspect;
 
-    float caStrength = envelope * u_caStrength * 4.0;
-    vec2 caOffset = dir * caStrength;
+    float caStrength = envelope * u_caStrength * 0.02;
+    vec2 caOffset = normalize(noiseDisplace + 0.001) * caStrength;
     caOffset.x /= aspect;
     
-    vec2 sampleUV = uv - uvOffset;
+    vec2 sampleUV = imageUV - uvOffset;
     float imgR = texture2D(u_image, sampleUV - caOffset).r;
     float imgG = texture2D(u_image, sampleUV).g;
     float imgB = texture2D(u_image, sampleUV + caOffset).b;
@@ -124,16 +171,28 @@ void main() {
     float imageVisibility = 1.0 - behindWave;
     
     vec4 overlayColor = texture2D(u_overlay, uv);
-    vec4 finalColor = mix(overlayColor, imgColor, imageVisibility);
-    finalColor.rgb += vec3(envelope * u_edgeGlow);
+    vec4 baseColor = mix(overlayColor, imgColor, imageVisibility);
     
-    gl_FragColor = finalColor;
+    // Boost glow when background opacity is low so it stays visible (up to 2x at full transparency)
+    float glowBoost = 2.0 - u_backgroundOpacity;
+    float edgeGlowAmount = envelope * u_edgeGlow * glowBoost;
+    float outAlpha = max(baseColor.a, edgeGlowAmount);
+    
+    // Premultiplied: base * alpha + glow so glow is visible at any background opacity
+    vec3 premultRGB = baseColor.rgb * outAlpha + vec3(edgeGlowAmount);
+    gl_FragColor = vec4(premultRGB, outAlpha);
 }
 `
 
-// --- Gradient helpers ---
+// --- Color helpers ---
 function parseColorToRgb(c: string): [number, number, number] {
-    if (!c || typeof c !== "string") return [0.9, 0.4, 0.3]
+    const [r, g, b, _a] = parseColorToRgba(c)
+    return [r, g, b]
+}
+
+/** Returns [r, g, b, a] in 0-1. Alpha is 1 if not in string. */
+function parseColorToRgba(c: string): [number, number, number, number] {
+    if (!c || typeof c !== "string") return [0, 0, 0, 1]
     const hex = c.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
     if (hex) {
         const s = hex[1]
@@ -142,81 +201,56 @@ function parseColorToRgb(c: string): [number, number, number] {
                 parseInt(s[0] + s[0], 16) / 255,
                 parseInt(s[1] + s[1], 16) / 255,
                 parseInt(s[2] + s[2], 16) / 255,
+                1,
             ]
         }
         return [
             parseInt(s.slice(0, 2), 16) / 255,
             parseInt(s.slice(2, 4), 16) / 255,
             parseInt(s.slice(4, 6), 16) / 255,
+            1,
         ]
     }
-    const rgba = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/)
-    if (rgba) {
+    const rgbaMatch = c.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/)
+    if (rgbaMatch) {
+        const a = rgbaMatch[4] != null ? Number(rgbaMatch[4]) : 1
         return [
-            Number(rgba[1]) / 255,
-            Number(rgba[2]) / 255,
-            Number(rgba[3]) / 255,
+            Number(rgbaMatch[1]) / 255,
+            Number(rgbaMatch[2]) / 255,
+            Number(rgbaMatch[3]) / 255,
+            typeof a === "number" && !Number.isNaN(a) ? Math.max(0, Math.min(1, a)) : 1,
         ]
     }
-    return [0.9, 0.4, 0.3]
+    return [0, 0, 0, 1]
 }
 
-function lerp(
-    a: [number, number, number],
-    b: [number, number, number],
-    t: number
-): [number, number, number] {
-    t = Math.max(0, Math.min(1, t))
-    return [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
-}
-
-function createOverlayTexture(
+function createSolidColorTexture(
     gl: WebGLRenderingContext,
-    width: number,
-    height: number,
-    colorTop: string,
-    colorLeft: string,
-    colorRight: string,
-    time: number
+    color: string,
+    opacity: number
 ): WebGLTexture | null {
-    const peach = parseColorToRgb(colorTop)
-    const purple = parseColorToRgb(colorLeft)
-    const teal = parseColorToRgb(colorRight)
-    const pixels = new Uint8Array(width * height * 4)
-    const t0 = time / 1000
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const uvx = x / width
-            const uvy = y / height
-            const t = uvy + 0.2 * Math.sin(t0 + uvx * 3)
-            const p = uvx + 0.2 * Math.cos(t0 + uvy * 6)
-            const pt = Math.max(0, Math.min(1, p))
-            const tt = Math.max(0, Math.min(1, t))
-            const bottomColor = lerp(purple, teal, pt)
-            const color = lerp(bottomColor, peach, tt)
-            const i = (y * width + x) * 4
-            pixels[i] = Math.round(color[0] * 255)
-            pixels[i + 1] = Math.round(color[1] * 255)
-            pixels[i + 2] = Math.round(color[2] * 255)
-            pixels[i + 3] = 255
-        }
-    }
+    const [r, g, b, colorAlpha] = parseColorToRgba(color)
+    const a = Math.round(
+        Math.max(0, Math.min(1, opacity * colorAlpha)) * 255
+    )
+    const pixel = new Uint8Array([
+        Math.round(r * 255),
+        Math.round(g * 255),
+        Math.round(b * 255),
+        a,
+    ])
     const texture = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, texture)
     gl.texImage2D(
         gl.TEXTURE_2D,
         0,
         gl.RGBA,
-        width,
-        height,
+        1,
+        1,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
-        pixels
+        pixel
     )
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
@@ -225,33 +259,9 @@ function createOverlayTexture(
     return texture
 }
 
-function createTransparentOverlayTexture(
-    gl: WebGLRenderingContext,
-    width: number,
-    height: number
+function createPlaceholderTexture(
+    gl: WebGLRenderingContext
 ): WebGLTexture | null {
-    const pixels = new Uint8Array(width * height * 4)
-    const texture = gl.createTexture()
-    gl.bindTexture(gl.TEXTURE_2D, texture)
-    gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        width,
-        height,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        pixels
-    )
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    return texture
-}
-
-function createPlaceholderTexture(gl: WebGLRenderingContext): WebGLTexture | null {
     const texture = gl.createTexture()
     if (!texture) return null
     gl.bindTexture(gl.TEXTURE_2D, texture)
@@ -311,10 +321,6 @@ function createProgram(
     return program
 }
 
-const DEFAULT_PEACH = "#e6664d"
-const DEFAULT_PURPLE = "#331a99"
-const DEFAULT_TEAL = "#00cccc"
-
 // Only user-controllable shader params; rest are hardcoded in the component
 export interface ShaderFinetuning {
     noiseCartOctaves: number
@@ -322,7 +328,7 @@ export interface ShaderFinetuning {
     waveFreq: number
     displacement: number
     chromatic: number // chromatic aberration strength
-    glow: number      // glow intensity (color dodge at wavefront)
+    glow: number // glow intensity (color dodge at wavefront)
     edgeGlow: number // additive white at wave edge
 }
 
@@ -330,8 +336,8 @@ export const DEFAULT_SHADER_FINETUNING: ShaderFinetuning = {
     noiseCartOctaves: 3,
     warpedDistNoiseCart: 1,
     waveFreq: 55,
-    displacement: 0.4,
-    chromatic: 0.08,
+    displacement: 4,
+    chromatic: 0.75,
     glow: 0.4,
     edgeGlow: 0.15,
 }
@@ -343,30 +349,309 @@ const HARDCODED = {
     sigma: 0.04,
 }
 
+/** Transition config from Framer ControlType.Transition */
+interface TransitionConfig {
+    type?: "tween" | "spring" | "keyframes" | "inertia"
+    duration?: number
+    ease?: string | number[]
+    delay?: number
+    stiffness?: number
+    damping?: number
+    mass?: number
+    bounce?: number
+    restDelta?: number
+    restSpeed?: number
+}
+
+function cubicBezierAt(t: number, a: number, b: number, c: number, d: number): number {
+    const u = 1 - t
+    const t2 = t * t
+    const t3 = t2 * t
+    const u2 = u * u
+    const u3 = u2 * u
+    return 3 * u2 * t * b + 3 * u * t2 * c + t3 * d
+}
+
+const SPRING_POS_THRESHOLD = 0.0005
+const SPRING_VEL_THRESHOLD = 0.0005
+
+/** One step of spring physics: returns [newPosition, newVelocity]. No clamping so spring can overshoot and bounce. */
+function springStep(
+    position: number,
+    velocity: number,
+    target: number,
+    stiffness: number,
+    damping: number,
+    mass: number,
+    dtSec: number
+): [number, number] {
+    const f = -stiffness * (position - target) - damping * velocity
+    const a = f / mass
+    const v = velocity + a * dtSec
+    const p = position + v * dtSec
+    return [p, v]
+}
+
+/** Map linear t in [0,1] to eased value using Framer ease (name or cubic bezier [x1,y1,x2,y2]) */
+function applyEase(t: number, ease: string | number[] | undefined): number {
+    if (ease == null) return t
+    if (typeof ease === "string") {
+        switch (ease) {
+            case "linear":
+                return t
+            case "easeIn":
+                return t * t
+            case "easeOut":
+                return t * (2 - t)
+            case "easeInOut":
+                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+            default:
+                return t
+        }
+    }
+    if (Array.isArray(ease) && ease.length >= 4) {
+        const [x1, y1, x2, y2] = ease
+        let lo = 0
+        let hi = 1
+        for (let i = 0; i < 12; i++) {
+            const mid = (lo + hi) / 2
+            const x = cubicBezierAt(mid, 0, x1, x2, 1)
+            if (x < t) lo = mid
+            else hi = mid
+        }
+        const u = (lo + hi) / 2
+        return cubicBezierAt(u, 0, y1, y2, 1)
+    }
+    return t
+}
+
+const CANVAS_STYLE: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    height: "100%",
+    background: "transparent",
+}
+
+interface CanvasLayerRefs {
+    containerRef: React.RefObject<HTMLDivElement | null>
+    canvasRef: React.RefObject<HTMLCanvasElement | null>
+    glRef: React.MutableRefObject<WebGLRenderingContext | null>
+    programRef: React.MutableRefObject<WebGLProgram | null>
+    imageTextureRef: React.MutableRefObject<WebGLTexture | null>
+    overlayTextureRef: React.MutableRefObject<WebGLTexture | null>
+    lastOverlayColorRef: React.MutableRefObject<string | null>
+    lastOverlayOpacityRef: React.MutableRefObject<number>
+    uniformLocationsRef: React.MutableRefObject<Record<string, WebGLUniformLocation | null> | null>
+    imageLoadedRef: React.MutableRefObject<boolean>
+    hasImageRef: React.MutableRefObject<boolean>
+    imageAspectRef: React.MutableRefObject<number>
+    progressRef: React.MutableRefObject<number>
+    overlayTimeRef: React.MutableRefObject<number>
+    shaderFinetuningRef: React.MutableRefObject<ShaderFinetuning>
+    backgroundColorRef: React.MutableRefObject<string | undefined>
+    backgroundOpacityRef: React.MutableRefObject<number>
+    previewRef: React.MutableRefObject<boolean>
+    renderRafRef: React.MutableRefObject<number>
+}
+
+const NoisyRippleCanvasLayer = memo(function NoisyRippleCanvasLayer({
+    containerRef,
+    canvasRef,
+    glRef,
+    programRef,
+    imageTextureRef,
+    overlayTextureRef,
+    lastOverlayColorRef,
+    lastOverlayOpacityRef,
+    uniformLocationsRef,
+    imageLoadedRef,
+    hasImageRef,
+    imageAspectRef,
+    progressRef,
+    overlayTimeRef,
+    shaderFinetuningRef,
+    backgroundColorRef,
+    backgroundOpacityRef,
+    previewRef,
+    renderRafRef,
+}: CanvasLayerRefs) {
+    useLayoutEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const gl = canvas.getContext("webgl", {
+            premultipliedAlpha: true,
+            alpha: true,
+        })
+        if (!gl) return
+        glRef.current = gl
+        const program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER)
+        if (!program) return
+        programRef.current = program
+        const positions = new Float32Array([
+            -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
+        ])
+        const texCoords = new Float32Array([0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0])
+        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW)
+        gl.enableVertexAttribArray(gl.getAttribLocation(program, "a_position"))
+        gl.vertexAttribPointer(gl.getAttribLocation(program, "a_position"), 2, gl.FLOAT, false, 0, 0)
+        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+        gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW)
+        gl.enableVertexAttribArray(gl.getAttribLocation(program, "a_texCoord"))
+        gl.vertexAttribPointer(gl.getAttribLocation(program, "a_texCoord"), 2, gl.FLOAT, false, 0, 0)
+    }, [canvasRef, glRef, programRef])
+
+    useEffect(() => {
+        const canvas = canvasRef.current
+        const container = containerRef.current
+        const gl = glRef.current
+        const program = programRef.current
+        if (!canvas || !container || !gl || !program) return
+        const isCanvas = RenderTarget.current() === RenderTarget.canvas
+        overlayTimeRef.current = performance.now()
+        const render = () => {
+            const w = Math.max(1, container.clientWidth)
+            const h = Math.max(1, container.clientHeight)
+            const dpr = Math.min(window.devicePixelRatio || 1, 2)
+            const pw = Math.round(w * dpr)
+            const ph = Math.round(h * dpr)
+            if (canvas.width !== pw || canvas.height !== ph) {
+                canvas.width = pw
+                canvas.height = ph
+            }
+            canvas.style.width = `${w}px`
+            canvas.style.height = `${h}px`
+            gl.viewport(0, 0, pw, ph)
+            gl.clearColor(0, 0, 0, 0)
+            gl.clear(gl.COLOR_BUFFER_BIT)
+            gl.enable(gl.BLEND)
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+            if (!imageLoadedRef.current || !imageTextureRef.current) {
+                renderRafRef.current = requestAnimationFrame(render)
+                return
+            }
+            gl.useProgram(program)
+            const runOverlayMotion = isCanvas
+            const overlayTime = runOverlayMotion
+                ? performance.now() - overlayTimeRef.current
+                : 0
+            const bgColor = backgroundColorRef.current
+            const bgOpacity =
+                bgColor != null && bgColor !== ""
+                    ? backgroundOpacityRef.current
+                    : 0
+            const colorKey = bgColor ?? ""
+            if (
+                overlayTextureRef.current == null ||
+                lastOverlayColorRef.current !== colorKey ||
+                lastOverlayOpacityRef.current !== bgOpacity
+            ) {
+                if (overlayTextureRef.current) gl.deleteTexture(overlayTextureRef.current)
+                lastOverlayColorRef.current = colorKey
+                lastOverlayOpacityRef.current = bgOpacity
+                overlayTextureRef.current = createSolidColorTexture(
+                    gl,
+                    bgColor ?? "#000000",
+                    bgOpacity
+                )
+            }
+            let locs = uniformLocationsRef.current
+            if (!locs) {
+                locs = {
+                    u_image: gl.getUniformLocation(program, "u_image"),
+                    u_overlay: gl.getUniformLocation(program, "u_overlay"),
+                    u_resolution: gl.getUniformLocation(program, "u_resolution"),
+                    u_backgroundOpacity: gl.getUniformLocation(program, "u_backgroundOpacity"),
+                    u_imageAspect: gl.getUniformLocation(program, "u_imageAspect"),
+                    u_progress: gl.getUniformLocation(program, "u_progress"),
+                    u_time: gl.getUniformLocation(program, "u_time"),
+                    u_noiseWarpOctaves: gl.getUniformLocation(program, "u_noiseWarpOctaves"),
+                    u_noiseCartOctaves: gl.getUniformLocation(program, "u_noiseCartOctaves"),
+                    u_warpedDistNoiseWarp: gl.getUniformLocation(program, "u_warpedDistNoiseWarp"),
+                    u_warpedDistNoiseCart: gl.getUniformLocation(program, "u_warpedDistNoiseCart"),
+                    u_waveFreq: gl.getUniformLocation(program, "u_waveFreq"),
+                    u_sigma: gl.getUniformLocation(program, "u_sigma"),
+                    u_displacement: gl.getUniformLocation(program, "u_displacement"),
+                    u_caStrength: gl.getUniformLocation(program, "u_caStrength"),
+                    u_glow: gl.getUniformLocation(program, "u_glow"),
+                    u_edgeGlow: gl.getUniformLocation(program, "u_edgeGlow"),
+                }
+                uniformLocationsRef.current = locs
+            }
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, imageTextureRef.current)
+            gl.uniform1i(locs.u_image, 0)
+            gl.activeTexture(gl.TEXTURE1)
+            gl.bindTexture(gl.TEXTURE_2D, overlayTextureRef.current)
+            gl.uniform1i(locs.u_overlay, 1)
+            gl.uniform2f(locs.u_resolution!, pw, ph)
+            gl.uniform1f(locs.u_backgroundOpacity!, bgOpacity)
+            gl.uniform1f(locs.u_imageAspect!, imageAspectRef.current)
+            const progress = hasImageRef.current ? progressRef.current : 1
+            gl.uniform1f(locs.u_progress!, progress)
+            gl.uniform1f(locs.u_time!, overlayTime / 1000)
+            const t = shaderFinetuningRef.current
+            const hc = HARDCODED
+            gl.uniform1f(locs.u_noiseWarpOctaves!, hc.noiseWarpOctaves)
+            gl.uniform1f(locs.u_noiseCartOctaves!, t.noiseCartOctaves)
+            gl.uniform1f(locs.u_warpedDistNoiseWarp!, hc.warpedDistNoiseWarp)
+            gl.uniform1f(locs.u_warpedDistNoiseCart!, t.warpedDistNoiseCart)
+            gl.uniform1f(locs.u_waveFreq!, t.waveFreq)
+            gl.uniform1f(locs.u_sigma!, hc.sigma)
+            gl.uniform1f(locs.u_displacement!, t.displacement)
+            gl.uniform1f(locs.u_caStrength!, t.chromatic)
+            gl.uniform1f(locs.u_glow!, t.glow)
+            gl.uniform1f(locs.u_edgeGlow!, t.edgeGlow)
+            gl.drawArrays(gl.TRIANGLES, 0, 6)
+            renderRafRef.current = requestAnimationFrame(render)
+        }
+        renderRafRef.current = requestAnimationFrame(render)
+        return () => cancelAnimationFrame(renderRafRef.current)
+    }, [])
+    return <canvas ref={canvasRef as React.Ref<HTMLCanvasElement>} style={CANVAS_STYLE} />
+})
+
 interface NoisyRippleRevealProps {
     preview?: boolean
     masked?: boolean
-    duration?: number
+    transition?: TransitionConfig
+    backgroundColor?: string
+    backgroundOpacity?: number
     image?: { src?: string; srcSet?: string; alt?: string }
     shaderFinetuning?: Partial<ShaderFinetuning>
     style?: React.CSSProperties
+}
+
+
+const DEFAULT_TRANSITION: TransitionConfig = {
+    type: "tween",
+    duration: 1.5,
+    ease: "easeOut",
+    delay: 0,
 }
 
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
  * @framerIntrinsicWidth 400
- * @framerIntrinsicHeight 300
+ * @framerIntrinsicHeight 500
  * @framerDisableUnlink
  */
+
 export default function NoisyRippleReveal({
     preview = false,
     masked = true,
-    duration = 1.5,
+    transition: transitionProp,
+    backgroundColor,
+    backgroundOpacity = 1,
     image,
     shaderFinetuning: shaderFinetuningProp,
     style,
 }: NoisyRippleRevealProps) {
+    const transition: TransitionConfig = {
+        ...DEFAULT_TRANSITION,
+        ...transitionProp,
+    }
     const shaderFinetuning: ShaderFinetuning = {
         ...DEFAULT_SHADER_FINETUNING,
         ...shaderFinetuningProp,
@@ -380,22 +665,57 @@ export default function NoisyRippleReveal({
     const programRef = useRef<WebGLProgram | null>(null)
     const imageTextureRef = useRef<WebGLTexture | null>(null)
     const overlayTextureRef = useRef<WebGLTexture | null>(null)
+    const lastOverlayColorRef = useRef<string | null>(null)
+    const lastOverlayOpacityRef = useRef<number>(-1)
+    const uniformLocationsRef = useRef<Record<string, WebGLUniformLocation | null> | null>(null)
     const imageLoadedRef = useRef(false)
+    const hasImageRef = useRef(false)
     const imageSrcRef = useRef<string | null>(null)
+    const imageAspectRef = useRef(1)
 
-    const [progress, setProgress] = useState(masked ? 0 : 1)
+    const isCanvas = RenderTarget.current() === RenderTarget.canvas
+    const previewMatters = isCanvas
+    const initialProgress = previewMatters && preview ? 0.3 : masked ? 0 : 1
+    const [progress, setProgress] = useState(initialProgress)
     const prevMaskedRef = useRef(masked)
-    const progressRef = useRef(masked ? 0 : 1)
+    const prevPreviewRef = useRef(preview)
+    const progressRef = useRef(initialProgress)
     progressRef.current = progress
     const rafRef = useRef<number>(0)
     const renderRafRef = useRef<number>(0)
     const startTimeRef = useRef<number>(0)
     const overlayTimeRef = useRef<number>(0)
+    const springVelocityRef = useRef(0)
+    const springPositionRef = useRef(0)
 
     const hasImage =
         image != null && typeof image === "object" && image.src != null
+    hasImageRef.current = hasImage
 
     useEffect(() => {
+        // Preview (static 50% hole) only applies in canvas; in preview target only masked matters
+        if (previewMatters && preview) {
+            prevPreviewRef.current = true
+            setProgress(0.3)
+            return
+        }
+        if (previewMatters && prevPreviewRef.current) {
+            prevPreviewRef.current = false
+            prevMaskedRef.current = masked
+            setProgress(masked ? 0 : 1)
+            return
+        }
+
+        const durationSec = transition.duration ?? 1.5
+        const delaySec = transition.delay ?? 0
+        const ease = transition.ease
+        const isSpring = transition.type === "spring"
+        const stiffness = transition.stiffness ?? 100
+        const mass = transition.mass ?? 1
+        const bounce = transition.bounce ?? 0
+        const baseDamping = transition.damping ?? 10
+        const damping = baseDamping * (1 - bounce * 0.9)
+
         if (masked) {
             prevMaskedRef.current = true
             const startProgress = progressRef.current
@@ -403,14 +723,46 @@ export default function NoisyRippleReveal({
                 setProgress(0)
                 return
             }
+            const target = 0
             startTimeRef.current = performance.now()
+            springPositionRef.current = startProgress
+            springVelocityRef.current = 0
             let cancelled = false
+            let lastSpringTime = performance.now() / 1000
             const animate = (now: number) => {
                 if (cancelled) return
                 const elapsed = (now - startTimeRef.current) / 1000
-                const t = Math.min(1, elapsed / duration)
-                setProgress(startProgress * (1.0 - t))
-                if (t < 1) rafRef.current = requestAnimationFrame(animate)
+                if (elapsed < delaySec) {
+                    lastSpringTime = now / 1000
+                    rafRef.current = requestAnimationFrame(animate)
+                    return
+                }
+                if (isSpring) {
+                    const nowSec = now / 1000
+                    const dt = Math.min(nowSec - lastSpringTime, 1 / 30)
+                    lastSpringTime = nowSec
+                    const [p, v] = springStep(
+                        springPositionRef.current,
+                        springVelocityRef.current,
+                        target,
+                        stiffness,
+                        damping,
+                        mass,
+                        dt
+                    )
+                    springPositionRef.current = p
+                    springVelocityRef.current = v
+                    setProgress(p)
+                    const settled =
+                        Math.abs(p - target) < SPRING_POS_THRESHOLD &&
+                        Math.abs(v) < SPRING_VEL_THRESHOLD
+                    if (!settled && elapsed < 10) rafRef.current = requestAnimationFrame(animate)
+                } else {
+                    const rawT = Math.min(1, (elapsed - delaySec) / durationSec)
+                    const t = applyEase(rawT, ease)
+                    setProgress(startProgress * (1.0 - t))
+                    if (rawT < 1) rafRef.current = requestAnimationFrame(animate)
+                }
             }
             rafRef.current = requestAnimationFrame(animate)
             return () => {
@@ -421,69 +773,73 @@ export default function NoisyRippleReveal({
         const wasMasked = prevMaskedRef.current
         prevMaskedRef.current = false
         if (!wasMasked) return
+        const target = 1
         startTimeRef.current = performance.now()
+        springPositionRef.current = progressRef.current
+        springVelocityRef.current = 0
         let cancelled = false
+        let lastSpringTime = performance.now() / 1000
         const animate = (now: number) => {
             if (cancelled) return
             const elapsed = (now - startTimeRef.current) / 1000
-            const t = Math.min(1, elapsed / duration)
-            setProgress(t)
-            if (t < 1) rafRef.current = requestAnimationFrame(animate)
+            if (elapsed < delaySec) {
+                lastSpringTime = now / 1000
+                rafRef.current = requestAnimationFrame(animate)
+                return
+            }
+            if (isSpring) {
+                const nowSec = now / 1000
+                const dt = Math.min(nowSec - lastSpringTime, 1 / 30)
+                lastSpringTime = nowSec
+                const [p, v] = springStep(
+                    springPositionRef.current,
+                    springVelocityRef.current,
+                    target,
+                    stiffness,
+                    damping,
+                    mass,
+                    dt
+                )
+                springPositionRef.current = p
+                springVelocityRef.current = v
+                setProgress(p)
+                const settled =
+                    Math.abs(p - target) < SPRING_POS_THRESHOLD &&
+                    Math.abs(v) < SPRING_VEL_THRESHOLD
+                if (!settled && elapsed < 10) rafRef.current = requestAnimationFrame(animate)
+            } else {
+                const rawT = Math.min(1, (elapsed - delaySec) / durationSec)
+                const t = applyEase(rawT, ease)
+                setProgress(t)
+                if (rawT < 1) rafRef.current = requestAnimationFrame(animate)
+            }
         }
         rafRef.current = requestAnimationFrame(animate)
         return () => {
             cancelled = true
             if (rafRef.current) cancelAnimationFrame(rafRef.current)
         }
-    }, [masked, duration])
-
-    useLayoutEffect(() => {
-        const canvas = canvasRef.current
-        if (!canvas) return
-        const gl = canvas.getContext("webgl", {
-            premultipliedAlpha: false,
-            alpha: true,
-        })
-        if (!gl) return
-        glRef.current = gl
-        const program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER)
-        if (!program) return
-        programRef.current = program
-        const positions = new Float32Array([
-            -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
-        ])
-        const texCoords = new Float32Array([0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0])
-        const posBuffer = gl.createBuffer()
-        gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
-        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW)
-        gl.enableVertexAttribArray(gl.getAttribLocation(program, "a_position"))
-        gl.vertexAttribPointer(
-            gl.getAttribLocation(program, "a_position"),
-            2,
-            gl.FLOAT,
-            false,
-            0,
-            0
-        )
-        const texBuffer = gl.createBuffer()
-        gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer)
-        gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW)
-        gl.enableVertexAttribArray(gl.getAttribLocation(program, "a_texCoord"))
-        gl.vertexAttribPointer(
-            gl.getAttribLocation(program, "a_texCoord"),
-            2,
-            gl.FLOAT,
-            false,
-            0,
-            0
-        )
-    }, [])
+    }, [
+        masked,
+        preview,
+        transition?.type,
+        transition?.duration,
+        transition?.delay,
+        transition?.stiffness,
+        transition?.damping,
+        transition?.mass,
+        transition?.bounce,
+        typeof transition?.ease === "string"
+            ? transition.ease
+            : JSON.stringify(transition?.ease ?? []),
+    ])
 
     useEffect(() => {
         const gl = glRef.current
         if (!gl) return
         if (!hasImage || !image?.src) {
             imageSrcRef.current = null
+            imageAspectRef.current = 1
             if (imageTextureRef.current) {
                 gl.deleteTexture(imageTextureRef.current)
                 imageTextureRef.current = null
@@ -532,6 +888,8 @@ export default function NoisyRippleReveal({
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
             imageTextureRef.current = texture
             imageLoadedRef.current = true
+            imageAspectRef.current =
+                img.naturalWidth / Math.max(1, img.naturalHeight)
         }
         img.onerror = () => {
             if (imageSrcRef.current === src) imageSrcRef.current = null
@@ -539,107 +897,12 @@ export default function NoisyRippleReveal({
         img.src = src
     }, [hasImage, image, image?.src])
 
-    useEffect(() => {
-        const canvas = canvasRef.current
-        const container = containerRef.current
-        const gl = glRef.current
-        const program = programRef.current
-        if (!canvas || !container || !gl || !program) return
-        const isCanvas = RenderTarget.current() === RenderTarget.canvas
-        const runOverlayMotion = preview || isCanvas
-        overlayTimeRef.current = performance.now()
-
-        const render = () => {
-            const w = container.clientWidth
-            const h = container.clientHeight
-            if (canvas.width !== w || canvas.height !== h) {
-                canvas.width = w
-                canvas.height = h
-            }
-            gl.viewport(0, 0, w, h)
-            gl.clearColor(0, 0, 0, 0)
-            gl.clear(gl.COLOR_BUFFER_BIT)
-            if (!imageLoadedRef.current || !imageTextureRef.current) {
-                renderRafRef.current = requestAnimationFrame(render)
-                return
-            }
-            gl.useProgram(program)
-            const overlayTime = runOverlayMotion
-                ? performance.now() - overlayTimeRef.current
-                : 0
-            if (overlayTextureRef.current)
-                gl.deleteTexture(overlayTextureRef.current)
-            overlayTextureRef.current = masked
-                ? createOverlayTexture(
-                      gl,
-                      128,
-                      128,
-                      DEFAULT_PEACH,
-                      DEFAULT_PURPLE,
-                      DEFAULT_TEAL,
-                      overlayTime
-                  )
-                : createTransparentOverlayTexture(gl, 128, 128)
-            gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, imageTextureRef.current)
-            gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0)
-            gl.activeTexture(gl.TEXTURE1)
-            gl.bindTexture(gl.TEXTURE_2D, overlayTextureRef.current)
-            gl.uniform1i(gl.getUniformLocation(program, "u_overlay"), 1)
-            gl.uniform2f(gl.getUniformLocation(program, "u_resolution"), w, h)
-            gl.uniform1f(gl.getUniformLocation(program, "u_progress"), progress)
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_time"),
-                overlayTime / 1000
-            )
-            const t = shaderFinetuningRef.current
-            const hc = HARDCODED
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_noiseWarpOctaves"),
-                hc.noiseWarpOctaves
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_noiseCartOctaves"),
-                t.noiseCartOctaves
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_warpedDistNoiseWarp"),
-                hc.warpedDistNoiseWarp
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_warpedDistNoiseCart"),
-                t.warpedDistNoiseCart
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_waveFreq"),
-                t.waveFreq
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_sigma"),
-                hc.sigma
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_displacement"),
-                t.displacement
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_caStrength"),
-                t.chromatic
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_glow"),
-                t.glow
-            )
-            gl.uniform1f(
-                gl.getUniformLocation(program, "u_edgeGlow"),
-                t.edgeGlow
-            )
-            gl.drawArrays(gl.TRIANGLES, 0, 6)
-            renderRafRef.current = requestAnimationFrame(render)
-        }
-        renderRafRef.current = requestAnimationFrame(render)
-        return () => cancelAnimationFrame(renderRafRef.current)
-    }, [progress, preview, masked])
+    const backgroundColorRef = useRef(backgroundColor)
+    backgroundColorRef.current = backgroundColor
+    const backgroundOpacityRef = useRef(backgroundOpacity)
+    backgroundOpacityRef.current = backgroundOpacity
+    const previewRef = useRef(preview)
+    previewRef.current = preview
 
     return (
         <div
@@ -650,6 +913,7 @@ export default function NoisyRippleReveal({
                 width: "100%",
                 height: "100%",
                 overflow: "hidden",
+                background: !hasImage ? "transparent" : backgroundColor,
             }}
         >
             {!hasImage && (
@@ -661,54 +925,75 @@ export default function NoisyRippleReveal({
                         pointerEvents: "none",
                     }}
                     title="Noisy Ripple Reveal"
-                    subtitle="Add an image to reveal"
+                    subtitle="Add an image to create a nice ripple reveal effect."
                 />
             )}
-            <canvas
-                ref={canvasRef}
-                style={{ display: "block", width: "100%", height: "100%" }}
+            <NoisyRippleCanvasLayer
+                containerRef={containerRef}
+                canvasRef={canvasRef}
+                glRef={glRef}
+                programRef={programRef}
+                imageTextureRef={imageTextureRef}
+                overlayTextureRef={overlayTextureRef}
+                lastOverlayColorRef={lastOverlayColorRef}
+                lastOverlayOpacityRef={lastOverlayOpacityRef}
+                uniformLocationsRef={uniformLocationsRef}
+                imageLoadedRef={imageLoadedRef}
+                hasImageRef={hasImageRef}
+                imageAspectRef={imageAspectRef}
+                progressRef={progressRef}
+                overlayTimeRef={overlayTimeRef}
+                shaderFinetuningRef={shaderFinetuningRef}
+                backgroundColorRef={backgroundColorRef}
+                backgroundOpacityRef={backgroundOpacityRef}
+                previewRef={previewRef}
+                renderRafRef={renderRafRef}
             />
         </div>
     )
 }
 
 addPropertyControls(NoisyRippleReveal, {
-    preview: {
-        type: ControlType.Boolean,
-        title: "Preview",
-        defaultValue: false,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-    masked: {
-        type: ControlType.Boolean,
-        title: "Masked",
-        defaultValue: true,
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-    duration: {
-        type: ControlType.Number,
-        title: "Duration",
-        min: 0.3,
-        max: 4,
-        step: 0.1,
-        defaultValue: 1.5,
-        unit: "s",
-    },
     image: {
         type: ControlType.ResponsiveImage,
         title: "Image",
     },
+    preview: {
+        type: ControlType.Boolean,
+        title: "Preview",
+        defaultValue: false,
+        enabledTitle: "Static",
+        disabledTitle: "Dynamic",
+    },
+
+    masked: {
+        type: ControlType.Boolean,
+        title: "Masked",
+        defaultValue: true,
+        enabledTitle: "Off",
+        disabledTitle: "On",
+        hidden: (props) => props.preview === true,
+    },
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: DEFAULT_TRANSITION,
+    },
+    backgroundColor: {
+        type: ControlType.Color,
+        title: "Background",
+        optional: true,
+    },
     shaderFinetuning: {
         type: ControlType.Object,
         title: "Shader",
+        description:"More components at [Framer University](https://frameruni.link/cc).",
         controls: {
             noiseCartOctaves: {
                 type: ControlType.Number,
                 title: "Octaves",
                 min: 1,
-                max: 5,
+                max: 10,
                 step: 1,
                 defaultValue: DEFAULT_SHADER_FINETUNING.noiseCartOctaves,
             },
@@ -730,18 +1015,18 @@ addPropertyControls(NoisyRippleReveal, {
             },
             displacement: {
                 type: ControlType.Number,
-                title: "Displace",
+                title: "Liquid",
                 min: 0,
                 max: 10,
-                step: 0.02,
+                step:1,
                 defaultValue: DEFAULT_SHADER_FINETUNING.displacement,
             },
             chromatic: {
                 type: ControlType.Number,
                 title: "Chromatic",
                 min: 0,
-                max: 10,
-                step: 0.005,
+                max: 30,
+                step: 0.05,
                 defaultValue: DEFAULT_SHADER_FINETUNING.chromatic,
             },
             glow: {
@@ -759,11 +1044,10 @@ addPropertyControls(NoisyRippleReveal, {
                 max: 0.5,
                 step: 0.02,
                 defaultValue: DEFAULT_SHADER_FINETUNING.edgeGlow,
-                description:
-                    "More components at [Framer University](https://frameruni.link/cc).",
+                
             },
         },
     },
 })
 
-NoisyRippleReveal.displayName = "Noisy Ripple Reveal"
+NoisyRippleReveal.displayName = "Magic Shader Mask"

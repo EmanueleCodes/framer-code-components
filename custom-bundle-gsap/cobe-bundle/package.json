@@ -1,0 +1,20 @@
+{
+  "name": "cobe-bundle",
+  "version": "1.0.0",
+  "description": "Bundled cobe (WebGL globe) for Framer Code Components",
+  "main": "dist/bundle.js",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cobe": "^2.0.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.9",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.59.0"
+  }
+}

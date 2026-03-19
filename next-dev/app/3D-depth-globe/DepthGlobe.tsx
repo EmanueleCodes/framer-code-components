@@ -49,8 +49,9 @@ import type { OrbitControls as OrbitControlsType } from "https://cdn.jsdelivr.ne
 // SECTION: Scene context (from DepthGlobeSceneContext.tsx)
 // =============================================================================
 
-// Binary format: ~4x smaller, no JSON.parse. Served from Cloudflare Pages.
-const GLOBE_DATA_BASE = "https://depth-globe-data.pages.dev"
+// Binary format: ~4x smaller, no JSON.parse. Hosted on framer-university/components.
+const GLOBE_DATA_BASE =
+    "https://cdn.jsdelivr.net/gh/framer-university/components/depth-globe-data"
 
 const BINARY_URLS: Record<string, string> = {
     low: `${GLOBE_DATA_BASE}/globe_low.bin`,
@@ -58,11 +59,11 @@ const BINARY_URLS: Record<string, string> = {
     high: `${GLOBE_DATA_BASE}/globe_high.bin`,
 }
 
-// JSON fallback (GitHub raw) – slower parse, larger transfer
+// JSON fallback – slower parse, larger transfer (same repo as binaries)
 const JSON_FALLBACK_URLS: Record<string, string> = {
-    low: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
-    medium: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
-    high: "https://raw.githubusercontent.com/EmanueleCodes/framer-code-components/main/next-dev/app/3D-depth-globe/source/src/data/globe_samples_10m_0.1.json",
+    low: `${GLOBE_DATA_BASE}/globe_samples_10m_0.1.json`,
+    medium: `${GLOBE_DATA_BASE}/globe_samples_10m_0.1.json`,
+    high: `${GLOBE_DATA_BASE}/globe_samples_10m_0.1.json`,
 }
 
 export type GlobePoint = [number, number, number, number] // [lat, lon, elevation, land]

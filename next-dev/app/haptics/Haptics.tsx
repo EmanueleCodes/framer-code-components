@@ -13,7 +13,7 @@ interface HapticsFramerProps {
     patternMode: "preset" | "custom"
     preset: HapticsPreset
     customPattern: string
-    debug?: boolean
+    debug?: "sound" | "silent"
 }
 
 interface HapticsPropertyControlsProps {
@@ -31,7 +31,7 @@ const DEFAULT_CUSTOM_PATTERN = `trigger([
  * @framerDisableUnlink
  */
 export default function Haptics(props: HapticsFramerProps) {
-    const { trigger } = useWebHaptics({ debug: props.debug ?? false })
+    const { trigger } = useWebHaptics({ debug: props.debug === "sound" })
     const mainRef = useRef<HTMLDivElement>(null)
     const isOnFramerCanvas = RenderTarget.hasRestrictions()
 
@@ -204,16 +204,19 @@ addPropertyControls(Haptics, {
         type: ControlType.String,
         title: "Value",
         placeholder: DEFAULT_CUSTOM_PATTERN,
-        description: "Create your pattern [here](https://haptics.lochie.me/).",
+        displayTextArea: true,
+        description: "Create your custom haptic feedback [here](https://haptics.lochie.me/).",
         hidden: (props: HapticsPropertyControlsProps) =>
             props.patternMode === "preset",
     },
     debug: {
-        type: ControlType.Boolean,
+        type: ControlType.Enum,
         title: "Debug",
-        enabledTitle: "Sound",
-        disabledTitle: "Off",
-        defaultValue: true,
+        options: ["sound", "silent"],
+        optionTitles: ["Play Sound", "Silent"],
+        defaultValue: "sound",
+        displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
         description:
             "More components at [Framer University](https://frameruni.link/cc).",
     },

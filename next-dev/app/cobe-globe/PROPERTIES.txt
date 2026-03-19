@@ -1,0 +1,52 @@
+CobeGlobe - Property Controls
+
+Preview
+Runs the globe animation in the Framer editor canvas. On / Off.
+
+Preset
+Marker set: None, Cities (world cities), or Flights (cities + great-circle arcs).
+
+Spin
+Auto-rotate the globe around the vertical axis. On / Off.
+
+Speed
+Rotation speed when Spin is on.
+
+Theme
+Light or dark land styling (COBE `dark` 0 / 1).
+
+Tilt
+Vertical camera tilt in radians (COBE `theta`).
+
+Diffuse
+Diffuse lighting strength.
+
+Samples
+Number of dots used for the map (`mapSamples`). Higher = sharper, heavier.
+
+Land
+Land dot brightness (`mapBrightness`).
+
+Ocean
+Base brightness for ocean areas (`mapBaseBrightness`).
+
+Arcs
+Show flight arcs (only applies when Preset is Flights). On / Off.
+
+Stroke
+Arc line thickness (`arcWidth`).
+
+Curve
+Arc height above the globe (`arcHeight`).
+
+Dots
+Marker dot size.
+
+Sharp
+Device pixel ratio (1–3). Higher = sharper, heavier.
+
+Colors
+Base, Marker, Glow, and Arc — globe and overlay colors (hex).
+
+Debug
+Editor outline for layout. More components at [Framer University](https://frameruni.link/cc).
