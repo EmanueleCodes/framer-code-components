@@ -3,50 +3,23 @@ CobeGlobe - Property Controls
 Preview
 Runs the globe animation in the Framer editor canvas. On / Off.
 
-Preset
-Marker set: None, Cities (world cities), or Flights (cities + great-circle arcs).
+Motion
+Phi (horizontal rotation), Tilt (theta), Spin auto-rotate, Speed when Spin is on, Drag for pointer-based spring rotation.
 
-Spin
-Auto-rotate the globe around the vertical axis. On / Off.
-
-Speed
-Rotation speed when Spin is on.
-
-Theme
-Light or dark land styling (COBE `dark` 0 / 1).
-
-Tilt
-Vertical camera tilt in radians (COBE `theta`).
-
-Diffuse
-Diffuse lighting strength.
-
-Samples
-Number of dots used for the map (`mapSamples`). Higher = sharper, heavier.
-
-Land
-Land dot brightness (`mapBrightness`).
-
-Ocean
-Base brightness for ocean areas (`mapBaseBrightness`).
-
-Arcs
-Show flight arcs (only applies when Preset is Flights). On / Off.
-
-Stroke
-Arc line thickness (`arcWidth`).
-
-Curve
-Arc height above the globe (`arcHeight`).
+Globe
+Theme (Light / Dark), Dark blend when Light, Diffuse, Samples (mapSamples), Land (mapBrightness), Ocean (mapBaseBrightness), Scale, Opacity, OffsetX / OffsetY, Sharp (device pixel ratio).
 
 Dots
-Marker dot size.
+Size (marker size), Lift (markerElevation), Points (lat/lng + Id per marker).
 
-Sharp
-Device pixel ratio (1–3). Higher = sharper, heavier.
+Arcs
+Show, Width (arcWidth), Height (arcHeight), Links (From / To marker Ids).
 
 Colors
-Base, Marker, Glow, and Arc — globe and overlay colors (hex).
+Base, Marker, Glow, Arc.
+
+Background
+Optional color behind the globe; leave unset for transparent.
 
 Debug
-Editor outline for layout. More components at [Framer University](https://frameruni.link/cc).
+More components at [Framer University](https://frameruni.link/cc).

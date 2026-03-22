@@ -1,23 +1,25 @@
 Noisy Ripple Reveal - Property Controls
 
+Image
+Source image to reveal.
+
 Preview
-Whether the effect runs in the Framer canvas. On / Off.
+Whether the effect runs in the Framer canvas. Static / Dynamic.
 
 Masked
 Whether the image starts masked (reveal on uncheck). When Off, only the image is visible with a transparent background.
 
 Transition
-Duration, easing, and delay for the reveal animation (same as other Framer transition controls).
+Duration, easing, and delay for the reveal animation (same as other Framer transition controls). More components at [Framer University](https://frameruni.link/cc).
 
-Image
-Source image to reveal.
+Background
+Optional fill behind the reveal.
+
+Mode
+Shader source: Preset (built-in looks) or Custom (manual Shader object).
+
+Preset
+When Mode is Preset: Noisy, Sharp, Water, Water drop, or Magic. Each maps to Octaves, Warp, Freq, Liquid, Chromatic, Intensity, and Edge.
 
 Shader
-Fine-tune shader parameters. Sub-controls:
-  Octaves – Noise cart octaves (1–4).
-  Warp – Warped distance noise cart (0–2).
-  Freq – Wave frequency (4–60).
-  Displace – How much the image is distorted by the wave (0–1).
-  Chromatic – Chromatic aberration strength (0–0.2).
-  Intensity – Glow intensity (color dodge at wavefront). 0–1.
-  Edge – Additive white at the wave edge. 0–0.5. More components at [Framer University](https://frameruni.link/cc).
+When Mode is Custom, fine-tune shader parameters. Sub-controls: Octaves, Warp, Freq, Liquid, Chromatic, Intensity, Edge.

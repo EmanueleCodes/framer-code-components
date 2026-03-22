@@ -5,11 +5,66 @@ import React, {
     useState,
     useCallback,
 } from "react"
-import { addPropertyControls, ControlType } from "framer"
+import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+
+type ViewportLine = "top" | "center" | "bottom"
+
+function viewportLineToY(line: ViewportLine, vh: number): number {
+    if (line === "center") return vh / 2
+    if (line === "bottom") return vh
+    return 0
+}
+
+function findStickyAncestor(el: HTMLElement): HTMLElement | null {
+    let current: HTMLElement | null = el.parentElement
+    while (current && current !== document.body) {
+        if (window.getComputedStyle(current).position === "sticky")
+            return current
+        current = current.parentElement
+    }
+    return null
+}
+
+/**
+ * Progress 0 when the tracked box top hits startLine; 1 when its bottom hits endLine.
+ * Nearest sticky ancestor (or `el` if it is sticky); if none, `el` is used as the box.
+ *
+ * Important: while `position: sticky` is active, the sticky node's getBoundingClientRect
+ * barely moves, so progress would stay ~0. We measure the sticky element's parent instead
+ * — the tall block that defines how long you scroll while the sticky layer is pinned.
+ */
+function scrollProgressFromStickyViewport(
+    el: HTMLElement,
+    startLine: ViewportLine,
+    endLine: ViewportLine
+): number {
+    let sticky = findStickyAncestor(el)
+    if (!sticky && window.getComputedStyle(el).position === "sticky") {
+        sticky = el
+    }
+    if (!sticky) sticky = el
+
+    const vh = window.innerHeight || 0
+    const yStart = viewportLineToY(startLine, vh)
+    const yEnd = viewportLineToY(endLine, vh)
+
+    const isStickyNode =
+        window.getComputedStyle(sticky).position === "sticky"
+    const box =
+        isStickyNode && sticky.parentElement ? sticky.parentElement : sticky
+
+    const rect = box.getBoundingClientRect()
+    const h = rect.height
+    const topWhenStart = yStart
+    const topWhenEnd = yEnd - h
+    const denom = topWhenStart - topWhenEnd
+    if (Math.abs(denom) < 1e-6) return 0
+    return clamp01((topWhenStart - rect.top) / denom)
+}
 
 function createSeededRandom(seed: number) {
     let s = Math.max(0, seed)
@@ -41,7 +96,7 @@ function initCards(
     const rMinPct =
         Math.max(0, Math.min(100, placementZone?.radiusMin ?? 0)) / 100
     const rMaxPct =
-        Math.max(0, Math.min(100, placementZone?.radiusMax ?? 100)) / 100
+        Math.max(0, Math.min(500, placementZone?.radiusMax ?? 100)) / 100
     const rMin = rMinPct * HALF_DIAGONAL
     const rMax = Math.max(rMin, rMaxPct * HALF_DIAGONAL)
 
@@ -65,8 +120,12 @@ interface InfiniteZoomCanvasProps {
     seed: number
     placementZone: { radiusMin: number; radiusMax: number }
     startAlign: "top" | "center" | "bottom"
+    scrollUnit: "px" | "relative"
+    /** When scrollUnit is relative: start = when sticky top hits viewport line; end = when sticky bottom hits viewport line. */
+    stickyRange: { start: ViewportLine; end: ViewportLine }
     length: number
     depthRange: number
+    perspective: number
     fadeStart: number
     fadeEnd: number
     smoothing: number
@@ -84,16 +143,19 @@ interface InfiniteZoomCanvasProps {
 export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
     const {
         content = [],
-        duplication = 2,
-        seed = 0,
-        placementZone = { radiusMin: 0, radiusMax: 100 },
+        duplication = 13,
+        seed = 5,
+        placementZone = { radiusMin: 40, radiusMax: 320 },
         startAlign = "top",
-        length = 2000,
-        depthRange = 3000,
-        fadeStart = 800,
-        fadeEnd = 100,
-        smoothing = 1,
-        backgroundColor = "transparent",
+        scrollUnit = "px",
+        stickyRange = { start: "top", end: "bottom" },
+        length = 4000,
+        depthRange = 10000,
+        perspective = 1450,
+        fadeStart = 6100,
+        fadeEnd = 4600,
+        smoothing = 0.66,
+        backgroundColor = "#EBF3F5",
         style,
     } = props
 
@@ -167,33 +229,65 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
         [findStickyParent]
     )
 
-    useEffect(() => {
-        if (!containerRef.current) return
+    // Ref + contentCount: without contentCount in deps, first paint with 0 items
+    // skips listeners; when items appear the effect did not re-run and scroll stayed dead.
+    // useLayoutEffect runs after the host div is committed so containerRef is set.
+    useLayoutEffect(() => {
+        if (contentCount === 0) return
+
         const computeStart = () => {
-            if (!containerRef.current) return
-            startPositionRef.current = getOriginalPosition(containerRef.current)
+            const el = containerRef.current
+            if (!el) return
+            startPositionRef.current = getOriginalPosition(el)
         }
-        computeStart()
+        if (
+            scrollUnit === "px" &&
+            RenderTarget.current() !== RenderTarget.canvas
+        ) {
+            computeStart()
+        }
 
         const updateTargetFromScroll = () => {
-            const scrollY = window.scrollY || document.documentElement.scrollTop
-            const lenPx = Math.max(1, typeof length === "number" ? length : 1)
-            const vh = window.innerHeight || 0
-            const linePx =
-                startAlign === "center"
-                    ? vh / 2
-                    : startAlign === "bottom"
-                      ? vh
-                      : 0
-            const startScrollY = startPositionRef.current - linePx
-            const p = clamp01((scrollY - startScrollY) / lenPx)
+            if (RenderTarget.current() === RenderTarget.canvas) {
+                scrollTargetRef.current = 0
+                scrollCurrentRef.current = 0
+                return
+            }
+            let p = 0
+            if (scrollUnit === "relative") {
+                const el = containerRef.current
+                if (!el) return
+                const start = stickyRange?.start ?? "top"
+                const end = stickyRange?.end ?? "bottom"
+                p = scrollProgressFromStickyViewport(el, start, end)
+            } else {
+                const scrollY =
+                    window.scrollY || document.documentElement.scrollTop
+                const lenPx = Math.max(
+                    1,
+                    typeof length === "number" ? length : 1
+                )
+                const vh = window.innerHeight || 0
+                const linePx =
+                    startAlign === "center"
+                        ? vh / 2
+                        : startAlign === "bottom"
+                          ? vh
+                          : 0
+                const startScrollY = startPositionRef.current - linePx
+                p = clamp01((scrollY - startScrollY) / lenPx)
+            }
             scrollTargetRef.current = p * depthRange
         }
         updateTargetFromScroll()
 
+        if (RenderTarget.current() === RenderTarget.canvas) {
+            return
+        }
+
         const onScroll = () => requestAnimationFrame(updateTargetFromScroll)
         const onResize = () => {
-            computeStart()
+            if (scrollUnit === "px") computeStart()
             updateTargetFromScroll()
         }
         window.addEventListener("scroll", onScroll, { passive: true })
@@ -202,11 +296,30 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
             window.removeEventListener("scroll", onScroll)
             window.removeEventListener("resize", onResize)
         }
-    }, [length, startAlign, depthRange, getOriginalPosition])
+    }, [
+        contentCount,
+        length,
+        startAlign,
+        depthRange,
+        scrollUnit,
+        stickyRange?.start,
+        stickyRange?.end,
+        getOriginalPosition,
+    ])
 
     useEffect(() => {
         const internalSmoothing = 0.05 + (1 - smoothing) * 0.95
         const animate = () => {
+            if (RenderTarget.current() === RenderTarget.canvas) {
+                scrollTargetRef.current = 0
+                scrollCurrentRef.current = 0
+                if (Math.abs(cameraZRef.current) > 0.01) {
+                    cameraZRef.current = 0
+                    setCameraZ(0)
+                }
+                rafRef.current = requestAnimationFrame(animate)
+                return
+            }
             scrollCurrentRef.current = lerp(
                 scrollCurrentRef.current,
                 scrollTargetRef.current,
@@ -228,7 +341,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
             <ComponentMessage
                 title="Connect components"
                 subtitle="Add components to fill this gallery. The component preserves each item's interactivity"
-                style={{ width: "100%", height: "100%", backgroundColor, ...style }}
+                style={{ width: "100%", height: "100%"}}
             />
         )
     }
@@ -255,7 +368,7 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
                 width: "100%",
                 height: "100%",
                 overflow: "hidden",
-                perspective: 800,
+                perspective: Math.max(1, perspective),
                 perspectiveOrigin: "50% 50%",
                 backgroundColor,
                 ...style,
@@ -304,16 +417,19 @@ export default function InfiniteZoomCanvas(props: InfiniteZoomCanvasProps) {
 
 InfiniteZoomCanvas.defaultProps = {
     content: [],
-    duplication: 2,
-    seed: 0,
-    placementZone: { radiusMin: 0, radiusMax: 100 },
+    duplication: 13,
+    seed: 5,
+    placementZone: { radiusMin: 40, radiusMax: 320 },
     startAlign: "top" as const,
-    length: 2000,
-    depthRange: 3000,
-    fadeStart: 800,
-    fadeEnd: 100,
-    smoothing: 1,
-    backgroundColor: "transparent",
+    scrollUnit: "px" as const,
+    stickyRange: { start: "top" as const, end: "bottom" as const },
+    length: 4000,
+    depthRange: 10000,
+    perspective: 1450,
+    fadeStart: 6100,
+    fadeEnd: 4600,
+    smoothing: 0.66,
+    backgroundColor: "#EBF3F5",
 }
 
 addPropertyControls(InfiniteZoomCanvas, {
@@ -323,13 +439,74 @@ addPropertyControls(InfiniteZoomCanvas, {
         control: { type: ControlType.ComponentInstance },
         maxCount: 12,
     },
+    scrollUnit: {
+        type: ControlType.Enum,
+        title: "Unit",
+        options: ["px", "relative"],
+        optionTitles: ["Px", "Relative"],
+        displaySegmentedControl: true,
+        segmentedControlDirection: "horizontal",
+        defaultValue: "px",
+    },
+    startAlign: {
+        type: ControlType.Enum,
+        title: "Start At",
+        options: ["top", "center", "bottom"],
+        optionTitles: ["Top", "Center", "Bottom"],
+        displaySegmentedControl: true,
+        segmentedControlDirection: "horizontal",
+        defaultValue: "top",
+        hidden: (props: InfiniteZoomCanvasProps) =>
+            (props.scrollUnit ?? "px") !== "px",
+    },
+    length: {
+        type: ControlType.Number,
+        title: "Scroll For",
+        min: 10,
+        max: 30000,
+        step: 100,
+        defaultValue: 4000,
+        unit: "px",
+        displayStepper: false,
+        hidden: (props: InfiniteZoomCanvasProps) =>
+            (props.scrollUnit ?? "px") !== "px",
+    },
+    stickyRange: {
+        type: ControlType.Object,
+        title: "Sticky",
+        description: "Controls the animation based on the sticky parent's scroll.",
+        hidden: (props: InfiniteZoomCanvasProps) =>
+            (props.scrollUnit ?? "px") !== "relative",
+        controls: {
+            start: {
+                type: ControlType.Enum,
+                title: "Start",
+                options: ["top", "center", "bottom"],
+                optionTitles: ["Top", "Center", "Bottom"],
+                displaySegmentedControl: true,
+                segmentedControlDirection: "horizontal",
+                defaultValue: "top",
+                description: "When the sticky parent's top hits this line, the animation starts.",
+            },
+            end: {
+                type: ControlType.Enum,
+                title: "End",
+                options: ["top", "center", "bottom"],
+                optionTitles: ["Top", "Center", "Bottom"],
+                displaySegmentedControl: true,
+                segmentedControlDirection: "horizontal",
+                defaultValue: "bottom",
+                description: "When the sticky parent's bottom hits this line, the animation ends.",
+            },
+        },
+    },
     duplication: {
         type: ControlType.Number,
         title: "Duplicates",
         min: 1,
         max: 20,
         step: 1,
-        defaultValue: 2,
+        defaultValue: 13,
     },
     seed: {
         type: ControlType.Number,
@@ -337,7 +514,7 @@ addPropertyControls(InfiniteZoomCanvas, {
         min: 0,
         max: 20,
         step: 1,
-        defaultValue: 0,
+        defaultValue: 5,
     },
     placementZone: {
         type: ControlType.Object,
@@ -350,47 +527,38 @@ addPropertyControls(InfiniteZoomCanvas, {
                 max: 100,
                 step: 1,
                 unit: "%",
-                defaultValue: 0,
+                defaultValue: 40,
                 description: "No images inside this radius",
             },
             radiusMax: {
                 type: ControlType.Number,
                 title: "Max",
                 min: 0,
-                max: 100,
+                max: 500,
                 step: 1,
                 unit: "%",
-                defaultValue: 100,
+                defaultValue: 320,
                 description: "No images outside this radius",
             },
         },
     },
-    startAlign: {
-        type: ControlType.Enum,
-        title: "Start At",
-        options: ["top", "center", "bottom"],
-        optionTitles: ["Top", "Center", "Bottom"],
-        displaySegmentedControl: true,
-        segmentedControlDirection: "horizontal",
-        defaultValue: "top",
-    },
-    length: {
-        type: ControlType.Number,
-        title: "Scroll For",
-        min: 10,
-        max: 30000,
-        step: 100,
-        defaultValue: 2000,
-        unit: "px",
-        displayStepper: false,
-    },
+    
     depthRange: {
         type: ControlType.Number,
         title: "Depth",
         min: 1000,
         max: 10000,
         step: 100,
-        defaultValue: 3000,
+        defaultValue: 10000,
+    },
+    perspective: {
+        type: ControlType.Number,
+        title: "Perspective",
+        min: 200,
+        max: 12000,
+        step: 50,
+        defaultValue: 1450,
+        unit: "px",
     },
     smoothing: {
         type: ControlType.Number,
@@ -398,20 +566,16 @@ addPropertyControls(InfiniteZoomCanvas, {
         min: 0,
         max: 1,
         step: 0.01,
-        defaultValue: 1,
+        defaultValue: 0.66,
     },
-    backgroundColor: {
-        type: ControlType.Color,
-        title: "Background",
-        defaultValue: "transparent",
-    },
+    
     fadeStart: {
         type: ControlType.Number,
         title: "Fade Depth",
         min: 1000,
         max: 9000,
         step: 100,
-        defaultValue: 800,
+        defaultValue: 6100,
     },
     fadeEnd: {
         type: ControlType.Number,
@@ -419,9 +583,16 @@ addPropertyControls(InfiniteZoomCanvas, {
         min: 0,
         max: 5000,
         step: 100,
-        defaultValue: 400,
-        description:
-            "More components at [Framer University](https://frameruni.link/cc).",
+        defaultValue: 4600,
+        
+    },
+    backgroundColor: {
+        type: ControlType.Color,
+        title: "Background",
+        defaultValue: "#EBF3F5",
+        optional:true,
+        description:"More components at [Framer University](https://frameruni.link/cc).",
+
     },
 })
 
