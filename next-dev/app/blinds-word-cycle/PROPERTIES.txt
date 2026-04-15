@@ -1,0 +1,28 @@
+Blinds Word Cycle - Property Controls
+
+Preview
+Enables animation playback in the Framer canvas. On or Off.
+
+Offscreen
+When Pause, the cycle stops while the layer is outside the viewport. When Run, it keeps animating off screen.
+
+Words
+List of word and blind-color pairs used by the cycle.
+
+Color
+Single text color used for all words.
+
+Font
+Typography style used for the visible word.
+
+Delay
+Time each word stays visible before the blinds transition.
+
+Direction
+Direction used for the blinds movement.
+
+In
+Transition settings for the blind cover phase.
+
+Out
+Transition settings for the blind uncover phase. More components at [Framer University](https://frameruni.link/cc).
