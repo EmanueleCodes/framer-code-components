@@ -1,7 +1,7 @@
-Blinds Word Cycle - Property Controls
+Text Mask Cycler - Property Controls
 
 Preview
-Enables animation playback in the Framer canvas. On or Off.
+In the Framer canvas, On runs the full cycle. Off shows the first word only with the mask hidden so the layout stays readable.
 
 Offscreen
 When Pause, the cycle stops while the layer is outside the viewport. When Run, it keeps animating off screen.

@@ -254,6 +254,28 @@ export default function BlindsWordCycle(props: BlindsWordCycleProps) {
     }, [pauseOffscreen])
 
     useEffect(() => {
+        if (!isCanvas) return
+        indexRef.current = 0
+        setCurrentIndex(0)
+        setBlindScale(0)
+        setBlindDuration(0)
+        setBlindEase("linear")
+        setBlindOrigin(getCoverOrigin(directionRef.current))
+        setBlindColor(wordsRef.current[0]?.color || "rgba(0,0,0,0.3)")
+        setWidthTransitionDuration(0)
+        setWidthTransitionEase("linear")
+        const w0 = wordWidthsRef.current[0]
+        if (w0 && w0 > 0) {
+            setWrapperWidth(w0)
+        }
+    }, [pauseInCanvas, isCanvas])
+
+    useEffect(() => {
+        if (!isCanvas || !pauseInCanvas) return
+        setBlindOrigin(getCoverOrigin(direction))
+    }, [direction, pauseInCanvas, isCanvas])
+
+    useEffect(() => {
         const clearTimers = () => {
             if (loopTimeoutRef.current) {
                 clearTimeout(loopTimeoutRef.current)
@@ -482,9 +504,9 @@ BlindsWordCycle.defaultProps = {
     preview: true,
     pauseOffscreen: true,
     words: [
-        { text: "stalled deals", color: "#F0C766" },
-        { text: "email overload", color: "#87D1FF" },
-        { text: "busy pipelines", color: "#C6A2FF" },
+        { text: "Framer University", color: "#F0C766" },
+        { text: "Code Components", color: "#87D1FF" },
+        { text: "And cool resources", color: "#C6A2FF" },
     ],
     color: "#111111",
     font: {
@@ -543,15 +565,15 @@ addPropertyControls(BlindsWordCycle as any, {
             },
         },
         defaultValue: [
-            { text: "Hello Everyone", color: "#F0C766" },
-            { text: "I Love Framer", color: "#87D1FF" },
-            { text: "What about you?", color: "#C6A2FF" },
+            { text: "Framer University", color: "#F0C766" },
+            { text: "Code Components", color: "#87D1FF" },
+            { text: "And cool resources", color: "#C6A2FF" },
         ],
     },
     color: {
         type: ControlType.Color,
         title: "Color",
-        defaultValue: "#111111",
+        defaultValue: "#777777",
     },
     font: {
         type: ControlType.Font,
@@ -614,4 +636,4 @@ addPropertyControls(BlindsWordCycle as any, {
     },
 })
 
-BlindsWordCycle.displayName = "Blinds Word Cycle"
+BlindsWordCycle.displayName = "Text Mask Cycler"
