@@ -1,48 +1,331 @@
 import * as React from "react"
-import { useEffect, useRef, useCallback, useMemo, useState } from "react"
+import {
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
+import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
+
+// Built with: cd custom-bundle-gsap/ascii-media-bundle && npm run build
+// Copy dist/bundle.js → npm-bundles/ascii-media-12.js (Framer University CDN path; committed on main).
+
+// DO NOT CHANGE THE URL
+
+import {
+    Canvas,
+    CanvasTexture,
+    Color,
+    DoubleSide,
+    LinearFilter,
+    MeshBasicMaterial,
+    NoToneMapping,
+    NormalBlending,
+    PlaneGeometry,
+    Scene,
+    ShaderMaterial,
+    SRGBColorSpace,
+    TextureLoader,
+    Vector2,
+    Vector3,
+    VideoTexture,
+    WebGLRenderTarget,
+    createPortal,
+    invalidate,
+    useFrame,
+    useThree,
+} from "https://cdn.jsdelivr.net/gh/framer-university/components/npm-bundles/ascii-media-5.js"
 
 // ============================================================================
-// TYPES
+// Shader: ASCII only (no scanlines, glow, palette, etc.)
 // ============================================================================
 
+const ASCII_VERTEX = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`
+
+const ASCII_FRAGMENT = `
+uniform sampler2D tDiffuse;
+uniform sampler2D uGlyphAtlas;
+uniform vec2 uGlyphGrid;
+uniform float uCharCount;
+uniform float uUseGlyphAtlas;
+varying vec2 vUv;
+uniform float cellSize;
+uniform bool invert;
+uniform bool colorMode;
+uniform int asciiStyle;
+uniform float time;
+uniform vec2 resolution;
+uniform float brightnessAdjust;
+uniform float contrastAdjust;
+
+// Same 5x5 bitmask as next-dev/app/ASCII-background-2/page.tsx (Font Type Default).
+float character(int n, vec2 p) {
+  p = floor(p * vec2(-4.0, 4.0) + 2.5);
+  if (clamp(p.x, 0.0, 4.0) == p.x && clamp(p.y, 0.0, 4.0) == p.y) {
+    int a = int(round(p.x) + 5.0 * round(p.y));
+    if (((n >> a) & 1) == 1) return 1.0;
+  }
+  return 0.0;
+}
+
+float styleBrightness(float b, int style) {
+  if (style == 0) return b;
+  if (style == 1) return pow(clamp(b, 0.0, 1.0), 0.82);
+  if (style == 2) return pow(clamp(b, 0.0, 1.0), 1.12);
+  if (style == 3) return floor(b * 4.0 + 0.001) / 4.0;
+  if (style == 4) return pow(clamp(b, 0.0, 1.0), 0.9);
+  if (style == 5) return pow(clamp(b, 0.0, 1.0), 0.88);
+  if (style == 6) return clamp(b + 0.05 * sin(time * 2.0 + b * 12.0), 0.0, 1.0);
+  if (style == 7) return pow(clamp(b, 0.0, 1.0), 0.92);
+  return b;
+}
+
+void main() {
+  vec2 uv = vUv;
+  vec2 cellCount = resolution / cellSize;
+  vec2 cellCoord = floor(uv * cellCount);
+  vec2 cellUV = (cellCoord + 0.5) / cellCount;
+  vec4 cellColor = texture(tDiffuse, cellUV);
+  vec3 leveled = (cellColor.rgb - 0.5) * contrastAdjust + 0.5 + brightnessAdjust;
+  leveled = clamp(leveled, 0.0, 1.0);
+  float brightness = dot(leveled, vec3(0.299, 0.587, 0.114));
+
+  if (invert) brightness = 1.0 - brightness;
+
+  float b = styleBrightness(clamp(brightness, 0.0, 1.0), asciiStyle);
+  b = clamp(b, 0.0001, 1.0);
+
+  vec2 localUV = fract(uv * cellCount);
+  float charAlpha;
+  if (uUseGlyphAtlas > 0.5) {
+    float cols = max(uGlyphGrid.x, 1.0);
+    float rows = max(uGlyphGrid.y, 1.0);
+    float maxIdx = max(uCharCount - 1.0, 0.0);
+    float idxF = clamp(floor(b * maxIdx + 0.5), 0.0, maxIdx);
+    vec2 tileSize = vec2(1.0) / vec2(cols, rows);
+    float colIdx = mod(idxF, cols);
+    float rowIdx = floor(idxF / cols);
+    vec2 tileOrigin = vec2(colIdx, rowIdx) * tileSize;
+    vec2 atlasUV = tileOrigin + localUV * tileSize;
+    vec3 glyphSample = texture(uGlyphAtlas, atlasUV).rgb;
+    charAlpha = dot(glyphSample, vec3(0.299, 0.587, 0.114));
+  } else {
+    float g = clamp(b, 0.0, 1.0);
+    int n = 4096;
+    if (g > 0.2) n = 65600;
+    if (g > 0.3) n = 163153;
+    if (g > 0.4) n = 15255086;
+    if (g > 0.5) n = 13121101;
+    if (g > 0.6) n = 15252014;
+    if (g > 0.7) n = 13195790;
+    if (g > 0.8) n = 11512810;
+    vec2 pix = uv * resolution;
+    float cell = max(cellSize, 1.0);
+    vec2 p = mod(pix / cell, 2.0) - vec2(1.0);
+    charAlpha = character(n, p);
+  }
+
+  vec3 rgb = colorMode ? leveled : vec3(brightness);
+  float outA = charAlpha * cellColor.a;
+  gl_FragColor = vec4(rgb, outA);
+}
+`
+
+type AsciiStyleId = "standard" | "dense" | "minimal" | "blocks" | "braille" | "technical" | "matrix" | "hatching"
 type SourceType = "image" | "video"
-type DitheringMode = "none" | "bayer" | "floyd-steinberg"
+type FontTypeId = "default" | "custom"
 
-interface Props {
-    sourceType: SourceType
-    image: any
-    videoSource: "url" | "upload"
-    videoFile: string
-    videoUrl: string
-    poster: any
-    autoplay: boolean
-    loop: boolean
-    primaryColor: string
-    secondaryColor: string
-    backgroundColor: string
-    characterSet: string
-    density: number
-    invertBrightness: boolean
-    threshold: number
-    intensity: number
-    font: {
+/** Type Default = same built-in bitmask glyphs as ASCII-background-2 (not canvas text). */
+
+/** Darkest → brightest (matches shader index 0 = dark). From reference stills: space … █. */
+const DEFAULT_CHARACTERS = " .-:=o0B8█"
+
+const DEFAULT_GLYPH_PADDING_PX = 2
+
+function sanitizeCharacters(raw: string): string {
+    const sanitized = Array.from(raw || "")
+        .filter((ch) => ch === " " || !/\s/.test(ch))
+        .join("")
+    return sanitized.length > 0 ? sanitized : DEFAULT_CHARACTERS
+}
+
+function deriveFontSettings(
+    font: unknown,
+    fallbackFamily: string,
+    fallbackWeight: string | number,
+    fallbackSizePx: number
+) {
+    const f = font as {
+        family?: string
         fontFamily?: string
+        weight?: string | number
         fontWeight?: string | number
-        fontStyle?: string
-        fontSize?: number | string
-        lineHeight?: number | string
-        letterSpacing?: string
+        fontSize?: string | number
+        size?: string | number
+    } | null
+    const family = (f && (f.family || f.fontFamily)) || fallbackFamily
+    const weight = (f && (f.weight || f.fontWeight)) || fallbackWeight
+    const sizeRaw = (f && (f.fontSize ?? f.size)) ?? fallbackSizePx
+    let sizePx =
+        typeof sizeRaw === "string" ? parseFloat(sizeRaw) : Number(sizeRaw)
+    if (!Number.isFinite(sizePx) || sizePx <= 0) sizePx = fallbackSizePx
+    return { family, weight, sizePx }
+}
+
+type CanvasTexInstance = InstanceType<typeof CanvasTexture>
+
+function createPlaceholderGlyphTexture(): CanvasTexInstance {
+    const c = document.createElement("canvas")
+    c.width = 8
+    c.height = 8
+    const g = c.getContext("2d")!
+    g.fillStyle = "#000000"
+    g.fillRect(0, 0, 8, 8)
+    g.fillStyle = "#ffffff"
+    g.fillRect(0, 0, 8, 8)
+    const tex = new CanvasTexture(c)
+    tex.colorSpace = SRGBColorSpace
+    tex.minFilter = LinearFilter
+    tex.magFilter = LinearFilter
+    tex.needsUpdate = true
+    return tex
+}
+
+function buildGlyphAtlasTexture(
+    characters: string,
+    fontFamily: string,
+    fontWeight: string | number,
+    fontSizePx: number,
+    paddingPx: number
+): { texture: CanvasTexInstance; cols: number; rows: number; count: number } {
+    const count = Math.max(1, characters.length)
+    const cols = Math.ceil(Math.sqrt(count))
+    const rows = Math.ceil(count / cols)
+    const cellPx = Math.max(8, fontSizePx + paddingPx * 2)
+    const dpr = Math.min(
+        typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
+        2
+    )
+    const canvas = document.createElement("canvas")
+    const cssW = cols * cellPx
+    const cssH = rows * cellPx
+    canvas.width = Math.max(1, Math.floor(cssW * dpr))
+    canvas.height = Math.max(1, Math.floor(cssH * dpr))
+    const ctx = canvas.getContext("2d")!
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.scale(dpr, dpr)
+    ctx.fillStyle = "#000000"
+    ctx.fillRect(0, 0, cssW, cssH)
+    ctx.fillStyle = "#ffffff"
+    ctx.textAlign = "center"
+    ctx.textBaseline = "middle"
+    ctx.font = `${fontWeight} ${fontSizePx}px ${fontFamily}`
+    for (let i = 0; i < count; i++) {
+        const cx = i % cols
+        const cy = Math.floor(i / cols)
+        const x = cx * cellPx + cellPx / 2
+        const y = cy * cellPx + cellPx / 2
+        ctx.fillText(characters[i]!, x, y)
     }
-    ditheringMode: DitheringMode
-    brightness: number
-    contrast: number
-    blurAmount: number
-    style?: React.CSSProperties
+    const texture = new CanvasTexture(canvas)
+    texture.colorSpace = SRGBColorSpace
+    texture.minFilter = LinearFilter
+    texture.magFilter = LinearFilter
+    texture.needsUpdate = true
+    return { texture, cols, rows, count }
+}
+
+function asciiStyleToInt(s: AsciiStyleId): number {
+    const m: Record<AsciiStyleId, number> = {
+        standard: 0,
+        dense: 1,
+        minimal: 2,
+        blocks: 3,
+        braille: 4,
+        technical: 5,
+        matrix: 6,
+        hatching: 7,
+    }
+    return m[s] ?? 0
+}
+
+type Vec2Instance = InstanceType<typeof Vector2>
+type VideoTextureInstance = InstanceType<typeof VideoTexture>
+type TextureLoaderInstance = InstanceType<typeof TextureLoader>
+type TextureInstance = ReturnType<TextureLoaderInstance["load"]>
+type ShaderMatInstance = InstanceType<typeof ShaderMaterial>
+type RTInstance = InstanceType<typeof WebGLRenderTarget>
+
+type AsciiUniformProps = {
+    cellSize: number
+    invert: boolean
+    colorMode: boolean
+    asciiStyle: number
+    resolution: Vec2Instance
+    brightnessAdjust: number
+    contrastAdjust: number
+    /** 0 = ASCII-background-2 bitmask; 1 = canvas glyph atlas (Custom). */
+    useGlyphAtlas: number
+}
+
+function createAsciiShaderMaterial(
+    o: AsciiUniformProps,
+    rtTexture: RTInstance["texture"],
+    placeholderGlyph: CanvasTexInstance
+): ShaderMatInstance {
+    return new ShaderMaterial({
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+        transparent: true,
+        blending: NormalBlending,
+        uniforms: {
+            tDiffuse: { value: rtTexture },
+            uGlyphAtlas: { value: placeholderGlyph },
+            uGlyphGrid: { value: new Vector2(1, 1) },
+            uCharCount: { value: 1 },
+            cellSize: { value: o.cellSize },
+            invert: { value: o.invert },
+            colorMode: { value: o.colorMode },
+            asciiStyle: { value: o.asciiStyle },
+            time: { value: 0 },
+            resolution: { value: o.resolution.clone() },
+            brightnessAdjust: { value: o.brightnessAdjust },
+            contrastAdjust: { value: o.contrastAdjust },
+            uUseGlyphAtlas: { value: o.useGlyphAtlas },
+        },
+        vertexShader: ASCII_VERTEX,
+        fragmentShader: ASCII_FRAGMENT,
+    })
+}
+
+function syncAsciiMaterial(
+    mat: ShaderMatInstance,
+    o: AsciiUniformProps,
+    rtTexture: RTInstance["texture"]
+): void {
+    const u = mat.uniforms
+    u.tDiffuse.value = rtTexture
+    u.cellSize.value = o.cellSize
+    u.invert.value = o.invert
+    u.colorMode.value = o.colorMode
+    u.asciiStyle.value = o.asciiStyle
+    ;(u.resolution.value as Vec2Instance).copy(o.resolution)
+    u.brightnessAdjust.value = o.brightnessAdjust
+    u.contrastAdjust.value = o.contrastAdjust
+    u.uUseGlyphAtlas.value = o.useGlyphAtlas
 }
 
 // ============================================================================
-// COLOR UTILITIES
+// Media + scene
 // ============================================================================
 
 const cssVarRe =
@@ -65,674 +348,499 @@ function resolveColor(input: string | undefined): string {
     return s
 }
 
-function toRgb(input: string): [number, number, number] {
-    const s = resolveColor(input)
-    const rgba = s.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i)
-    if (rgba) {
-        return [
-            Math.round(+rgba[1]),
-            Math.round(+rgba[2]),
-            Math.round(+rgba[3]),
-        ]
-    }
-    let hex = s.replace(/^#/, "")
-    if (hex.length === 3)
-        hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
-    if (hex.length === 8) hex = hex.slice(0, 6)
-    const r = parseInt(hex.slice(0, 2), 16)
-    const g = parseInt(hex.slice(2, 4), 16)
-    const b = parseInt(hex.slice(4, 6), 16)
-    return [isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b]
-}
-
-// ============================================================================
-// FONT PARSING
-// ============================================================================
-
-function parseFontSize(fontSize: any): number {
-    if (typeof fontSize === "number") return fontSize
-    if (typeof fontSize === "string") {
-        const parsed = parseFloat(fontSize)
-        return isNaN(parsed) ? 10 : parsed
-    }
-    return 10
-}
-
-function parseLetterSpacing(letterSpacing: any, fontSizePx: number): number {
-    if (letterSpacing === undefined || letterSpacing === null) return 0
-    if (typeof letterSpacing === "number") return letterSpacing
-    const s = String(letterSpacing).trim()
-    if (!s) return 0
-    if (s.endsWith("em")) return (parseFloat(s) || 0) * fontSizePx
-    if (s.endsWith("px")) return parseFloat(s) || 0
-    return parseFloat(s) || 0
-}
-
-function parseLineHeight(lineHeight: any, fontSizePx: number): number {
-    if (lineHeight === undefined || lineHeight === null) return 1.0
-    if (typeof lineHeight === "number")
-        return lineHeight > 4 ? lineHeight / fontSizePx : lineHeight
-    if (typeof lineHeight === "string") {
-        if (lineHeight.endsWith("%")) return parseFloat(lineHeight) / 100
-        if (lineHeight.endsWith("em")) return parseFloat(lineHeight) || 1.0
-        if (lineHeight.endsWith("px"))
-            return (parseFloat(lineHeight) || fontSizePx) / fontSizePx
-        const v = parseFloat(lineHeight)
-        return isNaN(v) ? 1.0 : v > 4 ? v / fontSizePx : v
-    }
-    return 1.0
-}
-
-// ============================================================================
-// IMAGE SOURCE RESOLUTION
-// ============================================================================
-
-function resolveImageSource(input: any): string | null {
+function resolveImageSource(input: unknown): string | null {
     if (!input) return null
     if (typeof input === "string") return input.trim() || null
-    return input?.src ?? input?.url ?? null
+    const o = input as { src?: string; url?: string }
+    return o?.src ?? o?.url ?? null
+}
+
+/** Framer canvas zoom uses CSS transforms; sync R3F after layout box (CSS px) changes. */
+function InvalidateOnLayout({ width, height }: { width: number; height: number }) {
+    useLayoutEffect(() => {
+        invalidate()
+    }, [width, height])
+    return null
+}
+
+function MediaPlane({
+    url,
+    isVideo,
+    play,
+    loop,
+    layoutWidth,
+    layoutHeight,
+}: {
+    url: string
+    isVideo: boolean
+    play: boolean
+    loop: boolean
+    layoutWidth: number
+    layoutHeight: number
+}) {
+    const [map, setMap] = useState<VideoTextureInstance | TextureInstance | null>(null)
+    const viewport = useThree((s: { viewport: { width: number; height: number } }) => s.viewport)
+
+    useEffect(() => {
+        let cancelled = false
+        if (isVideo) {
+            const v = document.createElement("video")
+            v.src = url
+            v.crossOrigin = "anonymous"
+            v.loop = loop
+            v.muted = true
+            v.playsInline = true
+            const vt = new VideoTexture(v)
+            vt.colorSpace = SRGBColorSpace
+            vt.minFilter = LinearFilter
+            const onReady = () => {
+                if (!cancelled) setMap(vt)
+            }
+            v.addEventListener("loadeddata", onReady)
+            v.load()
+            return () => {
+                cancelled = true
+                v.removeEventListener("loadeddata", onReady)
+                v.pause()
+                v.removeAttribute("src")
+                v.load()
+                vt.dispose()
+            }
+        }
+        let loadedTex: TextureInstance | null = null
+        const loader = new TextureLoader()
+        loader.load(
+            url,
+            (tex: TextureInstance) => {
+                loadedTex = tex
+                tex.colorSpace = SRGBColorSpace
+                tex.minFilter = LinearFilter
+                if (!cancelled) setMap(tex)
+            },
+            undefined,
+            () => {}
+        )
+        return () => {
+            cancelled = true
+            loadedTex?.dispose()
+        }
+    }, [url, isVideo, loop])
+
+    useEffect(() => {
+        if (!isVideo || !map) return
+        const v = (map as VideoTextureInstance).image as HTMLVideoElement
+        if (play) void v.play().catch(() => {})
+        else v.pause()
+    }, [isVideo, map, play])
+
+    useFrame(() => {
+        if (map && (map as VideoTextureInstance).isVideoTexture) {
+            ;(map as VideoTextureInstance).needsUpdate = true
+        }
+    })
+
+    const scale = useMemo(() => {
+        if (!map) return new Vector3(1, 1, 1)
+        const img = map.image as HTMLImageElement | HTMLVideoElement
+        const w =
+            "videoWidth" in img ? img.videoWidth : (img as HTMLImageElement).naturalWidth
+        const h =
+            "videoHeight" in img ? img.videoHeight : (img as HTMLImageElement).naturalHeight
+        const boxW =
+            layoutWidth > 0 ? layoutWidth : Math.max(1e-6, viewport.width)
+        const boxH =
+            layoutHeight > 0 ? layoutHeight : Math.max(1e-6, viewport.height)
+        if (!w || !h) return new Vector3(boxW, boxH, 1)
+        const mediaAspect = w / h
+        const boxAspect = boxW / boxH
+        // "Cover" in layout CSS pixels (stable under Framer canvas zoom)
+        if (mediaAspect > boxAspect) {
+            return new Vector3(boxH * mediaAspect, boxH, 1)
+        }
+        return new Vector3(boxW, boxW / mediaAspect, 1)
+    }, [map, layoutWidth, layoutHeight, viewport.width, viewport.height])
+
+    if (!map) return null
+
+    return (
+        <mesh scale={scale}>
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial map={map} toneMapped={false} side={DoubleSide} />
+        </mesh>
+    )
+}
+
+function AsciiSceneInner({
+    mediaUrl,
+    isVideo,
+    playVideo,
+    loop,
+    backdropColor,
+    asciiProps,
+    layoutWidth,
+    layoutHeight,
+    characters,
+    fontType,
+    fontFamily,
+    fontWeight,
+    fontSizePx,
+    font,
+}: {
+    mediaUrl: string
+    isVideo: boolean
+    playVideo: boolean
+    loop: boolean
+    backdropColor: string
+    asciiProps: AsciiUniformProps
+    layoutWidth: number
+    layoutHeight: number
+    characters: string
+    fontType: FontTypeId
+    fontFamily: string
+    fontWeight: number
+    fontSizePx: number
+    font: unknown
+}) {
+    type R3FSlice = {
+        gl: {
+            getPixelRatio: () => number
+            setRenderTarget: (t: unknown) => void
+            render: (scene: unknown, cam: object) => void
+            getClearColor: (target: object) => void
+            getClearAlpha: () => number
+            setClearColor: (color: object, alpha?: number) => void
+            clear: (
+                color?: boolean,
+                depth?: boolean,
+                stencil?: boolean
+            ) => void
+        }
+        camera: object
+        size: { width: number; height: number }
+        viewport: { width: number; height: number }
+    }
+    const { gl, camera, size, viewport } = useThree() as R3FSlice
+
+    const captureScene = useMemo(() => new Scene(), [])
+    const rt = useMemo(
+        () =>
+            new WebGLRenderTarget(4, 4, {
+                depthBuffer: false,
+                stencilBuffer: false,
+                minFilter: LinearFilter,
+                magFilter: LinearFilter,
+            }),
+        []
+    )
+
+    const asciiRef = useRef(asciiProps)
+    asciiRef.current = asciiProps
+
+    const timeRef = useRef(0)
+
+    const backdropThree = useMemo(
+        () => new Color(resolveColor(backdropColor)),
+        [backdropColor]
+    )
+
+    const placeholderGlyph = useMemo(() => createPlaceholderGlyphTexture(), [])
+    const glyphAtlasRef = useRef<{
+        texture: CanvasTexInstance
+        owns: boolean
+    } | null>(null)
+
+    const asciiMat = useMemo(() => {
+        rt.texture.colorSpace = SRGBColorSpace
+        return createAsciiShaderMaterial(
+            {
+                ...asciiProps,
+                resolution: new Vector2(
+                    Math.max(1, size.width),
+                    Math.max(1, size.height)
+                ),
+            },
+            rt.texture,
+            placeholderGlyph
+        )
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rt, placeholderGlyph])
+
+    useLayoutEffect(() => {
+        const pr = gl.getPixelRatio()
+        const cssW = layoutWidth > 0 ? layoutWidth : size.width
+        const cssH = layoutHeight > 0 ? layoutHeight : size.height
+        const w = Math.max(1, Math.floor(cssW * pr))
+        const h = Math.max(1, Math.floor(cssH * pr))
+        rt.setSize(w, h)
+        rt.texture.colorSpace = SRGBColorSpace
+    }, [size.width, size.height, layoutWidth, layoutHeight, gl, rt])
+
+    useLayoutEffect(() => {
+        const u = asciiMat.uniforms
+        if (fontType === "default") {
+            u.uUseGlyphAtlas.value = 0
+            u.uCharCount.value = 1
+            ;(u.uGlyphGrid.value as Vec2Instance).set(1, 1)
+            u.uGlyphAtlas.value = placeholderGlyph
+            const prev = glyphAtlasRef.current
+            if (prev?.owns) {
+                prev.texture.dispose()
+                glyphAtlasRef.current = null
+            }
+            return
+        }
+        const chars = sanitizeCharacters(characters)
+        const f = deriveFontSettings(
+            font,
+            fontFamily,
+            fontWeight,
+            fontSizePx
+        )
+        const fontCSS = `${f.weight} ${f.sizePx}px ${f.family}`
+        if (typeof document !== "undefined" && document.fonts?.load) {
+            void document.fonts.load(fontCSS).catch(() => {})
+        }
+        const built = buildGlyphAtlasTexture(
+            chars,
+            f.family,
+            f.weight,
+            f.sizePx,
+            DEFAULT_GLYPH_PADDING_PX
+        )
+        const prev = glyphAtlasRef.current
+        if (prev?.owns && prev.texture !== built.texture) {
+            prev.texture.dispose()
+        }
+        glyphAtlasRef.current = { texture: built.texture, owns: true }
+        u.uUseGlyphAtlas.value = 1
+        u.uGlyphAtlas.value = built.texture
+        ;(u.uGlyphGrid.value as Vec2Instance).set(built.cols, built.rows)
+        u.uCharCount.value = built.count
+    }, [
+        asciiMat,
+        characters,
+        font,
+        fontFamily,
+        fontSizePx,
+        fontType,
+        fontWeight,
+        placeholderGlyph,
+    ])
+
+    useEffect(() => {
+        return () => {
+            asciiMat.dispose()
+            rt.dispose()
+            const g = glyphAtlasRef.current
+            if (g?.owns) {
+                g.texture.dispose()
+                glyphAtlasRef.current = null
+            }
+            placeholderGlyph.dispose()
+        }
+    }, [asciiMat, rt, placeholderGlyph])
+
+    useFrame((_state: unknown, delta: number) => {
+        const o = asciiRef.current
+        timeRef.current += delta
+        asciiMat.uniforms.time.value = timeRef.current
+
+        const cssW = layoutWidth > 0 ? layoutWidth : size.width
+        const cssH = layoutHeight > 0 ? layoutHeight : size.height
+        const res = new Vector2(Math.max(1, cssW), Math.max(1, cssH))
+        syncAsciiMaterial(asciiMat, { ...o, resolution: res }, rt.texture)
+    })
+
+    useFrame(() => {
+        const prevBg = new Color()
+        gl.getClearColor(prevBg)
+        const prevA = gl.getClearAlpha()
+        gl.setRenderTarget(rt)
+        gl.setClearColor(backdropThree, 1)
+        gl.clear(true, false, false)
+        gl.render(captureScene, camera as never)
+        gl.setRenderTarget(null)
+        gl.setClearColor(prevBg, prevA)
+    }, -1)
+
+    return (
+        <>
+            {createPortal(
+                <>
+                    <MediaPlane
+                        url={mediaUrl}
+                        isVideo={isVideo}
+                        play={playVideo}
+                        loop={loop}
+                        layoutWidth={layoutWidth}
+                        layoutHeight={layoutHeight}
+                    />
+                </>,
+                captureScene,
+                { camera: camera as never }
+            )}
+            <mesh renderOrder={1} frustumCulled={false}>
+                <planeGeometry
+                    args={[
+                        layoutWidth > 0 ? layoutWidth : viewport.width,
+                        layoutHeight > 0 ? layoutHeight : viewport.height,
+                    ]}
+                />
+                <primitive
+                    object={asciiMat}
+                    attach="material"
+                    dispose={null}
+                />
+            </mesh>
+        </>
+    )
 }
 
 // ============================================================================
-// BAYER 4×4
+// Props
 // ============================================================================
 
-const B4 = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-]
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
+interface Props {
+    preview: boolean
+    source: SourceType
+    image: { src?: string; url?: string } | string | null
+    videoSource: "url" | "upload"
+    videoFile: string
+    videoUrl: string
+    poster: { src?: string; url?: string } | string | null
+    autoplay: boolean
+    loop: boolean
+    backdrop: string
+    cellSize: number
+    density: number
+    brightnessAdjust: number
+    contrastAdjust: number
+    invert: boolean
+    colorMode: boolean
+    asciiStyle: AsciiStyleId
+    fontType: FontTypeId
+    characters: string
+    font?: unknown
+    fontFamily: string
+    fontWeight: number
+    fontSizePx: number
+    debug: boolean
+    style?: React.CSSProperties
+}
 
 /**
  * @framerSupportedLayoutWidth any-prefer-fixed
  * @framerSupportedLayoutHeight any-prefer-fixed
  * @framerIntrinsicWidth 600
  * @framerIntrinsicHeight 400
+ * @framerDisableUnlink
  */
 export default function AsciiMedia(props: Props) {
     const {
-        sourceType = "image",
+        preview = false,
+        source = "image",
         image,
         videoSource = "url",
         videoFile,
         videoUrl,
-        poster,
+        poster: _poster,
         autoplay = true,
         loop = true,
-        primaryColor = "#5B52E0",
-        secondaryColor = "#9D96F0",
-        backgroundColor = "#FFFFFF",
-        characterSet = "0123456789",
-        density = 5,
-        invertBrightness = true,
-        threshold = 5,
-        intensity = 1.8,
-        font = {
-            fontFamily: "monospace",
-            fontWeight: "400",
-            fontSize: 6,
-        },
-        ditheringMode = "bayer",
-        brightness = 0,
-        contrast = 0,
-        blurAmount = 0,
+        backdrop = "#111111",
+        cellSize = 10,
+        density = 100,
+        brightnessAdjust = 0,
+        contrastAdjust = 1,
+        invert = false,
+        colorMode = true,
+        asciiStyle = "standard",
+        fontType = "default",
+        characters = DEFAULT_CHARACTERS,
+        font,
+        fontFamily = "monospace",
+        fontWeight = 400,
+        fontSizePx = 28,
+        debug: _debug = false,
         style,
     } = props
 
-    // ── Resolve font ──
-    const fontSizePx = parseFontSize(font?.fontSize)
-    const fontFamilyStr = font?.fontFamily || "monospace"
-    const fontWeightStr =
-        font?.fontWeight != null ? String(font.fontWeight) : "400"
-    const fontStyleStr = font?.fontStyle || "normal"
-    const letterSpacingPx = parseLetterSpacing(font?.letterSpacing, fontSizePx)
-    const lineHeightMul = parseLineHeight(font?.lineHeight, fontSizePx)
+    const [debouncedCell, setDebouncedCell] = useState(cellSize)
+    const [debouncedDensity, setDebouncedDensity] = useState(density)
+    useEffect(() => {
+        const id = window.setTimeout(() => {
+            setDebouncedCell(cellSize)
+            setDebouncedDensity(density)
+        }, 80)
+        return () => window.clearTimeout(id)
+    }, [cellSize, density])
 
-    // ── Resolve media URL ──
+    const effectiveCellSize = Math.max(
+        2,
+        Math.round((debouncedCell * 100) / Math.max(25, debouncedDensity))
+    )
+
     const resolvedSourceUrl = useMemo(() => {
-        if (sourceType === "image") return resolveImageSource(image)
-        if (sourceType === "video")
+        if (source === "image") return resolveImageSource(image)
+        if (source === "video")
             return videoSource === "upload" ? videoFile : videoUrl
         return null
-    }, [sourceType, image, videoSource, videoFile, videoUrl])
+    }, [source, image, videoSource, videoFile, videoUrl])
 
     const hasSource = !!resolvedSourceUrl
 
-    // ── Resolve poster URL ──
-    const resolvedPosterUrl = useMemo(
-        () => (sourceType === "video" ? resolveImageSource(poster) : null),
-        [sourceType, poster]
-    )
+    const INTRINSIC_W = 600
+    const INTRINSIC_H = 400
 
     const containerRef = useRef<HTMLDivElement>(null)
-    const hiddenCvs = useRef<HTMLCanvasElement | null>(null)
-    const visibleRef = useRef<HTMLCanvasElement>(null)
-    const raf = useRef(0)
-    const media = useRef<
-        HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | null
-    >(null)
-    const posterImg = useRef<HTMLImageElement | null>(null)
-    const fpsTrack = useRef({ n: 0, t: performance.now(), fps: 60 })
+    const zoomProbeRef = useRef<HTMLDivElement>(null)
+    const [layoutCss, setLayoutCss] = useState({
+        w: INTRINSIC_W,
+        h: INTRINSIC_H,
+    })
     const isCanvas = RenderTarget.current() === RenderTarget.canvas
-    const [ready, setReady] = useState(false)
-    const [posterReady, setPosterReady] = useState(false)
+    const playVideo =
+        source === "video" && (!isCanvas || preview) && autoplay
 
-    const pRgb = useMemo(() => toRgb(primaryColor), [primaryColor])
-    const sRgb = useMemo(() => toRgb(secondaryColor), [secondaryColor])
-    const bgResolved = useMemo(
-        () => resolveColor(backgroundColor),
-        [backgroundColor]
+    const asciiProps: AsciiUniformProps = useMemo(
+        () => ({
+            cellSize: effectiveCellSize,
+            invert,
+            colorMode,
+            asciiStyle: asciiStyleToInt(asciiStyle),
+            resolution: new Vector2(1, 1),
+            brightnessAdjust,
+            contrastAdjust,
+            useGlyphAtlas: fontType === "custom" ? 1 : 0,
+        }),
+        [
+            effectiveCellSize,
+            invert,
+            colorMode,
+            asciiStyle,
+            brightnessAdjust,
+            contrastAdjust,
+            fontType,
+        ]
     )
 
-    // Normalized threshold (0–1)
-    const thresholdNorm = threshold / 100
-
-    // Stable DPR — locked on mount to prevent alt-tab canvas jumps
-    const dprRef = useRef(Math.min(2, devicePixelRatio || 1))
-    // Last known valid canvas dimensions to prevent transient resize glitches
-    const lastSizeRef = useRef({ w: 0, h: 0 })
-
-    // ====================================================================
-    // RENDER PIPELINE
-    // ====================================================================
-
-    const paint = useCallback(() => {
-        // Skip paint when tab is hidden (prevents alt-tab artifacts)
-        if (typeof document !== "undefined" && document.hidden) return
-
-        const box = containerRef.current
-        const out = visibleRef.current
-        if (!box || !out) return
-        if (!hiddenCvs.current)
-            hiddenCvs.current = document.createElement("canvas")
-        const hid = hiddenCvs.current
-
-        const W = box.clientWidth
-        const H = box.clientHeight
-        if (W <= 0 || H <= 0) return
-
-        // Update last valid size — ignore transient zero-size states
-        lastSizeRef.current = { w: W, h: H }
-
-        const dpr = dprRef.current
-
-        // Adaptive density
-        let d = density
-        if (fpsTrack.current.fps < 24 && d < 14) d = Math.min(14, d + 2)
-
-        const cellW = d + letterSpacingPx
-        const cellH = Math.round(fontSizePx * lineHeightMul)
-        const cols = Math.floor(W / cellW)
-        const rows = Math.floor(H / cellH)
-        if (cols <= 0 || rows <= 0) return
-
-        // ── FIXED-RATIO SUPERSAMPLING ──
-        // Sample at a fixed multiple of the grid (4× per axis = 16 pixels
-        // per cell). This makes the luminance averaging identical regardless
-        // of container size — the source image always occupies the same
-        // proportion of each cell, so intensity stays consistent.
-        const SS = 4
-        const ssCols = cols * SS
-        const ssRows = rows * SS
-
-        hid.width = ssCols
-        hid.height = ssRows
-        const hCtx = hid.getContext("2d", { willReadFrequently: true })
-        if (!hCtx) return
-
-        // High-quality resampling for source image
-        hCtx.imageSmoothingEnabled = true
-        hCtx.imageSmoothingQuality = "high"
-
-        // Pre-blur (optional — 0 by default for maximum sharpness)
-        hCtx.filter = blurAmount > 0 ? `blur(${blurAmount}px)` : "none"
-
-        // ── Resolve source (with poster fallback) ──
-        let src:
-            | HTMLImageElement
-            | HTMLVideoElement
-            | HTMLCanvasElement
-            | null = media.current
-
-        if (src instanceof HTMLVideoElement && src.readyState < 2) {
-            if (
-                posterImg.current?.complete &&
-                posterImg.current.naturalWidth > 0
-            ) {
-                src = posterImg.current
-            } else {
-                return
-            }
-        }
-        if (!src) {
-            if (
-                posterImg.current?.complete &&
-                posterImg.current.naturalWidth > 0
-            ) {
-                src = posterImg.current
-            } else {
-                return
-            }
-        }
-
-        let srcW = 0,
-            srcH = 0
-        if (src instanceof HTMLVideoElement) {
-            srcW = src.videoWidth
-            srcH = src.videoHeight
-        } else if (src instanceof HTMLCanvasElement) {
-            srcW = src.width
-            srcH = src.height
-        } else {
-            if (!src.complete || src.naturalWidth === 0) return
-            srcW = src.naturalWidth
-            srcH = src.naturalHeight
-        }
-        if (srcW <= 0 || srcH <= 0) return
-
-        // Cover fit onto supersampled canvas
-        const sA = srcW / srcH
-        const dA = ssCols / ssRows
-        let dw: number, dh: number, dx: number, dy: number
-        if (sA > dA) {
-            dh = ssRows
-            dw = ssRows * sA
-            dx = (ssCols - dw) / 2
-            dy = 0
-        } else {
-            dw = ssCols
-            dh = ssCols / sA
-            dx = 0
-            dy = (ssRows - dh) / 2
-        }
-
-        hCtx.clearRect(0, 0, ssCols, ssRows)
-        hCtx.drawImage(src, dx, dy, dw, dh)
-        hCtx.filter = "none"
-
-        const imgData = hCtx.getImageData(0, 0, ssCols, ssRows)
-        const px = imgData.data
-
-        // ── Brightness / Contrast adjustment ──
-        if (brightness !== 0 || contrast !== 0) {
-            const cf =
-                (259 * (contrast * 2.55 + 255)) /
-                (255 * (259 - contrast * 2.55))
-            for (let i = 0; i < px.length; i += 4) {
-                let r = px[i] + brightness * 2.55
-                let g = px[i + 1] + brightness * 2.55
-                let b = px[i + 2] + brightness * 2.55
-                r = cf * (r - 128) + 128
-                g = cf * (g - 128) + 128
-                b = cf * (b - 128) + 128
-                px[i] = Math.max(0, Math.min(255, r))
-                px[i + 1] = Math.max(0, Math.min(255, g))
-                px[i + 2] = Math.max(0, Math.min(255, b))
-            }
-        }
-
-        // ── Downsample: average each SS×SS block into one cell ──
-        const cellLum = new Float32Array(cols * rows)
-        const cellAlpha = new Float32Array(cols * rows)
-        const ssBlockSize = SS * SS
-
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                let lumSum = 0
-                let alphaSum = 0
-                for (let sy = 0; sy < SS; sy++) {
-                    const py = r * SS + sy
-                    const rowOff = py * ssCols
-                    for (let sx = 0; sx < SS; sx++) {
-                        const px_x = c * SS + sx
-                        const i = (rowOff + px_x) * 4
-                        const a = px[i + 3] / 255
-                        const lum =
-                            (0.299 * px[i] +
-                                0.587 * px[i + 1] +
-                                0.114 * px[i + 2]) /
-                            255
-                        lumSum += lum * a
-                        alphaSum += a
-                    }
-                }
-                const ci = r * cols + c
-                cellLum[ci] = lumSum / ssBlockSize
-                cellAlpha[ci] = alphaSum / ssBlockSize
-            }
-        }
-
-        // ── Floyd-Steinberg error buffer ──
-        let errBuf: Float32Array | null = null
-        if (ditheringMode === "floyd-steinberg") {
-            errBuf = new Float32Array(cols * rows)
-        }
-
-        // ── Size output canvas (stable — won't resize on alt-tab) ──
-        const cW = Math.round(W * dpr)
-        const cH = Math.round(H * dpr)
-        // Only resize if dimensions actually changed (prevents clear-on-refocus)
-        if (out.width !== cW || out.height !== cH) {
-            out.width = cW
-            out.height = cH
-        }
-
-        const ctx = out.getContext("2d")
-        if (!ctx) return
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-        // Background
-        ctx.globalAlpha = 1
-        ctx.fillStyle = bgResolved
-        ctx.fillRect(0, 0, W, H)
-
-        // Font
-        ctx.textBaseline = "top"
-        ctx.textAlign = "center"
-        ctx.font = `${fontStyleStr} ${fontWeightStr} ${fontSizePx}px ${fontFamilyStr}`
-
-        const chars = characterSet || "0123456789"
-        const cLen = chars.length
-        const [pR, pG, pB] = pRgb
-        const [sR2, sG2, sB2] = sRgb
-
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                const ci = r * cols + c
-                const rawLum = cellLum[ci]
-                const alpha = cellAlpha[ci]
-
-                // Skip fully transparent cells
-                if (alpha < 0.01) continue
-
-                let lum = rawLum
-                if (invertBrightness) lum = 1 - lum
-
-                // ── THRESHOLD GATE ──
-                // Only render characters above the threshold.
-                // This is what creates clean silhouettes — background
-                // pixels (near 0 after inversion) are skipped entirely.
-                if (lum < thresholdNorm) continue
-
-                // ── Dithering ──
-                let dl = lum
-                if (ditheringMode === "bayer") {
-                    const th = (B4[r % 4][c % 4] + 0.5) / 16
-                    dl = Math.max(0, Math.min(1, lum + (th - 0.5) * 0.08))
-                } else if (ditheringMode === "floyd-steinberg" && errBuf) {
-                    const ei = ci
-                    dl = Math.max(0, Math.min(1, lum + errBuf[ei]))
-                    const q = Math.round(dl * (cLen - 1)) / (cLen - 1)
-                    const err = (dl - q) * 0.35
-                    if (c + 1 < cols) errBuf[ei + 1] += err * 0.4375
-                    if (r + 1 < rows) {
-                        if (c > 0)
-                            errBuf[(r + 1) * cols + c - 1] += err * 0.1875
-                        errBuf[(r + 1) * cols + c] += err * 0.3125
-                        if (c + 1 < cols)
-                            errBuf[(r + 1) * cols + c + 1] += err * 0.0625
-                    }
-                    dl = q
-                }
-
-                if (dl < thresholdNorm) continue
-
-                // ── Character selection ──
-                const charIdx = Math.min(
-                    cLen - 1,
-                    Math.max(0, Math.floor(dl * cLen))
-                )
-
-                // ── Color: blend primary ↔ secondary by luminance ──
-                let cr: number, cg: number, cb: number
-                if (dl > 0.6) {
-                    cr = pR
-                    cg = pG
-                    cb = pB
-                } else if (dl > 0.2) {
-                    const t = (dl - 0.2) / 0.4
-                    cr = Math.round(sR2 + (pR - sR2) * t)
-                    cg = Math.round(sG2 + (pG - sG2) * t)
-                    cb = Math.round(sB2 + (pB - sB2) * t)
-                } else {
-                    cr = sR2
-                    cg = sG2
-                    cb = sB2
-                }
-
-                // ── Opacity: power curve for intensity control ──
-                // intensity > 1 boosts mid-tones (makes faint areas more visible)
-                // intensity = 1 is linear, intensity = 2 is strong boost
-                const curve = intensity > 0 ? 1 / intensity : 1
-                let al = Math.pow(dl, curve) * alpha
-
-                ctx.globalAlpha = Math.max(0, Math.min(1, al))
-                ctx.fillStyle = `rgb(${cr},${cg},${cb})`
-                ctx.fillText(
-                    chars[charIdx],
-                    c * cellW + cellW / 2,
-                    r * cellH + (cellH - fontSizePx) / 2
-                )
-            }
-        }
-
-        ctx.globalAlpha = 1
-
-        // FPS tracking
-        fpsTrack.current.n++
-        const now = performance.now()
-        if (now - fpsTrack.current.t >= 1000) {
-            fpsTrack.current.fps = fpsTrack.current.n
-            fpsTrack.current.n = 0
-            fpsTrack.current.t = now
-        }
-    }, [
-        density,
-        letterSpacingPx,
-        fontSizePx,
-        lineHeightMul,
-        fontFamilyStr,
-        fontWeightStr,
-        fontStyleStr,
-        characterSet,
-        invertBrightness,
-        thresholdNorm,
-        intensity,
-        ditheringMode,
-        brightness,
-        contrast,
-        blurAmount,
-        pRgb,
-        sRgb,
-        bgResolved,
-    ])
-
-    // ====================================================================
-    // POSTER LOADING
-    // ====================================================================
-
-    useEffect(() => {
-        if (!resolvedPosterUrl) {
-            posterImg.current = null
-            setPosterReady(false)
-            return
-        }
-        const img = new Image()
-        img.crossOrigin = "anonymous"
-        img.onload = () => {
-            posterImg.current = img
-            setPosterReady(true)
-        }
-        img.onerror = () => {
-            posterImg.current = null
-            setPosterReady(false)
-        }
-        img.src = resolvedPosterUrl
-        return () => {
-            posterImg.current = null
-            setPosterReady(false)
-        }
-    }, [resolvedPosterUrl])
-
-    // ====================================================================
-    // MEDIA LOADING
-    // ====================================================================
-
-    useEffect(() => {
-        if (!resolvedSourceUrl) return
-
-        const cleanup = () => {
-            if (raf.current) cancelAnimationFrame(raf.current)
-            raf.current = 0
-            const m = media.current
-            if (m && m instanceof HTMLVideoElement) {
-                m.pause()
-                m.removeAttribute("src")
-                m.load()
-            }
-            media.current = null
-            setReady(false)
-        }
-
-        cleanup()
-
-        if (sourceType === "image") {
-            const img = new Image()
-            img.crossOrigin = "anonymous"
-            img.onload = () => {
-                media.current = img
-                setReady(true)
-            }
-            img.onerror = () => {}
-            img.src = resolvedSourceUrl
-        } else if (sourceType === "video") {
-            const vid = document.createElement("video")
-            vid.crossOrigin = "anonymous"
-            vid.muted = true
-            vid.playsInline = true
-            vid.loop = loop
-            vid.preload = "auto"
-            vid.src = resolvedSourceUrl
-            media.current = vid
-
-            const onReady = () => {
-                setReady(true)
-                // Only autoplay in preview mode; in editor show first frame
-                if (autoplay && !isCanvas) vid.play().catch(() => {})
-            }
-            vid.addEventListener("canplay", onReady, { once: true })
-            vid.load()
-        }
-
-        return cleanup
-    }, [resolvedSourceUrl, sourceType, autoplay, loop, isCanvas])
-
-    // ====================================================================
-    // ANIMATION LOOP / STATIC PAINT
-    // ====================================================================
-
-    useEffect(() => {
-        if (!ready && !posterReady) return
-
-        // Defer first paint by one frame so the container layout has settled.
-        // This prevents the "tight then expands" size jump.
-        const initialFrame = requestAnimationFrame(() => {
-            paint()
-
-            // For video in preview mode: continuous animation loop
-            if (sourceType === "video" && ready && !isCanvas) {
-                const tick = () => {
-                    paint()
-                    raf.current = requestAnimationFrame(tick)
-                }
-                raf.current = requestAnimationFrame(tick)
-            }
-        })
-
-        return () => {
-            cancelAnimationFrame(initialFrame)
-            if (raf.current) cancelAnimationFrame(raf.current)
-            raf.current = 0
-        }
-    }, [ready, posterReady, sourceType, paint, isCanvas])
-
-    // Repaint on prop changes (all static views: image, video in editor, poster)
-    useEffect(() => {
-        if (sourceType === "image" && !ready) return
-        if (sourceType === "video" && !ready && !posterReady) return
-        // Skip if video is running its own animation loop in preview
-        if (sourceType === "video" && ready && !isCanvas) return
-        requestAnimationFrame(() => paint())
-    }, [
-        ready,
-        posterReady,
-        isCanvas,
-        sourceType,
-        paint,
-        density,
-        fontSizePx,
-        fontFamilyStr,
-        fontWeightStr,
-        fontStyleStr,
-        letterSpacingPx,
-        lineHeightMul,
-        characterSet,
-        invertBrightness,
-        threshold,
-        intensity,
-        ditheringMode,
-        brightness,
-        contrast,
-        blurAmount,
-        primaryColor,
-        secondaryColor,
-        backgroundColor,
-    ])
-
-    // Resize observer — validates dimensions to prevent alt-tab artifacts
-    useEffect(() => {
-        if (!ready && !posterReady) return
+    useLayoutEffect(() => {
+        if (!hasSource) return
         const el = containerRef.current
         if (!el) return
-
-        const ro = new ResizeObserver((entries) => {
-            const entry = entries[0]
-            if (!entry) return
-            const { width, height } = entry.contentRect
-            // Skip zero-size transients (alt-tab, minimize, etc.)
-            if (width <= 0 || height <= 0) return
-            // Only repaint if size actually changed by at least 1px
-            const last = lastSizeRef.current
-            if (Math.abs(width - last.w) < 1 && Math.abs(height - last.h) < 1)
-                return
-            // Repaint all static views (video animation loop handles its own)
-            if (sourceType === "video" && ready && !isCanvas) return
-            requestAnimationFrame(() => paint())
-        })
+        const read = () => {
+            const w = Math.max(1, el.clientWidth || el.offsetWidth || 1)
+            const h = Math.max(1, el.clientHeight || el.offsetHeight || 1)
+            setLayoutCss((prev) =>
+                Math.abs(prev.w - w) < 0.5 && Math.abs(prev.h - h) < 0.5
+                    ? prev
+                    : { w, h }
+            )
+        }
+        read()
+        const ro = new ResizeObserver(() => read())
         ro.observe(el)
-
-        // Re-paint when tab becomes visible again (alt-tab back)
-        const onVisibility = () => {
-            if (!document.hidden) {
-                requestAnimationFrame(() => paint())
-            }
-        }
-        document.addEventListener("visibilitychange", onVisibility)
-
-        return () => {
-            ro.disconnect()
-            document.removeEventListener("visibilitychange", onVisibility)
-        }
-    }, [ready, posterReady, sourceType, paint, isCanvas])
-
-    // ====================================================================
-    // JSX
-    // ====================================================================
+        return () => ro.disconnect()
+    }, [hasSource])
 
     if (!hasSource) {
         return (
@@ -743,20 +851,25 @@ export default function AsciiMedia(props: Props) {
                     position: "relative",
                     width: "100%",
                     height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: bgResolved,
-                    color: resolveColor(primaryColor),
-                    fontFamily: "monospace",
-                    fontSize: "13px",
-                    letterSpacing: "0.04em",
-                    opacity: 0.4,
+                    minWidth: 0,
+                    minHeight: 0,
                 }}
             >
-                {sourceType === "image"
-                    ? "[ ASCII MEDIA — ADD IMAGE ]"
-                    : "[ ASCII MEDIA — ADD VIDEO ]"}
+                <ComponentMessage
+                    style={{
+                        position: "relative",
+                        width: "100%",
+                        height: "100%",
+                        minWidth: 0,
+                        minHeight: 0,
+                    }}
+                    title="ASCII Media"
+                    subtitle={
+                        source === "image"
+                            ? "Add an image to see the effect"
+                            : "Add a video to see the effect"
+                    }
+                />
             </div>
         )
     }
@@ -769,33 +882,113 @@ export default function AsciiMedia(props: Props) {
                 position: "relative",
                 width: "100%",
                 height: "100%",
-                overflow: "hidden",
-                backgroundColor: bgResolved,
+                minHeight: 0,
+                minWidth: 0,
             }}
         >
-            <canvas
-                ref={visibleRef}
+            <div
                 style={{
-                    display: "block",
+                    width: `${INTRINSIC_W}px`,
+                    height: `${INTRINSIC_H}px`,
+                    minWidth: `${INTRINSIC_W}px`,
+                    minHeight: `${INTRINSIC_H}px`,
+                    visibility: "hidden",
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: -1,
+                    pointerEvents: "none",
+                }}
+                aria-hidden
+            />
+            <div
+                ref={zoomProbeRef}
+                style={{
+                    position: "absolute",
+                    width: 20,
+                    height: 20,
+                    opacity: 0,
+                    pointerEvents: "none",
+                }}
+                aria-hidden
+            />
+            <div
+                style={{
+                    position: "absolute",
+                    inset: 0,
                     width: "100%",
                     height: "100%",
+                    minWidth: 0,
+                    minHeight: 0,
+                    backgroundColor: resolveColor(backdrop),
                 }}
-            />
+            >
+                <Canvas
+                    orthographic
+                    flat
+                    camera={{ position: [0, 0, 1], zoom: 1, near: 0.1, far: 10 }}
+                    gl={{ preserveDrawingBuffer: true, alpha: true }}
+                    onCreated={({
+                        gl,
+                    }: {
+                        gl: {
+                            outputColorSpace: string
+                            toneMapping: number
+                        }
+                    }) => {
+                        gl.outputColorSpace = SRGBColorSpace
+                        gl.toneMapping = NoToneMapping
+                    }}
+                    resize={{
+                        offsetSize: true,
+                        scroll: false,
+                        debounce: { scroll: 0, resize: 0 },
+                    }}
+                    dpr={[1, 2]}
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "block",
+                        width: "100%",
+                        height: "100%",
+                    }}
+                >
+                    <InvalidateOnLayout
+                        width={layoutCss.w}
+                        height={layoutCss.h}
+                    />
+                    <AsciiSceneInner
+                        mediaUrl={resolvedSourceUrl}
+                        isVideo={source === "video"}
+                        playVideo={playVideo}
+                        loop={loop}
+                        backdropColor={backdrop}
+                        asciiProps={asciiProps}
+                        layoutWidth={layoutCss.w}
+                        layoutHeight={layoutCss.h}
+                        characters={characters}
+                        fontType={fontType}
+                        fontFamily={fontFamily}
+                        fontWeight={fontWeight}
+                        fontSizePx={fontSizePx}
+                        font={font}
+                    />
+                </Canvas>
+            </div>
         </div>
     )
 }
 
-AsciiMedia.displayName = "ASCII Media"
-
-// ============================================================================
-// FRAMER PROPERTY CONTROLS
-// ============================================================================
-
 addPropertyControls(AsciiMedia, {
-    // ─── Media ─────────────────────────────────────────────────────────
-    sourceType: {
+    preview: {
+        type: ControlType.Boolean,
+        title: "Preview",
+        defaultValue: false,
+        enabledTitle: "On",
+        disabledTitle: "Off",
+    },
+    source: {
         type: ControlType.Enum,
-        title: "Source Type",
+        title: "Source",
         options: ["image", "video"],
         optionTitles: ["Image", "Video"],
         defaultValue: "image",
@@ -804,36 +997,37 @@ addPropertyControls(AsciiMedia, {
     },
     image: {
         type: ControlType.ResponsiveImage,
-        title: "Image",
-        hidden: (props: any) => props.sourceType !== "image",
+        title: "Media",
+        hidden: (p: Props) => p.source !== "image",
     },
     videoSource: {
         type: ControlType.Enum,
-        title: "Source",
+        title: "Video",
         options: ["url", "upload"],
         optionTitles: ["URL", "Upload"],
         defaultValue: "url",
         displaySegmentedControl: true,
-        hidden: (props: any) => props.sourceType !== "video",
+        hidden: (p: Props) => p.source !== "video",
     },
     videoFile: {
         type: ControlType.File,
         title: "File",
         allowedFileTypes: ["mp4", "webm"],
-        hidden: (props: any) =>
-            props.sourceType !== "video" || props.videoSource !== "upload",
+        hidden: (p: Props) =>
+            p.source !== "video" || p.videoSource !== "upload",
     },
     videoUrl: {
         type: ControlType.String,
         title: "URL",
-        placeholder: "https://…/video.mp4",
-        hidden: (props: any) =>
-            props.sourceType !== "video" || props.videoSource !== "url",
+        placeholder: "https://example.com/video.mp4",
+        description: "Direct link to an mp4 or webm file.",
+        hidden: (p: Props) =>
+            p.source !== "video" || p.videoSource !== "url",
     },
     poster: {
         type: ControlType.ResponsiveImage,
         title: "Poster",
-        hidden: (props: any) => props.sourceType !== "video",
+        hidden: (p: Props) => p.source !== "video",
     },
     autoplay: {
         type: ControlType.Boolean,
@@ -841,7 +1035,7 @@ addPropertyControls(AsciiMedia, {
         defaultValue: true,
         enabledTitle: "On",
         disabledTitle: "Off",
-        hidden: (props: any) => props.sourceType !== "video",
+        hidden: (p: Props) => p.source !== "video",
     },
     loop: {
         type: ControlType.Boolean,
@@ -849,117 +1043,125 @@ addPropertyControls(AsciiMedia, {
         defaultValue: true,
         enabledTitle: "On",
         disabledTitle: "Off",
-        hidden: (props: any) => props.sourceType !== "video",
+        hidden: (p: Props) => p.source !== "video",
     },
-
-    // ─── Colors ────────────────────────────────────────────────────────
-    primaryColor: {
+    backdrop: {
         type: ControlType.Color,
-        title: "Primary",
-        defaultValue: "#5B52E0",
+        title: "Backdrop",
+        defaultValue: "#111111",
     },
-    secondaryColor: {
-        type: ControlType.Color,
-        title: "Secondary",
-        defaultValue: "#9D96F0",
+    brightnessAdjust: {
+        type: ControlType.Number,
+        title: "Bright",
+        min: -0.45,
+        max: 0.45,
+        step: 0.01,
+        defaultValue: 0,
     },
-    backgroundColor: {
-        type: ControlType.Color,
-        title: "Background",
-        defaultValue: "#FFFFFF",
-    },
-
-    // ─── ASCII ─────────────────────────────────────────────────────────
-    characterSet: {
-        type: ControlType.String,
-        title: "Characters",
-        defaultValue: "0123456789",
-        placeholder: "0123456789",
+    contrastAdjust: {
+        type: ControlType.Number,
+        title: "Contrast",
+        min: 0.35,
+        max: 2.5,
+        step: 0.05,
+        defaultValue: 1,
     },
     density: {
         type: ControlType.Number,
         title: "Density",
-        min: 3,
-        max: 24,
-        step: 1,
-        defaultValue: 5,
-        unit: "px",
+        min: 50,
+        max: 200,
+        step: 5,
+        defaultValue: 100,
     },
-    invertBrightness: {
+    cellSize: {
+        type: ControlType.Number,
+        title: "Cells",
+        min: 2,
+        max: 48,
+        step: 1,
+        defaultValue: 10,
+    },
+    invert: {
         type: ControlType.Boolean,
         title: "Invert",
-        defaultValue: true,
+        defaultValue: false,
         enabledTitle: "On",
         disabledTitle: "Off",
     },
-    threshold: {
-        type: ControlType.Number,
-        title: "Threshold",
-        min: 0,
-        max: 50,
-        step: 1,
-        defaultValue: 5,
-        unit: "%",
-        description:
-            "Minimum intensity to render a character. Higher = cleaner silhouettes.",
+    colorMode: {
+        type: ControlType.Boolean,
+        title: "Color",
+        defaultValue: true,
+        enabledTitle: "Color",
+        disabledTitle: "Gray",
     },
-    intensity: {
-        type: ControlType.Number,
-        title: "Intensity",
-        min: 0.5,
-        max: 3,
-        step: 0.1,
-        defaultValue: 1.8,
-        description:
-            "Boosts mid-tone visibility. Higher = denser, more saturated characters.",
+    asciiStyle: {
+        type: ControlType.Enum,
+        title: "Style",
+        options: ["standard", "dense", "minimal", "blocks", "braille", "technical", "matrix", "hatching"],
+        optionTitles: ["Standard", "Dense", "Minimal", "Blocks", "Braille", "Technical", "Matrix", "Hatching"],
+        defaultValue: "standard",
     },
-
-    // ─── Typography ────────────────────────────────────────────────────
+    fontType: {
+        type: ControlType.Enum,
+        title: "Type",
+        options: ["default", "custom"],
+        optionTitles: ["Default", "Custom"],
+        defaultValue: "default",
+        displaySegmentedControl: true,
+        segmentedControlDirection: "vertical",
+    },
+    characters: {
+        type: ControlType.String,
+        title: "Chars",
+        defaultValue: DEFAULT_CHARACTERS,
+        placeholder: " .-:=o0B8█",
+        hidden: (p: Props) => p.fontType !== "custom",
+    },
     font: {
-        // @ts-ignore
         type: ControlType.Font,
         title: "Font",
         controls: "extended",
         defaultFontType: "monospace",
         defaultValue: {
-            fontSize: 6,
-            // @ts-ignore
-            fontFamily: "monospace",
-            fontWeight: "400",
+            fontSize: 28,
+            lineHeight: 1.2,
         },
+        hidden: (p: Props) => p.fontType !== "custom",
     },
-
-    // ─── Effects ───────────────────────────────────────────────────────
-    ditheringMode: {
-        type: ControlType.Enum,
-        title: "Dithering",
-        options: ["none", "bayer", "floyd-steinberg"],
-        optionTitles: ["None", "Bayer 4×4", "Floyd-Steinberg"],
-        defaultValue: "bayer",
+    fontFamily: {
+        type: ControlType.String,
+        title: "Family",
+        defaultValue: "monospace",
+        hidden: (p: Props) => p.fontType !== "custom",
     },
-    brightness: {
+    fontWeight: {
         type: ControlType.Number,
-        title: "Brightness",
-        min: -50,
-        max: 50,
+        title: "Weight",
+        min: 100,
+        max: 900,
+        step: 100,
+        defaultValue: 400,
+        displayStepper: true,
+        hidden: (p: Props) => p.fontType !== "custom",
+    },
+    fontSizePx: {
+        type: ControlType.Number,
+        title: "Size",
+        min: 8,
+        max: 64,
         step: 1,
-        defaultValue: 0,
+        defaultValue: 28,
+        hidden: (p: Props) => p.fontType !== "custom",
     },
-    contrast: {
-        type: ControlType.Number,
-        title: "Contrast",
-        min: -50,
-        max: 50,
-        step: 1,
-        defaultValue: 0,
-    },
-    blurAmount: {
-        type: ControlType.Number,
-        title: "Blur",
-        min: 0,
-        max: 8,
-        step: 0.1,
-        defaultValue: 0,
-        unit: "px",
+    debug: {
+        type: ControlType.Boolean,
+        title: "Debug",
+        defaultValue: false,
+        description:
+            "More components at [Framer University](https://frameruni.link/cc).",
     },
 })
+
+AsciiMedia.displayName = "ASCII Media"

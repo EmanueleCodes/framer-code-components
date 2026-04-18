@@ -1,0 +1,22 @@
+{
+  "name": "ascii-media-bundle",
+  "version": "1.0.0",
+  "description": "three + @react-three/fiber for ASCII Media Framer component",
+  "type": "module",
+  "main": "dist/bundle.js",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^8.16.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.28.1"
+  }
+}

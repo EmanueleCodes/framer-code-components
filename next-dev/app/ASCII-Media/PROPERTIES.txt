@@ -1,0 +1,73 @@
+ASCII Media - Property Controls
+
+Preview
+When On, video animates in the Framer canvas. When Off, video pauses in the canvas to save performance.
+
+Source
+Image or Video.
+
+Media
+Responsive image when Source is Image.
+
+Video
+URL or Upload when Source is Video.
+
+File
+Uploaded mp4/webm when Video is Upload.
+
+URL
+Direct link to an mp4 or webm file.
+
+Poster
+Optional still for video (reserved for future use).
+
+Autoplay
+Video plays when allowed.
+
+Loop
+Video repeats.
+
+Backdrop
+Color behind the effect (CSS layer and render-target clear). Transparent glyph areas show this color.
+
+Bright
+Additive offset after contrast, on each cell’s RGB (same formula as Efecto: (rgb − 0.5) × contrast + 0.5 + bright). Default 0; increase to lift shadows and midtones.
+
+Contrast
+Scales each cell’s RGB around mid-gray before Bright. Default 1; below 1 flattens, above 1 increases punch.
+
+Density
+Finer grid: values above 100 shrink the effective cell size (more characters per frame) without changing the Cells slider baseline. 100 = no extra scaling.
+
+Cells
+Base cell size in CSS pixels (smaller = finer ASCII grid). Combined with Density as: effective size = Cells × 100 ÷ Density (minimum 2 px). Debounced slightly while dragging.
+
+Invert
+Flips luminance before glyph lookup. With Type Custom, brighter cells use glyphs toward the right of Chars.
+
+Color
+Color: full cell color with glyph alpha. Gray: luminance-only (no chroma).
+
+Style
+Brightness shaping before mapping to glyphs: Standard, Dense, Minimal, Blocks, Braille, Technical, Matrix, or Hatching.
+
+Type
+Default: same built-in 5×5 bitmask glyphs and gray thresholds as ASCII-background-2 when Font Type is Default (not real font outlines). Custom: canvas atlas from Chars + Font / Family / Weight / Size.
+
+Chars
+When Type is Custom: glyph atlas string, left = darkest cell, right = brightest.
+
+Font
+Framer font control when Type is Custom.
+
+Family
+CSS font family fallback when Type is Custom.
+
+Weight
+Font weight when Type is Custom.
+
+Size
+Glyph draw size in the atlas when Type is Custom.
+
+Debug
+More components at [Framer University](https://frameruni.link/cc).
