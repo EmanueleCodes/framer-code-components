@@ -1,73 +1,129 @@
-ASCII Media - Property Controls
+ASCII - Property Controls
 
 Preview
-When On, video animates in the Framer canvas. When Off, video pauses in the canvas to save performance.
+When On, animated effects (Matrix style, noise, wave, glitch) run in the Framer canvas, and **Video** with **Autoplay** advances frames in the canvas. When Off, those pause in the canvas to save performance.
 
 Source
-Image or Video.
+**Image** or **Video**. Switches which media inputs are used and which empty-state message appears.
 
-Media
-Responsive image when Source is Image.
+Image
+Responsive image for the ASCII effect. Hidden when **Source** is **Video**.
 
 Video
-URL or Upload when Source is Video.
+**URL** vs **Upload** for the video file. Shown only when **Source** is **Video**.
 
 File
-Uploaded mp4/webm when Video is Upload.
+Framer file upload (mp4 / webm). Shown when **Source** is **Video** and **Video** is **Upload**.
 
 URL
-Direct link to an mp4 or webm file.
-
-Poster
-Optional still for video (reserved for future use).
+Direct link to an mp4 or webm. Shown when **Source** is **Video** and **Video** is **URL**.
 
 Autoplay
-Video plays when allowed.
+When On, the video tries to play (muted, inline) so the canvas can sample frames. In the Framer canvas, this runs when **Preview** is also On (same idea as **ASCII Media**). Shown only for **Video**.
 
 Loop
-Video repeats.
+Whether the video loops when playing. Shown only for **Video**.
 
 Backdrop
-Color behind the effect (CSS layer and render-target clear). Transparent glyph areas show this color.
+Background color behind the effect. When **Underlay** is Off, the canvas is filled with this color before glyphs. When Underlay is On, transparent canvas areas fall through to the blurred photo, then this color only where nothing else draws (e.g. letterboxing). Supports **Framer color tokens** (`var(--…, #fallback)`), **`{ value: … }` wrappers**, and **light / dark pairs** (`{ light, dark }` or `Light` / `Dark`): the active branch follows Framer / OS theme (`data-framer-theme`, `color-scheme`, `prefers-color-scheme`). Values become concrete `rgba()` for canvas (see **`how-to-build-framer-components/colorInFramerCanvas.md`**), not raw `var()` on `fillStyle`.
 
-Bright
-Additive offset after contrast, on each cell’s RGB (same formula as Efecto: (rgb − 0.5) × contrast + 0.5 + bright). Default 0; increase to lift shadows and midtones.
+Underlay
+When On, a **second canvas** behind the glyphs is filled **per cell** with the same processed color as the ASCII layer (same sampling, **Wave**, **Curvature**, **Aberration**, **Noise**, **Bright** / **Contrast**, **Palette**, **Color**, **Scanlines**, **Vignette**, and row **Glitch** shift). Then **Blur** and **Opacity** are applied to that layer (CSS). The front canvas stays transparent except for the characters so the underlay shows through gaps.
 
-Contrast
-Scales each cell’s RGB around mid-gray before Bright. Default 1; below 1 flattens, above 1 increases punch.
+Blur
+CSS `blur()` radius in pixels for the underlay image. Only shown when Underlay is On.
 
-Density
-Finer grid: values above 100 shrink the effective cell size (more characters per frame) without changing the Cells slider baseline. 100 = no extra scaling.
-
-Cells
-Base cell size in CSS pixels (smaller = finer ASCII grid). Combined with Density as: effective size = Cells × 100 ÷ Density (minimum 2 px). Debounced slightly while dragging.
-
-Invert
-Flips luminance before glyph lookup. With Type Custom, brighter cells use glyphs toward the right of Chars.
-
-Color
-Color: full cell color with glyph alpha. Gray: luminance-only (no chroma).
-
-Style
-Brightness shaping before mapping to glyphs: Standard, Dense, Minimal, Blocks, Braille, Technical, Matrix, or Hatching.
-
-Type
-Default: same built-in 5×5 bitmask glyphs and gray thresholds as ASCII-background-2 when Font Type is Default (not real font outlines). Custom: canvas atlas from Chars + Font / Family / Weight / Size.
-
-Chars
-When Type is Custom: glyph atlas string, left = darkest cell, right = brightest.
+Opacity
+Underlay image alpha (0–1). Only shown when Underlay is On.
 
 Font
-Framer font control when Type is Custom.
+Framer **Font** control (family, weight, italic, etc.). Drives the canvas glyph style via `fontFamily` / `fontWeight` / `fontStyle`. **Cells** still sets the raster cell size; glyph **pixel size** is derived from the cell (Framer’s font size on this control is not used for layout so the grid stays even).
 
-Family
-CSS font family fallback when Type is Custom.
+Shader (object)
+Groups the core ASCII look controls.
 
-Weight
-Font weight when Type is Custom.
+Cells
+Size of each ASCII cell in pixels. Smaller values create finer detail, larger values create blockier output.
 
-Size
-Glyph draw size in the atlas when Type is Custom.
+Style
+ASCII preset from **`ascii_effect_presets.ts`**: Standard, Dense, Minimal, Blocks, Braille, Technical, Matrix, Hatching. Curved/wavy UVs stay clamped so cells are not skipped.
 
-Debug
-More components at [Framer University](https://frameruni.link/cc).
+Color
+Color: Preserves image colors with character patterns. Gray: Grayscale luminance only.
+
+Bright
+Additive brightness offset. Positive values lift shadows and midtones, negative darkens.
+
+Contrast
+Scales color values around mid-gray. Below 1 flattens, above 1 increases punch.
+
+Palette
+Color tinting: Original, Green, Amber, Cyan, Blue.
+
+Effects (object)
+Groups post-processing and distortion controls.
+
+Enable
+Master switch for the whole **Effects** group. **Off** hides every other control in this object and turns off all effect processing at runtime (fish-eye, aberration, scanlines, vignette, noise, wave, glitch). **On** restores the full panel and applies each sub-toggle / slider as configured.
+
+Scanlines
+Master switch (**On** / **Off**). When **On**, **Depth** and **Lines** appear; CRT scanlines run when **Depth** > 0.
+
+Depth
+Scanline band strength when **Scanlines** is On.
+
+Lines
+Number of scanline bands when **Scanlines** is On.
+
+Vignette
+Master switch (**On** / **Off**). When **On**, **Dim** and **Radius** appear; edge darkening runs when **Dim** > 0.
+
+Dim
+Vignette / edge darkening strength when **Vignette** is On.
+
+Radius
+Vignette falloff when **Vignette** is On.
+
+Fish Eye
+Barrel distortion (curvature) when **Enable** is On.
+
+Aberration
+Chromatic aberration (RGB color fringing) strength.
+
+Noise
+Master switch (**On** / **Off**). When **On**, the **Level**, **Scale**, **Frequency**, and **Speed** controls appear and grain can be applied (still needs **Level** > 0 to see it).
+
+Level
+Noise / grain strength when **Noise** is On. Animated when Level > 0.
+
+Scale
+Multiplies UV into the noise field when **Noise** is On.
+
+Frequency
+Spatial grain fineness when **Noise** is On.
+
+Speed
+Noise pattern motion over time when **Noise** is On.
+
+Wave
+Master switch (**On** / **Off**). When **On**, **Amp**, **Ripple**, and **Flow** appear and wave distortion can run (still needs **Amp** > 0 to see it).
+
+Amp
+Wave distortion strength when **Wave** is On. Animated when Amp > 0.
+
+Ripple
+Wave spatial frequency when **Wave** is On.
+
+Flow
+Wave animation speed when **Wave** is On.
+
+Glitch
+Master switch (**On** / **Off**). When **On**, **Jitter** and **Rate** appear; row shifts run when **Jitter** > 0 and **Rate** > 0. Animated when active.
+
+Jitter
+How often rows jump horizontally when **Glitch** is On.
+
+Rate
+How fast the glitch pattern advances when **Glitch** is On.
+
+The **Effects** property group carries the Framer University link in its panel description: https://frameruni.link/cc

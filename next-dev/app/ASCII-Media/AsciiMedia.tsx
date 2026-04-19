@@ -8,6 +8,7 @@ import {
 } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 import { ComponentMessage } from "https://framer.com/m/Utils-FINc.js"
+import { asciiStyleToIndex, type AsciiStyleId } from "./ascii_effect_presets"
 
 // Built with: cd custom-bundle-gsap/ascii-media-bundle && npm run build
 // Copy dist/bundle.js → npm-bundles/ascii-media-12.js (Framer University CDN path; committed on main).
@@ -139,7 +140,6 @@ void main() {
 }
 `
 
-type AsciiStyleId = "standard" | "dense" | "minimal" | "blocks" | "braille" | "technical" | "matrix" | "hatching"
 type SourceType = "image" | "video"
 type FontTypeId = "default" | "custom"
 
@@ -241,20 +241,6 @@ function buildGlyphAtlasTexture(
     texture.magFilter = LinearFilter
     texture.needsUpdate = true
     return { texture, cols, rows, count }
-}
-
-function asciiStyleToInt(s: AsciiStyleId): number {
-    const m: Record<AsciiStyleId, number> = {
-        standard: 0,
-        dense: 1,
-        minimal: 2,
-        blocks: 3,
-        braille: 4,
-        technical: 5,
-        matrix: 6,
-        hatching: 7,
-    }
-    return m[s] ?? 0
 }
 
 type Vec2Instance = InstanceType<typeof Vector2>
@@ -806,7 +792,7 @@ export default function AsciiMedia(props: Props) {
             cellSize: effectiveCellSize,
             invert,
             colorMode,
-            asciiStyle: asciiStyleToInt(asciiStyle),
+            asciiStyle: asciiStyleToIndex(asciiStyle),
             resolution: new Vector2(1, 1),
             brightnessAdjust,
             contrastAdjust,
