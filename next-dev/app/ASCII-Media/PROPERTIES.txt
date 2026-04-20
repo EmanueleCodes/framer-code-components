@@ -60,6 +60,12 @@ Additive brightness offset. Positive values lift shadows and midtones, negative 
 Contrast
 Scales color values around mid-gray. Below 1 flattens, above 1 increases punch.
 
+Low
+Luminance threshold (0–1) used with **High** after **Bright** / **Contrast** / **Noise**. When **Low** ≤ **High**, glyphs (and matching underlay cells) only draw where luminance lies in that inclusive band. When **Low** > **High**, behavior inverts: glyphs draw only in the shadows (≤ **High**) and highlights (≥ **Low**), not in the mid-range between the two values.
+
+High
+Upper luminance bound paired with **Low**; see **Low**.
+
 Palette
 Color tinting: Original, Green, Amber, Cyan, Blue.
 

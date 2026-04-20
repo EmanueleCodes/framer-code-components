@@ -27,6 +27,8 @@ type ShaderConfig = {
     colorMode: boolean
     brightnessAdjust: number
     contrastAdjust: number
+    thresholdLow: number
+    thresholdHigh: number
     colorPalette: ColorPaletteId
 }
 
@@ -68,7 +70,21 @@ const DEFAULT_SHADER: ShaderConfig = {
     colorMode: true,
     brightnessAdjust: 0,
     contrastAdjust: 1,
+    thresholdLow: 0,
+    thresholdHigh: 1,
     colorPalette: "original",
+}
+
+/** When `low <= high`, ASCII only for `low <= luma <= high`. When `low > high`, inverted: ASCII for shadows and highlights, not the mid-range `(high, low)`. */
+function lumaPassesAsciiThreshold(
+    luma: number,
+    low: number,
+    high: number
+): boolean {
+    const lo = Math.max(0, Math.min(1, low))
+    const hi = Math.max(0, Math.min(1, high))
+    if (lo <= hi) return luma >= lo && luma <= hi
+    return luma <= hi || luma >= lo
 }
 
 /** Stable fallback when `font` prop is unset — avoids new `{}` each render (hooks deps). */
@@ -554,6 +570,8 @@ export default function ASCII(props: Props) {
         colorMode,
         brightnessAdjust,
         contrastAdjust,
+        thresholdLow,
+        thresholdHigh,
         colorPalette,
     } = shader
     const {
@@ -1046,6 +1064,15 @@ export default function ASCII(props: Props) {
 
                 const brightness = 0.299 * r + 0.587 * g + 0.114 * b
 
+                const drawAscii = lumaPassesAsciiThreshold(
+                    brightness,
+                    thresholdLow,
+                    thresholdHigh
+                )
+                if (!drawAscii) {
+                    continue
+                }
+
                 let glyph = glyphFromAsciiPreset(brightness, asciiStyle, time)
                 if (asciiStyle === "standard" && brightness >= 0.85) {
                     glyph = STANDARD_BRIGHT_BLOCK
@@ -1124,6 +1151,8 @@ export default function ASCII(props: Props) {
         colorMode,
         brightnessAdjust,
         contrastAdjust,
+        thresholdLow,
+        thresholdHigh,
         effectsEnabled,
         scanlineEnabled,
         scanlineIntensity,
@@ -1444,6 +1473,22 @@ addPropertyControls(ASCII, {
                 min: 0.5,
                 max: 2,
                 step: 0.05,
+                defaultValue: 1,
+            },
+            thresholdLow: {
+                type: ControlType.Number,
+                title: "Low",
+                min: 0,
+                max: 1,
+                step: 0.01,
+                defaultValue: 0,
+            },
+            thresholdHigh: {
+                type: ControlType.Number,
+                title: "High",
+                min: 0,
+                max: 1,
+                step: 0.01,
                 defaultValue: 1,
             },
             colorPalette: {
