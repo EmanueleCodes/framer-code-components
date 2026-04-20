@@ -142,6 +142,8 @@ interface Props {
     videoUrl?: string
     autoplay?: boolean
     loop?: boolean
+    /** Optional still shown for **Video** when **Autoplay** is Off (overrides first video frame). */
+    poster?: { src?: string; url?: string } | string | null
     /**
      * Framer may pass a string, `var(--token, #fallback)`, `{ value: … }`, or `{ light, dark }`
      * when the token differs by theme; the component picks the branch for the current appearance.
@@ -194,6 +196,37 @@ function mediaDisplaySize(
     const w = media.naturalWidth
     const h = media.naturalHeight
     return { width: w > 0 ? w : 1, height: h > 0 ? h : 1 }
+}
+
+/** Bitmap used to sample pixels for video: live frames, custom poster, or first frame at t=0. */
+function pickAsciiSampleSource(
+    source: MediaSourceType,
+    media: HTMLImageElement | HTMLVideoElement,
+    autoplay: boolean,
+    posterImg: HTMLImageElement | null,
+    posterReady: boolean
+): { el: CanvasImageSource; width: number; height: number } {
+    if (source !== "video" || !(media instanceof HTMLVideoElement)) {
+        const d = mediaDisplaySize(media)
+        return { el: media, width: d.width, height: d.height }
+    }
+    const v = media
+    if (autoplay) {
+        const d = mediaDisplaySize(v)
+        return { el: v, width: d.width, height: d.height }
+    }
+    v.pause()
+    if (posterReady && posterImg && posterImg.complete) {
+        const w = posterImg.naturalWidth
+        const h = posterImg.naturalHeight
+        return {
+            el: posterImg,
+            width: w > 0 ? w : 1,
+            height: h > 0 ? h : 1,
+        }
+    }
+    const d = mediaDisplaySize(v)
+    return { el: v, width: d.width, height: d.height }
 }
 
 // Framer canvas / tokens — see how-to-build-framer-components/colorInFramerCanvas.md
@@ -501,6 +534,7 @@ export default function ASCII(props: Props) {
         videoUrl,
         autoplay = true,
         loop = true,
+        poster = null,
         backdrop = "#111111",
         showImageBelow = false,
         imageBelowBlur = 10,
@@ -551,11 +585,13 @@ export default function ASCII(props: Props) {
     const underlayCanvasRef = useRef<HTMLCanvasElement>(null)
     const offscreenRef = useRef<HTMLCanvasElement | null>(null)
     const mediaRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null)
+    const posterRef = useRef<HTMLImageElement | null>(null)
     const animationRef = useRef<number>(0)
     const timeRef = useRef<number>(0)
 
     const [layoutSize, setLayoutSize] = useState({ w: 600, h: 400 })
     const [mediaReady, setMediaReady] = useState(false)
+    const [posterReady, setPosterReady] = useState(false)
     const [appearance, setAppearance] = useState<"light" | "dark">(() =>
         typeof document !== "undefined" ? detectFramerColorScheme() : "light"
     )
@@ -575,6 +611,11 @@ export default function ASCII(props: Props) {
         [source, image, videoSource, videoFile, videoUrl]
     )
     const hasMedia = !!resolvedMediaUrl
+
+    const resolvedPosterUrl = useMemo(
+        () => resolveImageSource(poster),
+        [poster]
+    )
 
     const needsEffectTimeRaf = useMemo(
         () =>
@@ -651,54 +692,122 @@ export default function ASCII(props: Props) {
             return
         }
 
-        if (source !== "video") {
-            const img = new Image()
-            img.crossOrigin = "anonymous"
-            img.onload = () => {
-                mediaRef.current = img
+        mediaRef.current = null
+        setMediaReady(false)
+
+        let cancelled = false
+        let imgEl: HTMLImageElement | null = null
+        let videoEl: HTMLVideoElement | null = null
+        let onVideoData: (() => void) | null = null
+        let onVideoErr: (() => void) | null = null
+        let onSeeked: (() => void) | null = null
+
+        const tid = window.setTimeout(() => {
+            if (cancelled) return
+
+            if (source !== "video") {
+                const img = new Image()
+                imgEl = img
+                img.crossOrigin = "anonymous"
+                img.onload = () => {
+                    if (cancelled) return
+                    mediaRef.current = img
+                    setMediaReady(true)
+                }
+                img.onerror = () => {
+                    if (cancelled) return
+                    mediaRef.current = null
+                    setMediaReady(false)
+                }
+                img.src = resolvedMediaUrl
+                if (img.complete && img.naturalWidth > 0 && !cancelled) {
+                    mediaRef.current = img
+                    setMediaReady(true)
+                }
+                return
+            }
+
+            const v = document.createElement("video")
+            videoEl = v
+            v.crossOrigin = "anonymous"
+            v.muted = true
+            v.loop = loop
+            v.playsInline = true
+            v.preload = "auto"
+
+            const markReady = () => {
+                if (cancelled) return
+                mediaRef.current = v
                 setMediaReady(true)
             }
-            img.onerror = () => {
+
+            onVideoErr = () => {
+                if (cancelled) return
                 mediaRef.current = null
                 setMediaReady(false)
             }
-            img.src = resolvedMediaUrl
-            return () => {
-                img.onload = null
-                img.onerror = null
+
+            onVideoData = () => {
+                if (cancelled) return
+                if (!autoplay) {
+                    v.pause()
+                    const finish = () => {
+                        markReady()
+                    }
+                    const onSeekedOnce = () => {
+                        v.removeEventListener("seeked", onSeekedOnce)
+                        finish()
+                    }
+                    onSeeked = onSeekedOnce
+                    v.addEventListener("seeked", onSeekedOnce)
+                    try {
+                        if (v.currentTime > 0.001) {
+                            v.currentTime = 0
+                        } else {
+                            v.removeEventListener("seeked", onSeekedOnce)
+                            onSeeked = null
+                            requestAnimationFrame(finish)
+                        }
+                    } catch {
+                        v.removeEventListener("seeked", onSeekedOnce)
+                        onSeeked = null
+                        requestAnimationFrame(finish)
+                    }
+                } else {
+                    markReady()
+                }
             }
-        }
 
-        const v = document.createElement("video")
-        v.crossOrigin = "anonymous"
-        v.muted = true
-        v.loop = loop
-        v.playsInline = true
-        v.preload = "auto"
+            v.addEventListener("loadeddata", onVideoData)
+            v.addEventListener("error", onVideoErr)
+            v.src = resolvedMediaUrl
 
-        const onReady = () => {
-            mediaRef.current = v
-            setMediaReady(true)
-        }
-        const onErr = () => {
-            mediaRef.current = null
-            setMediaReady(false)
-        }
-
-        v.addEventListener("loadeddata", onReady)
-        v.addEventListener("error", onErr)
-        v.src = resolvedMediaUrl
-
-        if (autoplay && (!isCanvas || preview)) {
-            void v.play().catch(() => {})
-        }
+            if (autoplay && (!isCanvas || preview)) {
+                void v.play().catch(() => {})
+            }
+        }, 0)
 
         return () => {
-            v.removeEventListener("loadeddata", onReady)
-            v.removeEventListener("error", onErr)
-            v.pause()
-            v.removeAttribute("src")
-            v.load()
+            cancelled = true
+            window.clearTimeout(tid)
+            if (imgEl) {
+                imgEl.onload = null
+                imgEl.onerror = null
+            }
+            if (videoEl) {
+                if (onVideoData) {
+                    videoEl.removeEventListener("loadeddata", onVideoData)
+                }
+                if (onVideoErr) {
+                    videoEl.removeEventListener("error", onVideoErr)
+                }
+                if (onSeeked) {
+                    videoEl.removeEventListener("seeked", onSeeked)
+                }
+                videoEl.pause()
+                videoEl.removeAttribute("src")
+                videoEl.load()
+            }
         }
     }, [
         resolvedMediaUrl,
@@ -708,6 +817,29 @@ export default function ASCII(props: Props) {
         isCanvas,
         preview,
     ])
+
+    useEffect(() => {
+        if (!resolvedPosterUrl) {
+            posterRef.current = null
+            setPosterReady(false)
+            return
+        }
+        const img = new Image()
+        img.crossOrigin = "anonymous"
+        img.onload = () => {
+            posterRef.current = img
+            setPosterReady(true)
+        }
+        img.onerror = () => {
+            posterRef.current = null
+            setPosterReady(false)
+        }
+        img.src = resolvedPosterUrl
+        return () => {
+            img.onload = null
+            img.onerror = null
+        }
+    }, [resolvedPosterUrl])
 
     useEffect(() => {
         if (!offscreenRef.current) {
@@ -762,8 +894,14 @@ export default function ASCII(props: Props) {
             ctx.fillRect(0, 0, cw, ch)
         }
 
-        const { width: mw, height: mh } = mediaDisplaySize(media)
-        const imgAspect = mw / mh
+        const sample = pickAsciiSampleSource(
+            source,
+            media,
+            autoplay,
+            posterRef.current,
+            posterReady
+        )
+        const imgAspect = sample.width / sample.height
         const canvasAspect = cw / ch
         let drawW: number, drawH: number, drawX: number, drawY: number
         if (imgAspect > canvasAspect) {
@@ -780,7 +918,7 @@ export default function ASCII(props: Props) {
 
         offCtx.fillStyle = backdropFill
         offCtx.fillRect(0, 0, cw, ch)
-        offCtx.drawImage(media, drawX, drawY, drawW, drawH)
+        offCtx.drawImage(sample.el, drawX, drawY, drawW, drawH)
 
         const imageData = offCtx.getImageData(0, 0, cw, ch)
         const pixels = imageData.data
@@ -1010,6 +1148,9 @@ export default function ASCII(props: Props) {
         colorPalette,
         showImageBelow,
         font,
+        source,
+        autoplay,
+        posterReady,
     ])
 
     useEffect(() => {
@@ -1047,6 +1188,7 @@ export default function ASCII(props: Props) {
         autoplay,
         isCanvas,
         preview,
+        posterReady,
     ])
 
     if (!hasMedia) {
@@ -1185,6 +1327,11 @@ addPropertyControls(ASCII, {
         hidden: (p: Props) =>
             p.source !== "video" || p.videoSource !== "url",
     },
+    poster: {
+        type: ControlType.ResponsiveImage,
+        title: "Poster",
+        hidden: (p: Props) => p.source !== "video",
+    },
     autoplay: {
         type: ControlType.Boolean,
         title: "Autoplay",
@@ -1203,7 +1350,7 @@ addPropertyControls(ASCII, {
     },
     backdrop: {
         type: ControlType.Color,
-        title: "Backdrop",
+        title: "Background",
         defaultValue: "#000000",
     },
     showImageBelow: {
@@ -1324,7 +1471,7 @@ addPropertyControls(ASCII, {
             effectsEnabled: {
                 type: ControlType.Boolean,
                 title: "Enable",
-                defaultValue: true,
+                defaultValue: false,
                 enabledTitle: "On",
                 disabledTitle: "Off",
             },
@@ -1563,4 +1710,4 @@ addPropertyControls(ASCII, {
     },
 })
 
-ASCII.displayName = "ASCII"
+ASCII.displayName = "ASCII Media"

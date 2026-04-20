@@ -18,8 +18,11 @@ Framer file upload (mp4 / webm). Shown when **Source** is **Video** and **Video*
 URL
 Direct link to an mp4 or webm. Shown when **Source** is **Video** and **Video** is **URL**.
 
+Poster
+Optional responsive image used **only when Source is Video and Autoplay is Off**. If set, it replaces the video’s first frame as the still used for ASCII. If empty, the component seeks to **t=0** and uses the **first decoded video frame** as the poster.
+
 Autoplay
-When On, the video tries to play (muted, inline) so the canvas can sample frames. In the Framer canvas, this runs when **Preview** is also On (same idea as **ASCII Media**). Shown only for **Video**.
+When On, the video tries to play (muted, inline) so the canvas can sample frames. In the Framer canvas, this runs when **Preview** is also On (same idea as **ASCII Media**). When Off, the effect samples a **still** (custom **Poster** image if provided, otherwise the **first frame** at time 0). Shown only for **Video**.
 
 Loop
 Whether the video loops when playing. Shown only for **Video**.
